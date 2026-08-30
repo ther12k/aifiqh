@@ -1,0 +1,21 @@
+{
+	"name": "@aifiqh/api",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "bun --watch src/index.ts",
+		"start": "bun src/index.ts",
+		"build": "bun build --target bun --outdir dist src/index.ts",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@aifiqh/shared": "workspace:*",
+		"elysia": "^2.0.0-beta.10",
+		"jose": "^5.9.0",
+		"postgres": "^3.4.9"
+	},
+	"devDependencies": {
+		"typescript": "^5.7.0"
+	}
+}

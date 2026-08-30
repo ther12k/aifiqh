@@ -1,0 +1,32 @@
+{
+	"name": "aifiqh",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"workspaces": ["apps/*", "packages/*"],
+	"scripts": {
+		"dev:api": "bun --filter '@aifiqh/api' dev",
+		"dev:worker": "bun --filter '@aifiqh/worker' dev",
+		"dev:web": "bun --filter '@aifiqh/web' dev",
+		"build": "bun run --filter '*' build",
+		"typecheck": "bun run --filter '*' typecheck",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"test": "bun test",
+		"db:up": "docker compose up -d db",
+		"db:down": "docker compose down",
+		"stack:up": "docker compose up -d",
+		"stack:down": "docker compose down",
+		"db:migrate": "bun scripts/migrate.ts",
+		"db:seed": "bun scripts/seed.ts",
+		"db:reset": "docker compose down -v && docker compose up -d db && bun scripts/migrate.ts && bun scripts/seed.ts"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.4",
+		"@types/bun": "^1.2.0",
+		"typescript": "^5.7.0"
+	},
+	"dependencies": {
+		"postgres": "^3.4.9"
+	}
+}
