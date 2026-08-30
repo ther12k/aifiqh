@@ -45,7 +45,7 @@ jobs:
         env:
           # no fixed ports on the service: the runner publishes a random host
           # port (host 5432 is already taken by another postgres)
-          DATABASE_URL: postgres://aifiqh:aifiqh@127.0.0.1:${{ job.services.postgres.outputs.ports.5432 }}/aifiqh
+          DATABASE_URL: postgres://aifiqh:aifiqh@127.0.0.1:${{ job.services.postgres.outputs.ports['5432'] }}/aifiqh
 
       - name: Build
         run: bun run build
