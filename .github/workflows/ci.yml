@@ -9,23 +9,26 @@ on:
 jobs:
   verify:
     # self-hosted runner on the halotec server (GitHub-hosted runners are
-    # unavailable: billing). The runner has the host docker socket mounted,
-    # so the postgres service container works as a sibling.
+    # unavailable: billing). The runner runs in a container with the host
+    # docker socket mounted, so `services:` is not available; instead the
+    # job starts its own disposable pgvector container (below).
     runs-on: self-hosted
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: aifiqh
-          POSTGRES_PASSWORD: aifiqh
-          POSTGRES_DB: aifiqh
-        options: >-
-          --health-cmd "pg_isready -U aifiqh"
-          --health-interval 3s
-          --health-timeout 3s
-          --health-retries 20
+    env:
+      DATABASE_URL: postgres://aifiqh:aifiqh@127.0.0.1:15432/aifiqh
     steps:
       - uses: actions/checkout@v4
+
+      - name: Start disposable pgvector container
+        run: |
+          docker rm -f aifiqh-ci-pg 2>/dev/null || true
+          docker run -d --name aifiqh-ci-pg \
+            -e POSTGRES_USER=aifiqh -e POSTGRES_PASSWORD=aifiqh -e POSTGRES_DB=aifiqh \
+            -p 127.0.0.1:15432:5432 pgvector/pgvector:pg16
+          for i in $(seq 1 30); do
+            docker exec aifiqh-ci-pg pg_isready -U aifiqh -d aifiqh && break
+            sleep 1
+          done
+          docker exec aifiqh-ci-pg pg_isready -U aifiqh -d aifiqh
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -42,10 +45,10 @@ jobs:
 
       - name: Test (unit + DB integration)
         run: bun test
-        env:
-          # no fixed ports on the service: the runner publishes a random host
-          # port (host 5432 is already taken by another postgres)
-          DATABASE_URL: postgres://aifiqh:aifiqh@127.0.0.1:${{ job.services.postgres.outputs.ports['5432'] }}/aifiqh
 
       - name: Build
         run: bun run build
+
+      - name: Stop pgvector container
+        if: always()
+        run: docker rm -f aifiqh-ci-pg
