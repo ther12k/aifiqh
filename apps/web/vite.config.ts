@@ -8,6 +8,7 @@ export default defineConfig({
 		proxy: {
 			'/auth': 'http://localhost:3000',
 			'/healthz': 'http://localhost:3000',
+			'/health': 'http://localhost:3000',
 			'/readyz': 'http://localhost:3000',
 			'/sources': 'http://localhost:3000',
 		},

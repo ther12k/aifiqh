@@ -13,6 +13,7 @@ import { SESSION_COOKIE } from '@aifiqh/shared'
 import postgres from 'postgres'
 import { applyMigrations } from '../../../scripts/migrate'
 import { buildApp } from '../src/app'
+import { type OidcClient, upsertIdentity } from '../src/auth/oidc'
 import { checkAccess, loadPrincipal } from '../src/auth/policy'
 import { CSRF_COOKIE, newCsrfToken, signSession } from '../src/auth/session'
 import {
@@ -283,24 +284,34 @@ afterAll(async () => {
 
 describe('principal resolution and scope hierarchy (SEC-002)', () => {
 	test('loadPrincipal returns roles and descendant scopes', async () => {
-		const p = await loadPrincipal(ids.editorA, ids.tenantA)
+		const p = await loadPrincipal(sql, ids.editorA, ids.tenantA)
 		expect(p).not.toBeNull()
 		expect(p!.roles).toContain('editor')
 		expect(p!.scopes).toContain(ids.scopeRootA)
 		// root grant covers the restricted child
-		const decision = await checkAccess(p!, 'source:read', ids.scopeRestrictedA)
+		const decision = await checkAccess(
+			sql,
+			p!,
+			'source:read',
+			ids.scopeRestrictedA,
+		)
 		expect(decision.allowed).toBeTrue()
 	})
 
 	test('unrelated scope does not grant access', async () => {
-		const p = await loadPrincipal(ids.editorA, ids.tenantA)
-		const decision = await checkAccess(p!, 'source:read', ids.scopeExternalA)
+		const p = await loadPrincipal(sql, ids.editorA, ids.tenantA)
+		const decision = await checkAccess(
+			sql,
+			p!,
+			'source:read',
+			ids.scopeExternalA,
+		)
 		expect(decision.allowed).toBeFalse()
 		expect(decision.reasonCode).toContain('SCOPE_DENIED')
 	})
 
 	test('membership in another tenant does not resolve', async () => {
-		const p = await loadPrincipal(ids.adminB, ids.tenantA)
+		const p = await loadPrincipal(sql, ids.adminB, ids.tenantA)
 		expect(p).toBeNull()
 	})
 })
@@ -357,6 +368,11 @@ describe('source registry API (SRC-001 slice, RBAC + audit + CSRF)', () => {
 				}),
 			}),
 		)
+		if (res.status !== 201)
+			console.log(
+				'CREATE FAILED BODY:',
+				JSON.stringify(await res.clone().json()),
+			)
 		expect(res.status).toBe(201)
 		const body = await res.json()
 		sourceId = body.id
@@ -628,7 +644,7 @@ describe('changeset workflow guard rails (REV-001 slice / DB-011)', () => {
 		await expectReject(
 			sql`insert into review_events (changeset_id, action, actor_id)
           values (${cs.id}, 'approved', ${ids.editorA})`,
-			'not a reviewer',
+			'not an active reviewer',
 		)
 
 		// reviewer approval succeeds and enables publish transition
@@ -712,6 +728,390 @@ describe('tenant RLS defense in depth (DB-019 + 0020 FORCE)', () => {
 		})
 		expect(seen).toContain('A-book')
 		expect(seen).not.toContain('B-book')
+	})
+})
+
+describe('composite lineage constraints (HARD-002)', () => {
+	test('span cannot reference a page/section from another revision', async () => {
+		// two revisions of the same source, each with a page
+		const [src] = await sql<{ id: string }[]>`select id from sources limit 1`
+		const [revA] = await sql<{ id: string }[]>`
+			insert into source_revisions (source_id, revision_number, status)
+			values (${src.id}, floor(random()*90000+10000)::int, 'active') returning id`
+		const [revB] = await sql<{ id: string }[]>`
+			insert into source_revisions (source_id, revision_number, status)
+			values (${src.id}, floor(random()*90000+10000)::int, 'active') returning id`
+		const [pageB] = await sql<{ id: string }[]>`
+			insert into source_pages (source_revision_id, page_number)
+			values (${revB.id}, 1) returning id`
+		const [sectionB] = await sql<{ id: string }[]>`
+			insert into source_sections (source_revision_id, ordinal, level)
+			values (${revB.id}, 1, 1) returning id`
+
+		// span of revision A pointing at revision B's page: FK must reject
+		await expectReject(
+			sql`insert into source_spans (source_revision_id, page_id, span_key, original_text)
+				values (${revA.id}, ${pageB.id}, 'x', 'text')`,
+			'fk_span_page_same_revision',
+		)
+		await expectReject(
+			sql`insert into source_spans (source_revision_id, section_id, span_key, original_text)
+				values (${revA.id}, ${sectionB.id}, 'y', 'text')`,
+			'fk_span_section_same_revision',
+		)
+		// same-revision combination is accepted
+		const [pageA] = await sql<{ id: string }[]>`
+			insert into source_pages (source_revision_id, page_number)
+			values (${revA.id}, 1) returning id`
+		const [span] = await sql<{ id: string }[]>`
+			insert into source_spans (source_revision_id, page_id, span_key, original_text)
+			values (${revA.id}, ${pageA.id}, 'z', 'text') returning id`
+		expect(span.id).toBeTruthy()
+	})
+
+	test('concept span links pin the span revision exactly', async () => {
+		const [concept] = await sql<{ id: string }[]>`
+			insert into knowledge_concepts (tenant_id, type_key, access_scope_id, created_by)
+			values (${ids.tenantA}, 'definition', ${ids.scopeRootA}, ${ids.editorA}) returning id`
+		const [krev] = await sql<{ id: string }[]>`
+			insert into knowledge_concept_revisions
+				(concept_id, revision_number, title, body_markdown, content_hash, created_by)
+			values (${concept.id}, 1, 'L', 'b', 'hash-lineage', ${ids.editorA}) returning id`
+		const [span] = await sql<{ id: string; source_revision_id: string }[]>`
+			select ss.id, ss.source_revision_id from source_spans ss limit 1`
+		// span belongs to revision X; declaring revision Y must fail
+		const [other] = await sql<{ id: string }[]>`
+			select id from source_revisions where id <> ${span.source_revision_id} limit 1`
+		await expectReject(
+			sql`insert into concept_source_spans (revision_id, source_span_id, source_revision_id)
+				values (${krev.id}, ${span.id}, ${other.id})`,
+			'fk_concept_span_same_revision',
+		)
+		const ok = await sql<{ id: string }[]>`
+			insert into concept_source_spans (revision_id, source_span_id, source_revision_id)
+			values (${krev.id}, ${span.id}, ${span.source_revision_id}) returning id`
+		expect(ok[0].id).toBeTruthy()
+	})
+})
+
+describe('release immutability and tenant guards (HARD-003)', () => {
+	test('published releases reject item inserts, manifest and tenant changes', async () => {
+		const [concept] = await sql<{ id: string }[]>`
+			insert into knowledge_concepts (tenant_id, type_key, access_scope_id, created_by)
+			values (${ids.tenantA}, 'definition', ${ids.scopeRootA}, ${ids.editorA}) returning id`
+		const [rev] = await sql<{ id: string }[]>`
+			insert into knowledge_concept_revisions
+				(concept_id, revision_number, title, body_markdown, content_hash, created_by)
+			values (${concept.id}, 1, 'R', 'b', 'hash-rel', ${ids.editorA}) returning id`
+		const [rel] = await sql<{ id: string }[]>`
+			insert into knowledge_releases (tenant_id, manifest_hash)
+			values (${ids.tenantA}, 'mh-1') returning id`
+		await sql`insert into knowledge_release_items (release_id, concept_id, concept_revision_id)
+			values (${rel.id}, ${concept.id}, ${rev.id})`
+
+		await sql`update knowledge_releases set state = 'published' where id = ${rel.id}`
+
+		// INSERT into a published release (previously allowed!) must fail
+		await expectReject(
+			sql`insert into knowledge_release_items (release_id, concept_id, concept_revision_id)
+				values (${rel.id}, ${concept.id}, ${rev.id})`,
+			'cannot change after publish',
+		)
+		await expectReject(
+			sql`update knowledge_releases set manifest_hash = 'mh-2' where id = ${rel.id}`,
+			'manifest_hash is immutable',
+		)
+		await expectReject(
+			sql`update knowledge_releases set tenant_id = ${ids.tenantB} where id = ${rel.id}`,
+			'tenant is immutable',
+		)
+		// supersede is the only legal exit
+		await sql`update knowledge_releases set state = 'superseded' where id = ${rel.id}`
+	})
+
+	test('release item and alias cannot cross tenants', async () => {
+		const [conceptB] = await sql<{ id: string }[]>`
+			insert into knowledge_concepts (tenant_id, type_key, access_scope_id, created_by)
+			values (${ids.tenantB}, 'definition', ${ids.scopeRootA}, ${ids.adminB}) returning id`
+		const [relA] = await sql<{ id: string }[]>`
+			insert into knowledge_releases (tenant_id, manifest_hash)
+			values (${ids.tenantA}, 'mh-3') returning id`
+		await expectReject(
+			sql`insert into knowledge_release_items (release_id, concept_id, concept_revision_id)
+				values (${relA.id}, ${conceptB.id}, ${conceptB.id})`,
+			'crosses tenant',
+		)
+		const [relB] = await sql<{ id: string }[]>`
+			insert into knowledge_releases (tenant_id, manifest_hash)
+			values (${ids.tenantB}, 'mh-4') returning id`
+		await expectReject(
+			sql`insert into knowledge_release_aliases (tenant_id, alias, release_id)
+				values (${ids.tenantA}, 'staging', ${relB.id})`,
+			'crosses tenant',
+		)
+	})
+})
+
+describe('answer publish gating (HARD-003)', () => {
+	async function makeAnswer(): Promise<string> {
+		const [conv] = await sql<{ id: string }[]>`
+			insert into conversations (tenant_id, created_by)
+			values (${ids.tenantA}, ${ids.editorA}) returning id`
+		const [msg] = await sql<{ id: string }[]>`
+			insert into messages (conversation_id, ordinal, role, content)
+			values (${conv.id}, floor(random()*900000+100000)::bigint, 'assistant', 'a') returning id`
+		const [trace] = await sql<{ id: string }[]>`
+			insert into retrieval_traces (tenant_id, user_id, query_original)
+			values (${ids.tenantA}, ${ids.editorA}, 'q') returning id`
+		const [ans] = await sql<{ id: string }[]>`
+			insert into answers (message_id, trace_id, status)
+			values (${msg.id}, ${trace.id}, 'draft') returning id`
+		return ans.id
+	}
+
+	test('publish requires validated status, a completed run, no unresolved criticals', async () => {
+		const answerId = await makeAnswer()
+
+		// draft -> published directly: rejected (never validated)
+		await expectReject(
+			sql`update answers set status = 'published' where id = ${answerId}`,
+			'has not been validated',
+		)
+		await sql`update answers set status = 'validated' where id = ${answerId}`
+		// validated but zero validation runs: rejected (old guard counted 0)
+		await expectReject(
+			sql`update answers set status = 'published' where id = ${answerId}`,
+			'no completed validation run',
+		)
+		const [run] = await sql<{ id: string }[]>`
+			insert into validation_runs (answer_id, validator_version, finished_at)
+			values (${answerId}, 'v1', now()) returning id`
+		await sql`insert into validation_issues (run_id, severity, code, resolved)
+			values (${run.id}, 'critical', 'UNSUPPORTED_CLAIM', false)`
+		await expectReject(
+			sql`update answers set status = 'published' where id = ${answerId}`,
+			'unresolved critical',
+		)
+		await sql`update validation_issues set resolved = true where run_id = ${run.id}`
+		await sql`update answers set status = 'published' where id = ${answerId}`
+		const state = await sql<
+			{ status: string }[]
+		>`select status from answers where id = ${answerId}`
+		expect(state[0].status).toBe('published')
+	})
+})
+
+describe('review actor authorization (HARD-004)', () => {
+	test('suspended reviewer cannot approve', async () => {
+		await sql`update tenant_memberships set status = 'suspended'
+			where user_id = ${ids.reviewerA}::uuid`
+		const [cs] = await sql<{ id: string }[]>`
+			insert into knowledge_changesets (tenant_id, title, created_by)
+			values (${ids.tenantA}, 'CS-suspend', ${ids.editorA}) returning id`
+		await sql`update knowledge_changesets set state = 'submitted', submitted_at = now()
+			where id = ${cs.id}`
+		await expectReject(
+			sql`insert into review_events (changeset_id, action, actor_id)
+				values (${cs.id}, 'approved', ${ids.reviewerA})`,
+			'not an active reviewer',
+		)
+		await sql`update tenant_memberships set status = 'active'
+			where user_id = ${ids.reviewerA}::uuid`
+	})
+})
+
+describe('database-authoritative permissions (HARD-004)', () => {
+	test('revoking role_permissions denies at the API without redeploy', async () => {
+		const editor = await authFor(ids.editorA, ids.tenantA, true)
+		const body = JSON.stringify({
+			title: 'Perm probe',
+			author: 'x',
+			sourceType: 'book',
+			language: 'id',
+			rightsStatus: 'licensed',
+			accessScopeId: ids.scopeRootA,
+		})
+		const before = await app.handle(
+			new Request('http://localhost/sources', {
+				method: 'POST',
+				headers: { ...editor, 'content-type': 'application/json' },
+				body,
+			}),
+		)
+		expect(before.status).toBe(201)
+
+		const [role] = await sql<{ id: string }[]>`
+			select id from roles where tenant_id is null and key = 'editor'`
+		await sql`delete from role_permissions
+			where role_id = ${role.id} and permission_key = 'source:create'`
+		try {
+			const denied = await app.handle(
+				new Request('http://localhost/sources', {
+					method: 'POST',
+					headers: { ...editor, 'content-type': 'application/json' },
+					body,
+				}),
+			)
+			expect(denied.status).toBe(403)
+			expect((await denied.json()).reasonCode).toContain(
+				'PERMISSION_DENIED:source:create',
+			)
+		} finally {
+			await sql`insert into role_permissions (role_id, permission_key)
+				values (${role.id}, 'source:create') on conflict do nothing`
+		}
+		const after = await app.handle(
+			new Request('http://localhost/sources', {
+				method: 'POST',
+				headers: { ...editor, 'content-type': 'application/json' },
+				body,
+			}),
+		)
+		expect(after.status).toBe(201)
+	})
+})
+
+describe('least-privilege grants and child-table RLS (HARD-001)', () => {
+	test('app role cannot update audit or delete users (grants revoked)', async () => {
+		await expectReject(
+			appSql`update audit_events set action = 'x' where false`,
+			'permission denied',
+		)
+		await expectReject(
+			appSql`delete from users where false`,
+			'permission denied',
+		)
+	})
+
+	test('child tables are tenant-isolated for the app role', async () => {
+		const none = await appSql<{ n: string }[]>`
+			select count(*) as n from source_revisions`
+		expect(Number(none[0].n)).toBe(0)
+		// guarantee a revision inside tenantA regardless of fixture order.
+		// NOTE: the owner client is a superuser and bypasses RLS even with
+		// FORCE — the app-role client is the one that actually filters.
+		await scopedTransaction(appSql, ids.tenantA, async (tx) => {
+			const [srcA] = await tx<{ id: string }[]>`select id from sources limit 1`
+			await tx`
+				insert into source_revisions (source_id, revision_number, status)
+				values (${srcA?.id}, floor(random()*90000+10000)::int, 'active')`
+		})
+		const scoped = await scopedTransaction(
+			appSql,
+			ids.tenantA,
+			(tx) => tx<{ n: string }[]>`select count(*) as n from source_revisions`,
+		)
+		expect(Number(scoped[0].n)).toBeGreaterThan(0)
+		const otherTenant = await scopedTransaction(
+			appSql,
+			ids.tenantB,
+			(tx) => tx<{ n: string }[]>`select count(*) as n from source_revisions`,
+		)
+		expect(Number(otherTenant[0].n)).toBe(0)
+	})
+})
+
+describe('identity linking (HARD-006)', () => {
+	test('same (issuer, subject) keeps one account across email changes', async () => {
+		const subject = `idp-${crypto.randomUUID()}`
+		const first = await upsertIdentity(
+			sql,
+			cfg.oidcIssuer,
+			subject,
+			'orig@example.com',
+			'Original',
+			true,
+		)
+		const second = await upsertIdentity(
+			sql,
+			cfg.oidcIssuer,
+			subject,
+			'changed@example.com',
+			'Changed',
+			true,
+		)
+		expect(second.id).toBe(first.id)
+		const users = await sql<{ n: string }[]>`
+			select count(*) as n from user_identities
+			where issuer = ${cfg.oidcIssuer} and subject = ${subject}`
+		expect(Number(users[0].n)).toBe(1)
+	})
+
+	test('unverified email cannot hijack an existing account', async () => {
+		const email = `victim-${crypto.randomUUID().slice(0, 6)}@example.com`
+		await upsertIdentity(
+			sql,
+			cfg.oidcIssuer,
+			`orig-${email}`,
+			email,
+			'Victim',
+			true,
+		)
+		const hijacker = await upsertIdentity(
+			sql,
+			cfg.oidcIssuer,
+			`hij-${crypto.randomUUID()}`,
+			email,
+			'Hijacker',
+			false,
+		)
+		// separate account with a subject-scoped placeholder email
+		expect(hijacker.primary_email).toContain('@unverified.oidc')
+		const verified = await upsertIdentity(
+			sql,
+			cfg.oidcIssuer,
+			`ver-${crypto.randomUUID()}`,
+			email,
+			'Verified',
+			true,
+		)
+		// verified email links to the original victim account
+		const [victim] = await sql<{ id: string }[]>`
+			select id from users where primary_email = ${email}`
+		expect(verified.id).toBe(victim.id)
+	})
+})
+
+describe('logout revocation flow (HARD-006)', () => {
+	test('logout with CSRF persists revocation before responding', async () => {
+		const editor = await authFor(ids.editorA, ids.tenantA, true)
+		const logout = await app.handle(
+			new Request('http://localhost/auth/logout', {
+				method: 'POST',
+				headers: {
+					cookie: editor.cookie,
+					'x-csrf-token': editor['x-csrf-token'] ?? '',
+				},
+			}),
+		)
+		expect(logout.status).toBe(204)
+		// the cookie-pinned session id is now revoked in PostgreSQL
+		const me = await app.handle(
+			new Request('http://localhost/auth/me', {
+				headers: { cookie: editor.cookie },
+			}),
+		)
+		expect(me.status).toBe(401)
+	})
+})
+
+describe('migration drift protection (HARD-008)', () => {
+	test('editing an applied migration fails the next run', async () => {
+		const dir = join('/tmp', `mig-drift-${crypto.randomUUID().slice(0, 8)}`)
+		await Bun.$`mkdir -p ${dir}`.quiet()
+		const file = join(dir, '9999_drift_probe.sql')
+		await Bun.write(file, 'select 1;')
+		await applyMigrations(sql, dir, () => {})
+		// re-run unchanged: no-op
+		const second = await applyMigrations(sql, dir, () => {})
+		expect(second).toEqual([])
+		// mutate the applied migration: drift must fail the run
+		await Bun.write(file, 'select 2;')
+		await expectReject(
+			applyMigrations(sql, dir, () => {}),
+			'migration drift',
+		)
+		await sql`delete from schema_migrations where filename = '9999_drift_probe.sql'`
 	})
 })
 

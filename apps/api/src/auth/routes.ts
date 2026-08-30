@@ -28,16 +28,16 @@ import {
 	revokeSession,
 } from './sessionStore'
 
-const sql: Sql = db()
-
 export interface AuthDeps {
 	cfg: Config
 	log: Logger
 	oidc: OidcClient
+	/** injected client from the composition root (HARD-005) */
+	sql: Sql
 }
 
 export function authPlugin(deps: AuthDeps) {
-	const { cfg, log, oidc } = deps
+	const { cfg, log, oidc, sql } = deps
 
 	return new Elysia({ name: 'auth' })
 		.get('/auth/login', async ({ set }) => {
@@ -69,15 +69,21 @@ export function authPlugin(deps: AuthDeps) {
 			}
 			try {
 				const ep = await oidc.discovery()
+				// provider declares client_secret_basic: secret travels in an
+				// HTTP Basic auth header, never in the form body
+				const basic = Buffer.from(
+					`${oidc.clientId}:${cfg.oidcClientSecret}`,
+				).toString('base64')
 				const tokenRes = await fetch(ep.token_endpoint, {
 					method: 'POST',
-					headers: { 'content-type': 'application/x-www-form-urlencoded' },
+					headers: {
+						'content-type': 'application/x-www-form-urlencoded',
+						authorization: `Basic ${basic}`,
+					},
 					body: new URLSearchParams({
 						grant_type: 'authorization_code',
 						code: query.code,
 						redirect_uri: `${cfg.publicBaseUrl}/auth/callback`,
-						client_id: oidc.clientId,
-						client_secret: cfg.oidcClientSecret,
 					}),
 				})
 				if (!tokenRes.ok) throw new Error(`token endpoint ${tokenRes.status}`)
@@ -87,10 +93,12 @@ export function authPlugin(deps: AuthDeps) {
 				// we always send a nonce; a missing or mismatched claim is a replay
 				if (claims.nonce !== nonce) throw new Error('nonce missing or mismatch')
 				const user = await upsertIdentity(
+					sql,
 					cfg.oidcIssuer,
 					claims.sub,
 					claims.email ?? `${claims.sub}@unknown.invalid`,
 					claims.name ?? claims.preferred_username ?? claims.sub,
+					claims.email_verified === true,
 				)
 				// Single-tenant MVP: attach the user's first active membership.
 				const [firstTenant] = await sql<{ tenant_id: string }[]>`
@@ -128,7 +136,7 @@ export function authPlugin(deps: AuthDeps) {
 				return 'authentication failed'
 			}
 		})
-		.post('/auth/logout', ({ request, set }) => {
+		.post('/auth/logout', async ({ request, set }) => {
 			const cookies = parseCookies(request.headers.get('cookie'))
 			const session = verifySession(cookies.aifiqh_session, cfg.sessionSecret)
 			// a valid session may only be cleared with the matching CSRF token

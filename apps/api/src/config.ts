@@ -1,13 +1,17 @@
 import type { HealthStatus } from '@aifiqh/shared'
 
-function required(name: string): string {
-	const v = process.env[name]
+function required(env: NodeJS.ProcessEnv, name: string): string {
+	const v = env[name]
 	if (!v) throw new Error(`Missing required env var: ${name}`)
 	return v
 }
 
-function optional(name: string, fallback: string): string {
-	return process.env[name] ?? fallback
+function optional(
+	env: NodeJS.ProcessEnv,
+	name: string,
+	fallback: string,
+): string {
+	return env[name] ?? fallback
 }
 
 export interface Config {
@@ -30,28 +34,33 @@ export interface Config {
 let cached: Config | null = null
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-	const envName = (optional('APP_ENV', 'development') ||
+	const envName = (optional(env, 'APP_ENV', 'development') ||
 		'development') as Config['env']
 	return {
 		env: envName,
-		port: Number(optional('PORT', '3000')),
+		port: Number(optional(env, 'PORT', '3000')),
 		databaseUrl: optional(
+			env,
 			'DATABASE_URL',
 			// dedicated non-superuser app role (migration 0020): RLS actually
 			// applies to it, unlike the bootstrap superuser
 			'postgres://aifiqh_app:aifiqh_app@localhost:5434/aifiqh',
 		),
-		storageEndpoint: optional('STORAGE_ENDPOINT', 'http://localhost:9000'),
-		storageBucket: optional('STORAGE_BUCKET', 'aifiqh-originals'),
-		storageAccessKey: optional('STORAGE_ACCESS_KEY', 'minioadmin'),
-		storageSecretKey: optional('STORAGE_SECRET_KEY', 'minioadmin'),
-		oidcIssuer: optional('OIDC_ISSUER', 'http://localhost:4011'),
-		oidcClientId: optional('OIDC_CLIENT_ID', 'aifiqh-api'),
-		oidcClientSecret: optional('OIDC_CLIENT_SECRET', 'dev-client-secret'),
-		sessionSecret: optional('SESSION_SECRET', 'dev-session-secret-change-me'),
-		sessionTtlSeconds: Number(optional('SESSION_TTL_SECONDS', '3600')),
-		publicBaseUrl: optional('PUBLIC_BASE_URL', 'http://localhost:3000'),
-		logLevel: optional('LOG_LEVEL', 'info') as Config['logLevel'],
+		storageEndpoint: optional(env, 'STORAGE_ENDPOINT', 'http://localhost:9000'),
+		storageBucket: optional(env, 'STORAGE_BUCKET', 'aifiqh-originals'),
+		storageAccessKey: optional(env, 'STORAGE_ACCESS_KEY', 'minioadmin'),
+		storageSecretKey: optional(env, 'STORAGE_SECRET_KEY', 'minioadmin'),
+		oidcIssuer: optional(env, 'OIDC_ISSUER', 'http://localhost:4011'),
+		oidcClientId: optional(env, 'OIDC_CLIENT_ID', 'aifiqh-api'),
+		oidcClientSecret: optional(env, 'OIDC_CLIENT_SECRET', 'dev-client-secret'),
+		sessionSecret: optional(
+			env,
+			'SESSION_SECRET',
+			'dev-session-secret-change-me',
+		),
+		sessionTtlSeconds: Number(optional(env, 'SESSION_TTL_SECONDS', '3600')),
+		publicBaseUrl: optional(env, 'PUBLIC_BASE_URL', 'http://localhost:3000'),
+		logLevel: optional(env, 'LOG_LEVEL', 'info') as Config['logLevel'],
 	}
 }
 

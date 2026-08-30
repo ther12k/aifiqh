@@ -20,18 +20,31 @@ const REDACT_KEYS = new Set([
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 } as const
 export type LogLevel = keyof typeof LEVELS
 
-export function redact(value: unknown, depth = 0): unknown {
-	if (depth > 6 || value === null || value === undefined) return value
-	if (Array.isArray(value)) return value.map((v) => redact(v, depth + 1))
+export function redact(
+	value: unknown,
+	depth = 0,
+	seen?: WeakSet<object>,
+): unknown {
+	if (value === null || value === undefined) return value
+	if (depth > 6) return '[MAX_DEPTH]'
+	if (Array.isArray(value)) {
+		const arrSeen = seen ?? new WeakSet()
+		if (arrSeen.has(value)) return '[CYCLIC]'
+		arrSeen.add(value)
+		return value.map((v) => redact(v, depth + 1, arrSeen))
+	}
 	if (value instanceof Error) {
 		return { name: value.name, message: value.message }
 	}
 	if (typeof value === 'object') {
+		const objSeen = seen ?? new WeakSet()
+		if (objSeen.has(value)) return '[CYCLIC]'
+		objSeen.add(value)
 		const out: Record<string, unknown> = {}
 		for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
 			out[k] = REDACT_KEYS.has(k.toLowerCase().replace(/[_-]/g, ''))
 				? '[REDACTED]'
-				: redact(v, depth + 1)
+				: redact(v, depth + 1, objSeen)
 		}
 		return out
 	}

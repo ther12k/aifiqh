@@ -8,10 +8,8 @@
  * revokes the server-side session id (denylist until cookie expiry).
  */
 import { type JWTPayload, createRemoteJWKSet, jwtVerify } from 'jose'
-import { db } from '../db/client'
-
-const sql = db()
 import type { Config } from '../config'
+import type { Sql } from '../db/client'
 
 export interface OidcClaims extends JWTPayload {
 	sub: string
@@ -69,29 +67,58 @@ export interface UserRow {
 }
 
 /** Upsert user + identity exactly once per (issuer, subject). */
+/**
+ * Identity-first account resolution (HARD-006): lookup starts at
+ * (issuer, subject), so an IdP email change never orphans accounts.
+ * A brand-new identity links to an existing account only when the IdP
+ * asserts the email as verified; otherwise it becomes a separate account.
+ */
 export async function upsertIdentity(
+	sql: Sql,
 	issuer: string,
 	subject: string,
 	email: string,
 	displayName: string,
+	emailVerified: boolean,
 ): Promise<UserRow> {
-	const rows = await sql<UserRow[]>`
-    with new_user as (
-      insert into users (primary_email, display_name)
-      values (${email}, ${displayName})
-      on conflict (primary_email) do update set display_name = excluded.display_name
-      returning id, primary_email, display_name
-    ), new_identity as (
-      insert into user_identities (user_id, issuer, subject)
-      select id, ${issuer}, ${subject} from new_user
-      on conflict (issuer, subject) do update set issuer = excluded.issuer
-      returning user_id
-    )
-    select u.id, u.primary_email, u.display_name
-    from new_user u join new_identity ni on ni.user_id = u.id
-  `
-	if (!rows[0]) throw new Error('identity upsert failed')
-	return rows[0]
+	const existing = await sql<UserRow[]>`
+		select u.id, u.primary_email, u.display_name
+		from user_identities ui join users u on u.id = ui.user_id
+		where ui.issuer = ${issuer} and ui.subject = ${subject}
+		limit 1
+	`
+	if (existing[0]) {
+		const [updated] = await sql<UserRow[]>`
+			update users set display_name = ${displayName}
+			where id = ${existing[0].id}::uuid
+			returning id, primary_email, display_name
+		`
+		if (!updated) throw new Error('identity update failed')
+		return updated
+	}
+	// only a verified email may claim an existing account; unverified emails
+	// get a subject-scoped placeholder to prevent account hijack
+	let primaryEmail = email
+	if (!emailVerified) {
+		const clash = await sql<{ exists: boolean }[]>`
+			select exists (select 1 from users where primary_email = ${email}) as exists
+		`
+		if (clash[0]?.exists) primaryEmail = `${subject}@unverified.oidc`
+	}
+	const linked = await sql<UserRow[]>`
+		insert into users (primary_email, display_name)
+		values (${primaryEmail}, ${displayName})
+		on conflict (primary_email) do update set display_name = excluded.display_name
+		returning id, primary_email, display_name
+	`
+	const user = linked[0]
+	if (!user) throw new Error('user upsert failed')
+	await sql`
+		insert into user_identities (user_id, issuer, subject)
+		values (${user.id}, ${issuer}, ${subject})
+		on conflict (issuer, subject) do nothing
+	`
+	return user
 }
 
 // Session revocation moved to the PostgreSQL-backed store (auth/sessionStore):

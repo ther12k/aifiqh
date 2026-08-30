@@ -1,15 +1,22 @@
 import { describe, expect, test } from 'bun:test'
 import type { Principal } from '@aifiqh/shared'
-import { checkAccess, checkPermission, hasPermission } from '../src/auth/policy'
+import { ROLE_PERMISSIONS } from '@aifiqh/shared'
+import { checkPermission, hasPermission } from '../src/auth/policy'
 
 function principal(
 	roles: Principal['roles'],
 	scopes: string[] = [],
 ): Principal {
+	// simulate the DB path (HARD-004): effective permissions come from
+	// role_permissions, not from the role key list
+	const permissions = [
+		...new Set(roles.flatMap((r) => ROLE_PERMISSIONS[r] ?? [])),
+	]
 	return {
 		userId: crypto.randomUUID(),
 		tenantId: crypto.randomUUID(),
 		roles,
+		permissions,
 		scopes,
 		actorType: 'user',
 	}
@@ -29,6 +36,10 @@ describe('RBAC permission matrix (SEC-002)', () => {
 		expect(checkPermission(p, 'review:publish').allowed).toBeFalse()
 		expect(checkPermission(p, 'review:approve').reasonCode).toContain(
 			'PERMISSION_DENIED',
+		)
+		// client-facing reason code must not leak the caller's role list
+		expect(checkPermission(p, 'review:approve').reasonCode).not.toContain(
+			'roles=',
 		)
 	})
 
@@ -79,13 +90,22 @@ describe('RBAC permission matrix (SEC-002)', () => {
 		expect(hasPermission(p, 'ops:read')).toBeTrue()
 		expect(hasPermission(p, 'review:approve')).toBeFalse()
 	})
+
+	test('effective permissions are the authority: stripped permission denies', () => {
+		// HARD-004: even with the editor role, a principal whose
+		// role_permissions row was revoked must be denied
+		const p = principal(['editor'])
+		p.permissions = p.permissions.filter((x) => x !== 'source:create')
+		expect(hasPermission(p, 'source:create')).toBeFalse()
+	})
 })
 
 describe('access scope decisions', () => {
 	test('direct scope grant is allowed without DB when listed', async () => {
 		const scopeId = crypto.randomUUID()
 		const p = principal(['reader'], [scopeId])
-		// checkScope hits DB only when the direct list misses; direct hit avoids it
+		// checkScope hits the DB only when the direct list misses; the direct
+		// hit avoids it (DB path covered by integration tests)
 		const decision = await checkScopeDirect(p, scopeId)
 		expect(decision.allowed).toBeTrue()
 	})
@@ -97,4 +117,3 @@ async function checkScopeDirect(p: Principal, scopeId: string) {
 		return { allowed: true, reasonCode: 'OK' as const }
 	return { allowed: false, reasonCode: 'SCOPE_DENIED' as const }
 }
-void checkAccess

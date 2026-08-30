@@ -18,7 +18,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@aifiqh/shared": "workspace:*",
-        "elysia": "^2.0.0-beta.10",
+        "elysia": "2.0.0-exp.64",
         "jose": "^5.9.0",
         "postgres": "^3.4.9",
       },

@@ -1,13 +1,22 @@
 /**
- * Ordered migration runner. Applies db/migrations/*.sql in filename order,
- * tracking applied files in schema_migrations. Each file runs in one
- * transaction; multi-statement files use the simple query protocol.
+ * Ordered migration runner (HARD-008).
+ * - applies db/migrations/*.sql in filename order, one transaction per file
+ * - records a sha256 checksum per file; editing an applied migration fails
+ *   the next run instead of silently reporting "up to date"
+ * - takes a PostgreSQL advisory lock so concurrent runners cannot race
  */
 import { readdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import postgres from 'postgres'
 
 const MIGRATIONS_DIR = join(import.meta.dir, '..', 'db', 'migrations')
+const RUNNER_VERSION = '2'
+const ADVISORY_LOCK_KEY = 7_290_148_662_026 // hashtext('aifiqh_migrations')
+
+interface MigrationRow {
+	filename: string
+	checksum: string | null
+}
 
 export async function applyMigrations(
 	sql: ReturnType<typeof postgres>,
@@ -16,29 +25,55 @@ export async function applyMigrations(
 ): Promise<string[]> {
 	await sql`create table if not exists schema_migrations (
     filename text primary key,
-    applied_at timestamptz not null default now()
+    applied_at timestamptz not null default now(),
+    checksum text
   )`
-	const applied = new Set(
-		(
-			await sql<{ filename: string }[]>`select filename from schema_migrations`
-		).map((r) => r.filename),
-	)
-	const files = readdirSync(dir)
-		.filter((f) => f.endsWith('.sql'))
-		.sort()
-	const justApplied: string[] = []
-	for (const file of files) {
-		if (applied.has(file)) continue
-		const text = await Bun.file(join(dir, file)).text()
-		const started = Date.now()
-		await sql.begin(async (tx) => {
-			await tx.unsafe(text)
-			await tx`insert into schema_migrations (filename) values (${file})`
-		})
-		justApplied.push(file)
-		log(`applied ${file} (${Date.now() - started}ms)`)
+	await sql`alter table schema_migrations add column if not exists checksum text`
+
+	// concurrent runners (API container + CI + operator) must serialize
+	await sql`select pg_advisory_lock(${ADVISORY_LOCK_KEY})`
+	try {
+		const applied = new Map(
+			(
+				await sql<
+					MigrationRow[]
+				>`select filename, checksum from schema_migrations`
+			).map((r) => [r.filename, r.checksum]),
+		)
+		const files = readdirSync(dir)
+			.filter((f) => f.endsWith('.sql'))
+			.sort()
+		const justApplied: string[] = []
+		for (const file of files) {
+			const text = await Bun.file(join(dir, file)).text()
+			const checksum = new Bun.CryptoHasher('sha256').update(text).digest('hex')
+			const recorded = applied.get(file)
+			if (recorded === null || recorded === undefined) {
+				if (applied.has(file)) {
+					// legacy row without checksum: backfill it
+					await sql`update schema_migrations set checksum = ${checksum} where filename = ${file}`
+					applied.set(file, checksum)
+					continue
+				}
+				const started = Date.now()
+				await sql.begin(async (tx) => {
+					await tx.unsafe(text)
+					await tx`insert into schema_migrations (filename, checksum)
+						values (${file}, ${checksum})`
+				})
+				justApplied.push(file)
+				applied.set(file, checksum)
+				log(`applied ${file} (${Date.now() - started}ms)`)
+			} else if (recorded !== checksum) {
+				throw new Error(
+					`migration drift: ${file} changed since it was applied (recorded ${recorded.slice(0, 12)}…, now ${checksum.slice(0, 12)}…). Applied migrations are immutable — add a new migration instead.`,
+				)
+			}
+		}
+		return justApplied
+	} finally {
+		await sql`select pg_advisory_unlock(${ADVISORY_LOCK_KEY})`
 	}
-	return justApplied
 }
 
 const isMain = import.meta.main

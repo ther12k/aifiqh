@@ -4,7 +4,7 @@ import type { HealthReport, Permission, Principal } from '@aifiqh/shared'
  * the source registry routes (RBAC-guarded, audit-logged).
  */
 import { Elysia } from 'elysia'
-import { listAudit, recordAudit } from './audit/audit'
+import { listAudit, recordAuditInTx } from './audit/audit'
 import type { OidcClient } from './auth/oidc'
 import { checkAccess, loadPrincipal } from './auth/policy'
 import { authPlugin } from './auth/routes'
@@ -129,10 +129,10 @@ export function buildApp(deps: AppDeps) {
 						.tenantId
 					if (!tenantId)
 						throw new HttpError(403, 'forbidden', 'NO_TENANT_MEMBERSHIP')
-					const principal = await loadPrincipal(session.userId, tenantId)
+					const principal = await loadPrincipal(sql, session.userId, tenantId)
 					if (!principal)
 						throw new HttpError(403, 'forbidden', 'NO_TENANT_MEMBERSHIP')
-					const decision = await checkAccess(principal, permission)
+					const decision = await checkAccess(sql, principal, permission)
 					if (!decision.allowed) {
 						log.warn('permission denied', {
 							permission,
@@ -148,7 +148,12 @@ export function buildApp(deps: AppDeps) {
 					principal: Principal,
 					scopeId: string,
 				): Promise<void> {
-					const decision = await checkAccess(principal, 'source:read', scopeId)
+					const decision = await checkAccess(
+						sql,
+						principal,
+						'source:read',
+						scopeId,
+					)
 					if (!decision.allowed) {
 						log.warn('scope denied', {
 							scopeId,
@@ -259,20 +264,24 @@ function sourceRoutes(deps: AppDeps) {
 				return { error: 'validation_failed', fields: missing }
 			}
 			// the access scope must exist, belong to the caller's tenant, and be
-			// within the caller's granted scopes (no cross-tenant scope injection)
-			const [scope] = await sql<{ tenant_id: string }[]>`
-				select tenant_id from access_scopes where id = ${body.accessScopeId as string}::uuid limit 1
-			`
-			if (
-				!scope ||
-				scope.tenant_id !== principal.tenantId ||
-				!principal.scopes.includes(body.accessScopeId as string)
-			) {
-				ctx.set.status = 400
-				return { error: 'invalid_access_scope', fields: ['accessScopeId'] }
-			}
-			const row = await scopedTransaction(sql, principal.tenantId, (tx) =>
-				tx<SourceRow[]>`
+			// within the caller's granted scopes (no cross-tenant scope injection).
+			// the lookup runs inside the tenant transaction: access_scopes carries
+			// RLS, so an out-of-transaction read cannot see it at all
+			const row = await scopedTransaction(
+				sql,
+				principal.tenantId,
+				async (tx) => {
+					const [scope] = await tx<{ tenant_id: string }[]>`
+					select tenant_id from access_scopes where id = ${body.accessScopeId as string}::uuid limit 1
+				`
+					if (
+						!scope ||
+						scope.tenant_id !== principal.tenantId ||
+						!principal.scopes.includes(body.accessScopeId as string)
+					) {
+						return { error: 'invalid_access_scope', fields: ['accessScopeId'] }
+					}
+					const [inserted] = await tx<SourceRow[]>`
           insert into sources
             (tenant_id, title, author, source_type, language, edition, publisher,
              rights_status, access_scope_id, created_by)
@@ -283,22 +292,29 @@ function sourceRoutes(deps: AppDeps) {
              ${body.rightsStatus as string}, ${body.accessScopeId as string}::uuid,
              ${principal.userId}::uuid)
           returning *
-        `.then((rows) => rows[0]),
+        `
+					if (!inserted) throw new HttpError(500, 'insert_failed')
+					// business change + audit commit atomically (HARD-007)
+					await recordAuditInTx(tx, {
+						tenantId: principal.tenantId,
+						actorType: 'user',
+						actorId: principal.userId,
+						action: 'source.created',
+						entityType: 'source',
+						entityId: inserted.id,
+						afterRef: { title: inserted.title },
+						reason: (body.reason as string) || null,
+						traceId: ctx.traceId,
+					})
+					return { created: inserted }
+				},
 			)
-			if (!row) throw new HttpError(500, 'insert_failed')
-			await recordAudit({
-				tenantId: principal.tenantId,
-				actorType: 'user',
-				actorId: principal.userId,
-				action: 'source.created',
-				entityType: 'source',
-				entityId: row.id,
-				afterRef: { title: row.title },
-				reason: (body.reason as string) || null,
-				traceId: ctx.traceId,
-			})
+			if ('error' in row) {
+				ctx.set.status = 400
+				return row
+			}
 			ctx.set.status = 201
-			return { id: row.id, title: row.title }
+			return { id: row.created.id, title: row.created.title }
 		})
 		.get('/sources/:id', async (rawCtx) => {
 			const ctx = rawCtx as unknown as HandlerCtx
@@ -313,6 +329,7 @@ function sourceRoutes(deps: AppDeps) {
 				return { error: 'not_found' }
 			}
 			const decision = await checkAccess(
+				sql,
 				principal,
 				'source:read',
 				row.access_scope_id,
@@ -376,15 +393,35 @@ function sourceRoutes(deps: AppDeps) {
 					fields: ['title|author|language|edition|publisher|rightsStatus'],
 				}
 			}
-			// read-before-write inside one tenant-scoped transaction
-			const [before, after] = await scopedTransaction(
+			// read-before-write + scope check + update + audit in ONE
+			// tenant-scoped transaction (HARD-007)
+			const outcome = await scopedTransaction(
 				sql,
 				principal.tenantId,
 				async (tx) => {
 					const [b] = await tx<SourceRow[]>`
 					select * from sources where id = ${ctx.params.id}::uuid limit 1
 				`
-					if (!b || b.tenant_id !== principal.tenantId) return [b, undefined]
+					if (!b || b.tenant_id !== principal.tenantId)
+						return { code: 'not_found' as const }
+					// scope check on the CURRENT scope: tenant-wide update_metadata
+					// alone must not touch out-of-scope sources
+					const scopeDecision = await checkAccess(
+						tx,
+						principal,
+						'source:read',
+						b.access_scope_id,
+					)
+					if (!scopeDecision.allowed) {
+						log.warn('scope denied', {
+							reasonCode: scopeDecision.reasonCode,
+							traceId: ctx.traceId,
+						})
+						return {
+							code: 'forbidden' as const,
+							reasonCode: scopeDecision.reasonCode,
+						}
+					}
 					const [a] = await tx<SourceRow[]>`
 					update sources set
 						title = coalesce(${patch.title}, title),
@@ -396,31 +433,36 @@ function sourceRoutes(deps: AppDeps) {
 					where id = ${ctx.params.id}::uuid
 					returning *
 				`
-					return [b, a]
+					if (!a) throw new HttpError(500, 'update_failed')
+					await recordAuditInTx(tx, {
+						tenantId: principal.tenantId,
+						actorType: 'user',
+						actorId: principal.userId,
+						action: 'source.metadata_updated',
+						entityType: 'source',
+						entityId: ctx.params.id,
+						beforeRef: { title: b.title, rights_status: b.rights_status },
+						afterRef: { title: a.title, rights_status: a.rights_status },
+						reason: (body.reason as string) || null,
+						traceId: ctx.traceId,
+					})
+					return { code: 'ok' as const, before: b, after: a }
 				},
 			)
-			if (!before || before.tenant_id !== principal.tenantId) {
+			if (outcome.code === 'not_found') {
 				ctx.set.status = 404
 				return { error: 'not_found' }
 			}
-			if (!after) throw new HttpError(500, 'update_failed')
-			await recordAudit({
-				tenantId: principal.tenantId,
-				actorType: 'user',
-				actorId: principal.userId,
-				action: 'source.metadata_updated',
-				entityType: 'source',
-				entityId: ctx.params.id,
-				beforeRef: { title: before.title, rights_status: before.rights_status },
-				afterRef: { title: after.title, rights_status: after.rights_status },
-				reason: (body.reason as string) || null,
-				traceId: ctx.traceId,
-			})
-			return { id: after.id, title: after.title }
+			if (outcome.code === 'forbidden') {
+				throw new HttpError(403, 'forbidden', outcome.reasonCode)
+			}
+			return { id: outcome.after.id, title: outcome.after.title }
 		})
 		.get('/audit/events', async (rawCtx) => {
 			const ctx = rawCtx as unknown as HandlerCtx
 			const principal = await ctx.requirePermission('audit:read')
-			return listAudit({ tenantId: principal.tenantId, limit: 100 })
+			return scopedTransaction(sql, principal.tenantId, (tx) =>
+				listAudit(tx, { tenantId: principal.tenantId, limit: 100 }),
+			)
 		})
 }

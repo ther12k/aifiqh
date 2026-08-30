@@ -3,12 +3,11 @@
  * Writes actor, tenant, action, entity, before/after reference, reason,
  * trace_id, timestamp. The DB trigger from migration 0003 rejects
  * UPDATE/DELETE; application code must never mutate audit rows.
+ * The sql client is injected (HARD-005) — no module-scope connections.
  */
 import type { AuditEventInput } from '@aifiqh/shared'
-import { type Sql, db } from '../db/client'
+import type { Sql } from '../db/client'
 import { currentTraceId } from '../observability/trace'
-
-const sql = db()
 
 export interface AuditEventRow {
 	id: string
@@ -26,6 +25,7 @@ export interface AuditEventRow {
 }
 
 export async function recordAudit(
+	sql: Sql,
 	input: AuditEventInput,
 ): Promise<AuditEventRow> {
 	const traceId = input.traceId ?? currentTraceId() ?? null
@@ -73,7 +73,10 @@ export interface AuditFilter {
 	limit?: number
 }
 
-export async function listAudit(filter: AuditFilter): Promise<AuditEventRow[]> {
+export async function listAudit(
+	sql: Sql,
+	filter: AuditFilter,
+): Promise<AuditEventRow[]> {
 	return sql<AuditEventRow[]>`
     select * from audit_events
     where

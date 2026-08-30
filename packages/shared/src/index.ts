@@ -85,6 +85,10 @@ export interface Principal {
 	userId: string
 	tenantId: string
 	roles: RoleKey[]
+	/** effective permissions resolved from role_permissions in PostgreSQL —
+	 * the database is the authorization authority; ROLE_PERMISSIONS above is
+	 * only the seed catalog */
+	permissions: Permission[]
 	scopes: string[]
 	actorType: ActorType
 }
