@@ -4,10 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    # self-hosted runner on the halotec server (GitHub-hosted runners are
+    # unavailable: billing). The runner has the host docker socket mounted,
+    # so the postgres service container works as a sibling.
+    runs-on: self-hosted
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -15,15 +19,11 @@ jobs:
           POSTGRES_USER: aifiqh
           POSTGRES_PASSWORD: aifiqh
           POSTGRES_DB: aifiqh
-        ports:
-          - 5432:5432
         options: >-
           --health-cmd "pg_isready -U aifiqh"
           --health-interval 3s
           --health-timeout 3s
           --health-retries 20
-    env:
-      DATABASE_URL: postgres://aifiqh:aifiqh@localhost:5432/aifiqh
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +42,10 @@ jobs:
 
       - name: Test (unit + DB integration)
         run: bun test
+        env:
+          # no fixed ports on the service: the runner publishes a random host
+          # port (host 5432 is already taken by another postgres)
+          DATABASE_URL: postgres://aifiqh:aifiqh@127.0.0.1:${{ job.services.postgres.outputs.ports.5432 }}/aifiqh
 
       - name: Build
         run: bun run build
