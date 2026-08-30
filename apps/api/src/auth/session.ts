@@ -1,11 +1,13 @@
 /**
- * HMAC-signed, short-lived app session cookies. The cookie carries
- * sessionId/userId/tenant hint + expiry; server-side revocation is handled
- * by auth/oidc.ts isRevoked(). Secret rotation is out of MVP scope.
+ * HMAC-signed, short-lived app session cookies plus CSRF double-submit
+ * tokens. The session cookie carries sessionId/userId/tenant hint + expiry;
+ * server-side revocation is checked against PostgreSQL (auth/sessionStore).
  */
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { type AuthSession, SESSION_COOKIE } from '@aifiqh/shared'
-import { isRevoked as isSessionRevoked } from './oidc'
+
+export const CSRF_COOKIE = 'aifiqh_csrf'
+export const CSRF_HEADER = 'x-csrf-token'
 
 export function signSession(payload: AuthSession, secret: string): string {
 	const body = Buffer.from(JSON.stringify(payload)).toString('base64url')
@@ -31,7 +33,6 @@ export function verifySession(
 			Buffer.from(body, 'base64url').toString(),
 		) as AuthSession
 		if (new Date(session.expiresAt).getTime() < Date.now()) return null
-		if (isSessionRevoked(session.sessionId)) return null
 		return session
 	} catch {
 		return null
@@ -52,6 +53,43 @@ export function sessionCookieHeader(
 
 export function clearSessionCookieHeader(): string {
 	return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`
+}
+
+/**
+ * CSRF double-submit token: a random value in a JS-readable cookie that
+ * must be echoed in the x-csrf-token header on state-changing requests.
+ * Complements SameSite=Lax (which already blocks most cross-site posts).
+ */
+export function newCsrfToken(): string {
+	return randomBytes(24).toString('base64url')
+}
+
+export function csrfCookieHeader(
+	token: string,
+	ttlSeconds: number,
+	secure = false,
+): string {
+	return (
+		`${CSRF_COOKIE}=${token}; Path=/; SameSite=Lax` +
+		(secure ? '; Secure' : '') +
+		`; Max-Age=${ttlSeconds}`
+	)
+}
+
+export function clearCsrfCookieHeader(): string {
+	return `${CSRF_COOKIE}=; Path=/; SameSite=Lax; Max-Age=0`
+}
+
+/** Constant-time CSRF comparison; null-safe. */
+export function verifyCsrf(
+	headerValue: string | null | undefined,
+	cookieValue: string | null | undefined,
+): boolean {
+	if (!headerValue || !cookieValue) return false
+	const a = Buffer.from(headerValue)
+	const b = Buffer.from(cookieValue)
+	if (a.length !== b.length) return false
+	return timingSafeEqual(a, b)
 }
 
 export function parseCookies(header: string | null): Record<string, string> {

@@ -8,8 +8,15 @@ import { listAudit, recordAudit } from './audit/audit'
 import type { OidcClient } from './auth/oidc'
 import { checkAccess, loadPrincipal } from './auth/policy'
 import { authPlugin } from './auth/routes'
-import { parseCookies, verifySession } from './auth/session'
+import {
+	CSRF_HEADER,
+	parseCookies,
+	verifyCsrf,
+	verifySession,
+} from './auth/session'
+import { isSessionRevoked } from './auth/sessionStore'
 import type { Config } from './config'
+import { type Sql as ScopedSql, scopedTransaction } from './db/client'
 import type { Sql } from './db/client'
 import { dbOk } from './db/client'
 import type { Logger } from './logger'
@@ -97,12 +104,27 @@ export function buildApp(deps: AppDeps) {
 			const traceId = (ctx.store as RequestStore).traceId
 			return {
 				traceId,
+				/** CSRF double-submit: x-csrf-token header must equal the cookie. */
+				requireCsrf(): void {
+					const cookies = parseCookies(ctx.request.headers.get('cookie'))
+					if (
+						!verifyCsrf(
+							ctx.request.headers.get(CSRF_HEADER),
+							cookies.aifiqh_csrf,
+						)
+					) {
+						throw new HttpError(403, 'forbidden', 'CSRF_TOKEN_INVALID')
+					}
+				},
 				async requirePermission(permission: Permission): Promise<Principal> {
 					const token = parseCookies(
 						ctx.request.headers.get('cookie'),
 					).aifiqh_session
 					const session = verifySession(token, cfg.sessionSecret)
 					if (!session) throw new HttpError(401, 'unauthorized')
+					if (await isSessionRevoked(sql, session.sessionId)) {
+						throw new HttpError(401, 'unauthorized', 'SESSION_REVOKED')
+					}
 					const tenantId = (session as unknown as { tenantId?: string })
 						.tenantId
 					if (!tenantId)
@@ -219,6 +241,7 @@ interface HandlerCtx {
 	params: Record<string, string>
 	traceId: string
 	requirePermission: (p: Permission) => Promise<Principal>
+	requireCsrf: () => void
 }
 
 function sourceRoutes(deps: AppDeps) {
@@ -227,6 +250,8 @@ function sourceRoutes(deps: AppDeps) {
 		.post('/sources', async (rawCtx) => {
 			const ctx = rawCtx as unknown as HandlerCtx
 			const principal = await ctx.requirePermission('source:create')
+			// CSRF after auth so unauthenticated requests still get a 401
+			ctx.requireCsrf()
 			const body = ctx.body as Record<string, unknown>
 			const missing = REQUIRED_SOURCE_FIELDS.filter((f) => !body?.[f])
 			if (missing.length > 0) {
@@ -246,7 +271,8 @@ function sourceRoutes(deps: AppDeps) {
 				ctx.set.status = 400
 				return { error: 'invalid_access_scope', fields: ['accessScopeId'] }
 			}
-			const [row] = await sql<SourceRow[]>`
+			const row = await scopedTransaction(sql, principal.tenantId, (tx) =>
+				tx<SourceRow[]>`
           insert into sources
             (tenant_id, title, author, source_type, language, edition, publisher,
              rights_status, access_scope_id, created_by)
@@ -257,7 +283,8 @@ function sourceRoutes(deps: AppDeps) {
              ${body.rightsStatus as string}, ${body.accessScopeId as string}::uuid,
              ${principal.userId}::uuid)
           returning *
-        `
+        `.then((rows) => rows[0]),
+			)
 			if (!row) throw new HttpError(500, 'insert_failed')
 			await recordAudit({
 				tenantId: principal.tenantId,
@@ -276,9 +303,11 @@ function sourceRoutes(deps: AppDeps) {
 		.get('/sources/:id', async (rawCtx) => {
 			const ctx = rawCtx as unknown as HandlerCtx
 			const principal = await ctx.requirePermission('source:read')
-			const [row] = await sql<SourceRow[]>`
+			const row = await scopedTransaction(sql, principal.tenantId, (tx) =>
+				tx<SourceRow[]>`
         select * from sources where id = ${ctx.params.id}::uuid limit 1
-      `
+      `.then((rows) => rows[0]),
+			)
 			if (!row || row.tenant_id !== principal.tenantId) {
 				ctx.set.status = 404
 				return { error: 'not_found' }
@@ -302,24 +331,23 @@ function sourceRoutes(deps: AppDeps) {
 			const principal = await ctx.requirePermission('source:read')
 			// principal.scopes is pre-expanded to descendants, so this restricts
 			// the list exactly like the detail endpoint's scope check
-			return sql<SourceRow[]>`
-				select * from sources
-				where tenant_id = ${principal.tenantId}::uuid
-					and access_scope_id = any(${principal.scopes}::uuid[])
-				order by created_at desc limit 100
-			`
+			return scopedTransaction(
+				sql,
+				principal.tenantId,
+				(tx) =>
+					tx<SourceRow[]>`
+					select * from sources
+					where tenant_id = ${principal.tenantId}::uuid
+						and access_scope_id = any(${principal.scopes}::uuid[])
+					order by created_at desc limit 100
+				`,
+			)
 		})
 		.patch('/sources/:id/metadata', async (rawCtx) => {
 			const ctx = rawCtx as unknown as HandlerCtx
 			const principal = await ctx.requirePermission('source:update_metadata')
+			ctx.requireCsrf()
 			const body = (ctx.body ?? {}) as Record<string, unknown>
-			const [before] = await sql<SourceRow[]>`
-        select * from sources where id = ${ctx.params.id}::uuid limit 1
-      `
-			if (!before || before.tenant_id !== principal.tenantId) {
-				ctx.set.status = 404
-				return { error: 'not_found' }
-			}
 			const patch = {
 				title: typeof body.title === 'string' && body.title ? body.title : null,
 				author:
@@ -348,17 +376,33 @@ function sourceRoutes(deps: AppDeps) {
 					fields: ['title|author|language|edition|publisher|rightsStatus'],
 				}
 			}
-			const [after] = await sql<SourceRow[]>`
-        update sources set
-          title = coalesce(${patch.title}, title),
-          author = coalesce(${patch.author}, author),
-          language = coalesce(${patch.language}, language),
-          edition = coalesce(${patch.edition}, edition),
-          publisher = coalesce(${patch.publisher}, publisher),
-          rights_status = coalesce(${patch.rights_status}, rights_status)
-        where id = ${ctx.params.id}::uuid
-        returning *
-      `
+			// read-before-write inside one tenant-scoped transaction
+			const [before, after] = await scopedTransaction(
+				sql,
+				principal.tenantId,
+				async (tx) => {
+					const [b] = await tx<SourceRow[]>`
+					select * from sources where id = ${ctx.params.id}::uuid limit 1
+				`
+					if (!b || b.tenant_id !== principal.tenantId) return [b, undefined]
+					const [a] = await tx<SourceRow[]>`
+					update sources set
+						title = coalesce(${patch.title}, title),
+						author = coalesce(${patch.author}, author),
+						language = coalesce(${patch.language}, language),
+						edition = coalesce(${patch.edition}, edition),
+						publisher = coalesce(${patch.publisher}, publisher),
+						rights_status = coalesce(${patch.rights_status}, rights_status)
+					where id = ${ctx.params.id}::uuid
+					returning *
+				`
+					return [b, a]
+				},
+			)
+			if (!before || before.tenant_id !== principal.tenantId) {
+				ctx.set.status = 404
+				return { error: 'not_found' }
+			}
 			if (!after) throw new HttpError(500, 'update_failed')
 			await recordAudit({
 				tenantId: principal.tenantId,

@@ -1,6 +1,10 @@
 /**
  * DB-backed integration tests. Require DATABASE_URL (default local dev DB
  * on :5434, CI service container on :5432). Skipped when the DB is absent.
+ *
+ * FORCE ROW LEVEL SECURITY notes (migration 0020): direct owner queries on
+ * RLS tables (sources, knowledge_concepts, ...) must run inside
+ * scopedTransaction with app.tenant_id set — unset GUC fails closed.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { join } from 'node:path'
@@ -10,9 +14,16 @@ import postgres from 'postgres'
 import { applyMigrations } from '../../../scripts/migrate'
 import { buildApp } from '../src/app'
 import { checkAccess, loadPrincipal } from '../src/auth/policy'
-import { signSession } from '../src/auth/session'
+import { CSRF_COOKIE, newCsrfToken, signSession } from '../src/auth/session'
+import {
+	consumeLoginState,
+	createLoginState,
+	isSessionRevoked,
+	issueSession,
+	revokeSession,
+} from '../src/auth/sessionStore'
 import { type Config, loadConfig } from '../src/config'
-import type { Sql } from '../src/db/client'
+import { type Sql, scopedTransaction } from '../src/db/client'
 import { createLogger } from '../src/logger'
 
 const DB_URL =
@@ -26,10 +37,15 @@ const MIGRATIONS_DIR = join(
 	'migrations',
 )
 
+// owner client: superuser bootstrap role for migrations + fixture setup
 const sql = postgres(DB_URL, { max: 5 })
+// dedicated non-superuser app role (created by migration 0020): the API
+// path runs through this client so RLS genuinely applies
+const APP_URL = DB_URL.replace(/:\/\/[^@]+@/, '://aifiqh_app:aifiqh_app@')
+const appSql = postgres(APP_URL, { max: 5 })
 const silentLog = createLogger('error', {}, () => {})
 const cfg: Config = loadConfig({
-	DATABASE_URL: DB_URL,
+	DATABASE_URL: APP_URL,
 	SESSION_SECRET: 'test-session-secret',
 	STORAGE_ENDPOINT: 'http://localhost:9999',
 } as unknown as NodeJS.ProcessEnv)
@@ -91,10 +107,30 @@ async function makeUser(
 	return { userId: user.id, tenantId, membershipId: membership.id }
 }
 
-function sessionCookieFor(userId: string, tenantId: string): string {
+interface AuthHeaders {
+	cookie: string
+	'x-csrf-token'?: string
+	[key: string]: string | undefined
+}
+
+/** Issue a real (DB-registered) session + CSRF pair for a fixture user. */
+async function authFor(
+	userId: string,
+	tenantId: string,
+	withCsrf = false,
+): Promise<AuthHeaders> {
+	const sessionId = crypto.randomUUID()
+	await issueSession(sql, {
+		sessionId,
+		userId,
+		tenantId,
+		issuer: cfg.oidcIssuer,
+		subject: 'integration-test',
+		expiresAt: new Date(Date.now() + 600_000),
+	})
 	const token = signSession(
 		{
-			sessionId: crypto.randomUUID(),
+			sessionId,
 			userId,
 			issuer: cfg.oidcIssuer,
 			subject: 'integration-test',
@@ -103,7 +139,10 @@ function sessionCookieFor(userId: string, tenantId: string): string {
 		},
 		cfg.sessionSecret,
 	)
-	return `${SESSION_COOKIE}=${token}`
+	const cookie = `${SESSION_COOKIE}=${token}`
+	if (!withCsrf) return { cookie }
+	const csrf = newCsrfToken()
+	return { cookie: `${cookie}; ${CSRF_COOKIE}=${csrf}`, 'x-csrf-token': csrf }
 }
 
 /** Assert a DB statement rejects with a message fragment (postgres.js-safe). */
@@ -231,7 +270,7 @@ beforeAll(async () => {
 	app = buildApp({
 		cfg,
 		log: silentLog,
-		sql: sql as unknown as Sql,
+		sql: appSql as unknown as Sql,
 		oidc: fakeOidc,
 		probes: { storage: async () => true },
 	})
@@ -239,6 +278,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
 	await sql.end({ timeout: 1 })
+	await appSql.end({ timeout: 1 })
 })
 
 describe('principal resolution and scope hierarchy (SEC-002)', () => {
@@ -265,7 +305,7 @@ describe('principal resolution and scope hierarchy (SEC-002)', () => {
 	})
 })
 
-describe('source registry API (SRC-001 slice, RBAC + audit)', () => {
+describe('source registry API (SRC-001 slice, RBAC + audit + CSRF)', () => {
 	let sourceId = ''
 
 	test('401 without session', async () => {
@@ -275,12 +315,25 @@ describe('source registry API (SRC-001 slice, RBAC + audit)', () => {
 		expect(res.status).toBe(401)
 	})
 
-	test('editor creates a source; required-field validation rejects gaps', async () => {
-		const cookie = sessionCookieFor(ids.editorA, ids.tenantA)
-		const bad = await app.handle(
+	test('write without CSRF token is rejected (403 CSRF_TOKEN_INVALID)', async () => {
+		const { cookie } = await authFor(ids.editorA, ids.tenantA)
+		const res = await app.handle(
 			new Request('http://localhost/sources', {
 				method: 'POST',
 				headers: { cookie, 'content-type': 'application/json' },
+				body: JSON.stringify({}),
+			}),
+		)
+		expect(res.status).toBe(403)
+		expect((await res.json()).reasonCode).toBe('CSRF_TOKEN_INVALID')
+	})
+
+	test('editor creates a source; required-field validation rejects gaps', async () => {
+		const editor = await authFor(ids.editorA, ids.tenantA, true)
+		const bad = await app.handle(
+			new Request('http://localhost/sources', {
+				method: 'POST',
+				headers: { ...editor, 'content-type': 'application/json' },
 				body: JSON.stringify({ title: 'Only title' }),
 			}),
 		)
@@ -291,7 +344,7 @@ describe('source registry API (SRC-001 slice, RBAC + audit)', () => {
 		const res = await app.handle(
 			new Request('http://localhost/sources', {
 				method: 'POST',
-				headers: { cookie, 'content-type': 'application/json' },
+				headers: { ...editor, 'content-type': 'application/json' },
 				body: JSON.stringify({
 					title: 'Fiqh Munakahat',
 					author: 'Wahbah az-Zuhaili',
@@ -313,7 +366,7 @@ describe('source registry API (SRC-001 slice, RBAC + audit)', () => {
 		const patch = await app.handle(
 			new Request(`http://localhost/sources/${sourceId}/metadata`, {
 				method: 'PATCH',
-				headers: { cookie, 'content-type': 'application/json' },
+				headers: { ...editor, 'content-type': 'application/json' },
 				body: JSON.stringify({ edition: '5th', reason: 'new print' }),
 			}),
 		)
@@ -329,11 +382,11 @@ describe('source registry API (SRC-001 slice, RBAC + audit)', () => {
 	})
 
 	test('reader can read but not create; reason code explains denial', async () => {
-		const cookie = sessionCookieFor(ids.readerA, ids.tenantA)
+		const reader = await authFor(ids.readerA, ids.tenantA, true)
 		const denied = await app.handle(
 			new Request('http://localhost/sources', {
 				method: 'POST',
-				headers: { cookie, 'content-type': 'application/json' },
+				headers: { ...reader, 'content-type': 'application/json' },
 				body: JSON.stringify({}),
 			}),
 		)
@@ -342,24 +395,27 @@ describe('source registry API (SRC-001 slice, RBAC + audit)', () => {
 			'PERMISSION_DENIED:source:create',
 		)
 
+		const readerRead = await authFor(ids.readerA, ids.tenantA)
 		const ok = await app.handle(
 			new Request(`http://localhost/sources/${sourceId}`, {
-				headers: { cookie },
+				headers: { cookie: readerRead.cookie },
 			}),
 		)
 		expect(ok.status).toBe(200)
 	})
 
 	test('cross-tenant reads are isolated (404, never leak rows)', async () => {
-		const cookieB = sessionCookieFor(ids.adminB, ids.tenantB)
+		const adminB = await authFor(ids.adminB, ids.tenantB)
 		const res = await app.handle(
 			new Request(`http://localhost/sources/${sourceId}`, {
-				headers: { cookie: cookieB },
+				headers: { cookie: adminB.cookie },
 			}),
 		)
 		expect(res.status).toBe(404)
 		const list = await app.handle(
-			new Request('http://localhost/sources', { headers: { cookie: cookieB } }),
+			new Request('http://localhost/sources', {
+				headers: { cookie: adminB.cookie },
+			}),
 		)
 		expect(await list.json()).toEqual([])
 	})
@@ -371,23 +427,25 @@ describe('source registry API (SRC-001 slice, RBAC + audit)', () => {
 			'reader',
 			[ids.scopeExternalA],
 		)
-		const cookie = sessionCookieFor(externalReader.userId, ids.tenantA)
+		const external = await authFor(externalReader.userId, ids.tenantA)
 		const list = await app.handle(
-			new Request('http://localhost/sources', { headers: { cookie } }),
+			new Request('http://localhost/sources', {
+				headers: { cookie: external.cookie },
+			}),
 		)
 		expect(list.status).toBe(200)
 		expect(await list.json()).toEqual([])
 	})
 
 	test('create rejects an access scope from another tenant', async () => {
-		const cookie = sessionCookieFor(ids.editorA, ids.tenantA)
+		const editor = await authFor(ids.editorA, ids.tenantA, true)
 		const [rootB] = await sql<
 			{ id: string }[]
 		>`select id from access_scopes where tenant_id = ${ids.tenantB} and key = 'root'`
 		const res = await app.handle(
 			new Request('http://localhost/sources', {
 				method: 'POST',
-				headers: { cookie, 'content-type': 'application/json' },
+				headers: { ...editor, 'content-type': 'application/json' },
 				body: JSON.stringify({
 					title: 'Scope injection attempt',
 					author: 'x',
@@ -418,18 +476,18 @@ describe('source registry API (SRC-001 slice, RBAC + audit)', () => {
 	})
 
 	test('scope denial is explicit for a scopeless principal', async () => {
-		// adminB has no grants in tenant A, but tenant isolation already 404s;
-		// verify SCOPE_DENIED with a reader whose grant is on external only.
+		// a reader whose grant is on external only: row visible (same tenant)
+		// but the scope check denies it
 		const externalReader = await makeUser(
 			`ext-${suffix}@test`,
 			ids.tenantA,
 			'reader',
 			[ids.scopeExternalA],
 		)
-		const cookie = sessionCookieFor(externalReader.userId, ids.tenantA)
+		const external = await authFor(externalReader.userId, ids.tenantA)
 		const res = await app.handle(
 			new Request(`http://localhost/sources/${sourceId}`, {
-				headers: { cookie },
+				headers: { cookie: external.cookie },
 			}),
 		)
 		expect(res.status).toBe(403)
@@ -453,10 +511,16 @@ describe('audit immutability (AUD-001 / DB-003)', () => {
 	})
 
 	test('source_files rows are immutable (DB-005)', async () => {
-		const [src] = await sql<{ id: string }[]>`select id from sources limit 1`
+		// sources is RLS-FORCEd: owner reads need the tenant GUC (fail closed)
+		const src = await scopedTransaction(sql, ids.tenantA, (tx) =>
+			tx<{ id: string }[]>`select id from sources limit 1`.then(
+				(rows) => rows[0],
+			),
+		)
+		expect(src).toBeDefined()
 		const [rev] = await sql<{ id: string }[]>`
       insert into source_revisions (source_id, revision_number, status)
-      values (${src.id}, floor(random()*100000)::int, 'active') returning id`
+      values (${src?.id}, floor(random()*100000)::int, 'active') returning id`
 		const sha = crypto.randomUUID().replaceAll('-', '').repeat(4).slice(0, 64)
 		const [file] = await sql<{ id: string }[]>`
       insert into source_files (source_revision_id, sha256, storage_key, mime_type, size_bytes)
@@ -470,13 +534,16 @@ describe('audit immutability (AUD-001 / DB-003)', () => {
 
 describe('knowledge revision immutability (DB-009)', () => {
 	test('submitted revisions reject edits; published->superseded allowed', async () => {
-		const [concept] = await sql<{ id: string }[]>`
-      insert into knowledge_concepts (tenant_id, type_key, access_scope_id, created_by)
-      values (${ids.tenantA}, 'definition', ${ids.scopeRootA}, ${ids.editorA}) returning id`
+		const concept = await scopedTransaction(sql, ids.tenantA, (tx) =>
+			tx<{ id: string }[]>`
+				insert into knowledge_concepts (tenant_id, type_key, access_scope_id, created_by)
+				values (${ids.tenantA}, 'definition', ${ids.scopeRootA}, ${ids.editorA})
+				returning id`.then((rows) => rows[0]),
+		)
 		const [rev] = await sql<{ id: string }[]>`
       insert into knowledge_concept_revisions
         (concept_id, revision_number, title, body_markdown, content_hash, created_by)
-      values (${concept.id}, 1, 'Niat puasa', 'Niat puasa Ramadan...', 'hash-1', ${ids.editorA})
+      values (${concept!.id}, 1, 'Niat puasa', 'Niat puasa Ramadan...', 'hash-1', ${ids.editorA})
       returning id`
 
 		// drafts are editable
@@ -500,17 +567,32 @@ describe('knowledge revision immutability (DB-009)', () => {
 	})
 
 	test('concept pointers must reference correct statuses', async () => {
-		const [concept] = await sql<{ id: string }[]>`
-      insert into knowledge_concepts (tenant_id, type_key, access_scope_id, created_by)
-      values (${ids.tenantA}, 'rule', ${ids.scopeRootA}, ${ids.editorA}) returning id`
+		const concept = await scopedTransaction(sql, ids.tenantA, (tx) =>
+			tx<{ id: string }[]>`
+				insert into knowledge_concepts (tenant_id, type_key, access_scope_id, created_by)
+				values (${ids.tenantA}, 'rule', ${ids.scopeRootA}, ${ids.editorA})
+				returning id`.then((rows) => rows[0]),
+		)
 		const [rev] = await sql<{ id: string }[]>`
       insert into knowledge_concept_revisions
         (concept_id, revision_number, title, body_markdown, content_hash, created_by)
-      values (${concept.id}, 1, 'Rule A', 'body', 'hash-2', ${ids.editorA}) returning id`
+      values (${concept!.id}, 1, 'Rule A', 'body', 'hash-2', ${ids.editorA}) returning id`
 		// draft pointer to a draft is fine; published pointer to a draft is not
-		await sql`update knowledge_concepts set current_draft_revision_id = ${rev.id} where id = ${concept.id}`
+		await scopedTransaction(
+			sql,
+			ids.tenantA,
+			(tx) =>
+				tx`update knowledge_concepts set current_draft_revision_id = ${rev.id} where id = ${concept!.id}`,
+		)
+		// pointer updates run inside the tenant scope so the trigger (not RLS)
+		// produces the expected rejection
 		await expectReject(
-			sql`update knowledge_concepts set current_published_revision_id = ${rev.id} where id = ${concept.id}`,
+			scopedTransaction(
+				sql,
+				ids.tenantA,
+				(tx) =>
+					tx`update knowledge_concepts set current_published_revision_id = ${rev.id} where id = ${concept!.id}`,
+			),
 			'published revision',
 		)
 	})
@@ -518,18 +600,21 @@ describe('knowledge revision immutability (DB-009)', () => {
 
 describe('changeset workflow guard rails (REV-001 slice / DB-011)', () => {
 	test('invalid state transitions rejected; unauthorized approvals rejected', async () => {
-		const [concept] = await sql<{ id: string }[]>`
-      insert into knowledge_concepts (tenant_id, type_key, access_scope_id, created_by)
-      values (${ids.tenantA}, 'definition', ${ids.scopeRootA}, ${ids.editorA}) returning id`
+		const concept = await scopedTransaction(sql, ids.tenantA, (tx) =>
+			tx<{ id: string }[]>`
+				insert into knowledge_concepts (tenant_id, type_key, access_scope_id, created_by)
+				values (${ids.tenantA}, 'definition', ${ids.scopeRootA}, ${ids.editorA})
+				returning id`.then((rows) => rows[0]),
+		)
 		const [rev] = await sql<{ id: string }[]>`
       insert into knowledge_concept_revisions
         (concept_id, revision_number, title, body_markdown, content_hash, created_by)
-      values (${concept.id}, 1, 'C1', 'b', 'hash-3', ${ids.editorA}) returning id`
+      values (${concept!.id}, 1, 'C1', 'b', 'hash-3', ${ids.editorA}) returning id`
 		const [cs] = await sql<{ id: string }[]>`
       insert into knowledge_changesets (tenant_id, title, created_by)
       values (${ids.tenantA}, 'Changeset 1', ${ids.editorA}) returning id`
 		await sql`insert into changeset_items (changeset_id, concept_id, proposed_revision_id)
-      values (${cs.id}, ${concept.id}, ${rev.id})`
+      values (${cs.id}, ${concept!.id}, ${rev.id})`
 
 		// draft -> approved is invalid
 		await expectReject(
@@ -557,7 +642,35 @@ describe('changeset workflow guard rails (REV-001 slice / DB-011)', () => {
 	})
 })
 
-describe('tenant RLS defense in depth (DB-019)', () => {
+describe('tenant RLS defense in depth (DB-019 + 0020 FORCE)', () => {
+	test('app role without app.tenant_id sees nothing (fail closed)', async () => {
+		const rows = await appSql<
+			{ n: string }[]
+		>`select count(*) as n from sources`
+		expect(Number(rows[0].n)).toBe(0)
+		// pooled connections stay clean after scoped transactions (RESET)
+		const again = await appSql<
+			{ n: string }[]
+		>`select count(*) as n from sources`
+		expect(Number(again[0].n)).toBe(0)
+	})
+
+	test('app role with the GUC set sees exactly its tenant', async () => {
+		const titles = await scopedTransaction(
+			appSql,
+			ids.tenantA,
+			(tx) => tx<{ title: string }[]>`select title from sources`,
+		)
+		expect(titles.map((r) => r.title)).toContain('Fiqh Munakahat')
+		// another tenant's rows are invisible to this role
+		const other = await scopedTransaction(
+			appSql,
+			ids.tenantB,
+			(tx) => tx<{ n: string }[]>`select count(*) as n from sources`,
+		)
+		expect(Number(other[0].n)).toBe(0)
+	})
+
 	test('non-owner role sees only the configured tenant', async () => {
 		await sql.unsafe(`do $$ begin
       if not exists (select from pg_roles where rolname = 'app_rls_test') then
@@ -567,16 +680,24 @@ describe('tenant RLS defense in depth (DB-019)', () => {
 		await sql`grant usage on schema public to app_rls_test`
 		await sql`grant select on sources to app_rls_test`
 
-		// two sources in different tenants
-		const [srcA] = await sql<{ id: string }[]>`
-      insert into sources (tenant_id, title, author, source_type, language, rights_status, access_scope_id)
-      values (${ids.tenantA}, 'A-book', 'x', 'book', 'id', 'licensed', ${ids.scopeRootA}) returning id`
+		// owner inserts need the tenant GUC under FORCE RLS
+		await scopedTransaction(
+			sql,
+			ids.tenantA,
+			(tx) =>
+				tx`insert into sources (tenant_id, title, author, source_type, language, rights_status, access_scope_id)
+				values (${ids.tenantA}, 'A-book', 'x', 'book', 'id', 'licensed', ${ids.scopeRootA})`,
+		)
 		const [rootB] = await sql<
 			{ id: string }[]
 		>`select id from access_scopes where tenant_id = ${ids.tenantB} and key = 'root'`
-		await sql`
-      insert into sources (tenant_id, title, author, source_type, language, rights_status, access_scope_id)
-      values (${ids.tenantB}, 'B-book', 'x', 'book', 'id', 'licensed', ${rootB.id})`
+		await scopedTransaction(
+			sql,
+			ids.tenantB,
+			(tx) =>
+				tx`insert into sources (tenant_id, title, author, source_type, language, rights_status, access_scope_id)
+				values (${ids.tenantB}, 'B-book', 'x', 'book', 'id', 'licensed', ${rootB.id})`,
+		)
 
 		const seen: string[] = []
 		await sql.begin(async (tx) => {
@@ -591,6 +712,32 @@ describe('tenant RLS defense in depth (DB-019)', () => {
 		})
 		expect(seen).toContain('A-book')
 		expect(seen).not.toContain('B-book')
-		void srcA
+	})
+})
+
+describe('durable auth state (sessionStore / 0020)', () => {
+	test('issued session is not revoked; revocation sticks; unknown fails closed', async () => {
+		const sessionId = crypto.randomUUID()
+		await issueSession(sql, {
+			sessionId,
+			userId: ids.readerA,
+			tenantId: ids.tenantA,
+			issuer: cfg.oidcIssuer,
+			subject: 'store-test',
+			expiresAt: new Date(Date.now() + 60_000),
+		})
+		expect(await isSessionRevoked(sql, sessionId)).toBeFalse()
+		await revokeSession(sql, sessionId)
+		expect(await isSessionRevoked(sql, sessionId)).toBeTrue()
+		// unknown ids fail closed
+		expect(await isSessionRevoked(sql, crypto.randomUUID())).toBeTrue()
+	})
+
+	test('login states are single-use', async () => {
+		const state = crypto.randomUUID()
+		await createLoginState(sql, state, 'nonce-1')
+		expect(await consumeLoginState(sql, state)).toBe('nonce-1')
+		// replay returns nothing
+		expect(await consumeLoginState(sql, state)).toBeNull()
 	})
 })

@@ -3,8 +3,8 @@
 Private repository for **RZ-Fiqh**, a citation-first Islamic jurisprudence (fiqh) assistant and knowledge operations platform: PostgreSQL-canonical curated knowledge, hybrid retrieval (exact + lexical + vector + relationships), adaptive context, model-agnostic generation, deterministic citation validation, and evaluation-driven release gates.
 
 - **North-star metric:** Verified Answer Completion Rate (VACR)
-- **Plan:** 45/45 Must requirements covered · 13 epics · 86 sprint-ready tickets · 19 ordered migrations · 610 story points
-- **Status:** EP-00 (Platform Foundations) implemented and verified; all 19 database migrations applied; tracked on [GitHub issues](https://github.com/ther12k/aifiqh/issues)
+- **Plan:** 45/45 Must requirements covered · 13 epics · 86 sprint-ready tickets · 19 ordered migrations + 1 hardening migration · 610 story points
+- **Status:** EP-00 (Platform Foundations) implemented and verified; all 20 database migrations applied; tracked on [GitHub issues](https://github.com/ther12k/aifiqh/issues)
 
 ## Repository layout
 
@@ -35,7 +35,9 @@ Private repository for **RZ-Fiqh**, a citation-first Islamic jurisprudence (fiqh
 | AUD-001 | Append-only audit events (actor/tenant/action/entity/before-after/reason/trace_id), DB trigger rejects UPDATE/DELETE | `apps/api/src/audit/audit.ts`, migration 0003 |
 | OBS-001 | Correlation IDs on every request (`x-trace-id`), structured JSON logs with redaction, component health contract (liveness/readiness/degraded) | `apps/api/src/observability/`, `logger.ts`, health routes |
 
-Plus migrations **DB-001..DB-019** (identity, RBAC, audit, source registry, revisions, ingestion jobs, pages/sections/spans, OCR, knowledge concepts/revisions, provenance/links, changesets/releases/aliases, index configs, retrieval units + pgvector/trigram projections, conversations, traces/context, model/prompt/flag config, answers/claims/citations, evaluation + gates, ops health + tenant RLS + dashboard views).
+**Security hardening (migration 0020, beyond the backlog):** tenant RLS is `FORCE`d and the API connects as a dedicated non-superuser role (`aifiqh_app` — superusers bypass RLS by design), so unset/foreign tenant context sees zero rows (fail closed); all tenant-scoped access runs through `scopedTransaction`, which sets `app.tenant_id` per transaction (policies normalize `''` → NULL because Postgres never returns NULL for a once-set GUC); login states and session revocations live in PostgreSQL (survive restarts, multi-instance safe); state-changing routes enforce CSRF double-submit (`x-csrf-token` header vs `aifiqh_csrf` cookie).
+
+Plus migrations **DB-001..DB-019 + DB-020** (identity, RBAC, audit, source registry, revisions, ingestion jobs, pages/sections/spans, OCR, knowledge concepts/revisions, provenance/links, changesets/releases/aliases, index configs, retrieval units + pgvector/trigram projections, conversations, traces/context, model/prompt/flag config, answers/claims/citations, evaluation + gates, ops health + tenant RLS + dashboard views).
 
 ## Verification
 

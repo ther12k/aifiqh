@@ -1,22 +1,34 @@
 /**
  * Auth + session routes: /auth/login, /auth/callback, /auth/logout, /auth/me.
  * Handlers return standard Response objects so redirects and cookies are
- * framework-independent.
+ * framework-independent. Login states and revocations live in PostgreSQL
+ * (auth/sessionStore) so they survive restarts and work across instances.
  */
 import { Elysia } from 'elysia'
 import type { Config } from '../config'
-import { db } from '../db/client'
+import { type Sql, db } from '../db/client'
 import type { Logger } from '../logger'
-import { type OidcClient, revokeSession, upsertIdentity } from './oidc'
+import { type OidcClient, upsertIdentity } from './oidc'
 import {
+	clearCsrfCookieHeader,
 	clearSessionCookieHeader,
+	csrfCookieHeader,
+	newCsrfToken,
 	parseCookies,
 	sessionCookieHeader,
 	signSession,
+	verifyCsrf,
 	verifySession,
 } from './session'
+import {
+	consumeLoginState,
+	createLoginState,
+	isSessionRevoked,
+	issueSession,
+	revokeSession,
+} from './sessionStore'
 
-const sql = db()
+const sql: Sql = db()
 
 export interface AuthDeps {
 	cfg: Config
@@ -24,28 +36,15 @@ export interface AuthDeps {
 	oidc: OidcClient
 }
 
-interface PendingState {
-	state: string
-	nonce: string
-	createdAt: number
-}
-
-/** In-memory OIDC state store (single instance MVP). */
-const pendingStates = new Map<string, PendingState>()
-
 export function authPlugin(deps: AuthDeps) {
 	const { cfg, log, oidc } = deps
 
 	return new Elysia({ name: 'auth' })
 		.get('/auth/login', async ({ set }) => {
 			const ep = await oidc.discovery()
-			// prune abandoned login attempts so the state store cannot grow unbounded
-			const cutoff = Date.now() - 600_000
-			for (const [k, v] of pendingStates)
-				if (v.createdAt < cutoff) pendingStates.delete(k)
 			const state = crypto.randomUUID()
 			const nonce = crypto.randomUUID()
-			pendingStates.set(state, { state, nonce, createdAt: Date.now() })
+			await createLoginState(sql, state, nonce)
 			const url = new URL(ep.authorization_endpoint)
 			url.searchParams.set('response_type', 'code')
 			url.searchParams.set('client_id', oidc.clientId)
@@ -60,9 +59,11 @@ export function authPlugin(deps: AuthDeps) {
 			const query = Object.fromEntries(
 				new URL(request.url).searchParams.entries(),
 			) as Record<string, string>
-			const state = pendingStates.get(query.state)
-			pendingStates.delete(query.state)
-			if (!state || Date.now() - state.createdAt > 600_000) {
+			// single-use consume: replayed or expired states return nothing
+			const nonce = query.state
+				? await consumeLoginState(sql, query.state)
+				: null
+			if (!nonce) {
 				set.status = 400
 				return 'invalid state'
 			}
@@ -84,8 +85,7 @@ export function authPlugin(deps: AuthDeps) {
 				if (!tokens.id_token) throw new Error('no id_token')
 				const claims = await oidc.verifyIdToken(tokens.id_token)
 				// we always send a nonce; a missing or mismatched claim is a replay
-				if (claims.nonce !== state.nonce)
-					throw new Error('nonce missing or mismatch')
+				if (claims.nonce !== nonce) throw new Error('nonce missing or mismatch')
 				const user = await upsertIdentity(
 					cfg.oidcIssuer,
 					claims.sub,
@@ -98,21 +98,25 @@ export function authPlugin(deps: AuthDeps) {
 					where user_id = ${user.id}::uuid and status = 'active' limit 1
 				`
 				const now = Math.floor(Date.now() / 1000)
+				const expiresAt = new Date((now + cfg.sessionTtlSeconds) * 1000)
 				const session = {
 					sessionId: crypto.randomUUID(),
 					userId: user.id,
 					issuer: cfg.oidcIssuer,
 					subject: claims.sub,
-					expiresAt: new Date(
-						(now + cfg.sessionTtlSeconds) * 1000,
-					).toISOString(),
+					expiresAt: expiresAt.toISOString(),
 					tenantId: firstTenant?.tenant_id ?? '',
 				}
-				set.headers['set-cookie'] = sessionCookieHeader(
-					signSession(session, cfg.sessionSecret),
-					cfg.sessionTtlSeconds,
-					cfg.env === 'production',
-				)
+				await issueSession(sql, { ...session, expiresAt })
+				const secure = cfg.env === 'production'
+				set.headers['set-cookie'] = [
+					sessionCookieHeader(
+						signSession(session, cfg.sessionSecret),
+						cfg.sessionTtlSeconds,
+						secure,
+					),
+					csrfCookieHeader(newCsrfToken(), cfg.sessionTtlSeconds, secure),
+				]
 				set.headers.location = '/'
 				set.status = 302
 				log.info('login succeeded', { userId: user.id })
@@ -125,16 +129,29 @@ export function authPlugin(deps: AuthDeps) {
 			}
 		})
 		.post('/auth/logout', ({ request, set }) => {
-			const token = parseCookies(request.headers.get('cookie')).aifiqh_session
-			const session = verifySession(token, cfg.sessionSecret)
-			if (session) revokeSession(session.sessionId, cfg.sessionTtlSeconds)
-			set.headers['set-cookie'] = clearSessionCookieHeader()
+			const cookies = parseCookies(request.headers.get('cookie'))
+			const session = verifySession(cookies.aifiqh_session, cfg.sessionSecret)
+			// a valid session may only be cleared with the matching CSRF token
+			if (
+				session &&
+				!verifyCsrf(request.headers.get('x-csrf-token'), cookies.aifiqh_csrf)
+			) {
+				set.status = 403
+				return { error: 'forbidden', reasonCode: 'CSRF_TOKEN_INVALID' }
+			}
+			if (session) revokeSession(sql, session.sessionId)
+			set.headers['set-cookie'] = [
+				clearSessionCookieHeader(),
+				clearCsrfCookieHeader(),
+			]
 			set.status = 204
 		})
-		.get('/auth/me', ({ request, set }) => {
-			const token = parseCookies(request.headers.get('cookie')).aifiqh_session
-			const session = verifySession(token, cfg.sessionSecret)
-			if (!session) {
+		.get('/auth/me', async ({ request, set }) => {
+			const session = verifySession(
+				parseCookies(request.headers.get('cookie')).aifiqh_session,
+				cfg.sessionSecret,
+			)
+			if (!session || (await isSessionRevoked(sql, session.sessionId))) {
 				set.status = 401
 				return { error: 'unauthorized' }
 			}

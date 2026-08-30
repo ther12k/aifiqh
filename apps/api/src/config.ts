@@ -37,7 +37,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		port: Number(optional('PORT', '3000')),
 		databaseUrl: optional(
 			'DATABASE_URL',
-			'postgres://aifiqh:aifiqh@localhost:5434/aifiqh',
+			// dedicated non-superuser app role (migration 0020): RLS actually
+			// applies to it, unlike the bootstrap superuser
+			'postgres://aifiqh_app:aifiqh_app@localhost:5434/aifiqh',
 		),
 		storageEndpoint: optional('STORAGE_ENDPOINT', 'http://localhost:9000'),
 		storageBucket: optional('STORAGE_BUCKET', 'aifiqh-originals'),

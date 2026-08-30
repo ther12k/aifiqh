@@ -19,14 +19,28 @@ export function db(): Sql {
 	return client
 }
 
-/** Run a scoped transaction; sets app.tenant_id for row-level security. */
+/** Run a scoped transaction on the shared pool; sets app.tenant_id. */
 export async function withTenant<T>(
 	tenantId: string,
 	fn: (sql: postgres.Sql) => Promise<T>,
 ): Promise<T> {
-	return db().begin(async (sql): Promise<T> => {
-		await sql`select set_config('app.tenant_id', ${tenantId}, true)`
-		return fn(sql as unknown as Sql)
+	return scopedTransaction(db(), tenantId, fn)
+}
+
+/**
+ * Run fn inside a transaction with app.tenant_id set so FORCE ROW LEVEL
+ * SECURITY policies apply. Without the GUC every query on RLS tables
+ * fails closed (zero rows), so all tenant-scoped data access goes through
+ * this wrapper.
+ */
+export async function scopedTransaction<T>(
+	client: Sql,
+	tenantId: string,
+	fn: (sql: Sql) => Promise<T>,
+): Promise<T> {
+	return client.begin(async (tx): Promise<T> => {
+		await tx`select set_config('app.tenant_id', ${tenantId}, true)`
+		return fn(tx as unknown as Sql)
 	}) as Promise<T>
 }
 

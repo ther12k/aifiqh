@@ -71,21 +71,23 @@ create index idx_failures_trace on operation_failures(trace_id);
 -- migrations with a BYPASSRLS role.
 -- ---------------------------------------------------------------------------
 
+-- nullif treats '' like unset: after any set_config on a pooled session,
+-- current_setting never returns NULL again (it returns '')
 alter table sources enable row level security;
 create policy sources_tenant_isolation on sources
-  using (tenant_id = current_setting('app.tenant_id', true)::uuid);
+  using (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
 
 alter table knowledge_concepts enable row level security;
 create policy concepts_tenant_isolation on knowledge_concepts
-  using (tenant_id = current_setting('app.tenant_id', true)::uuid);
+  using (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
 
 alter table conversations enable row level security;
 create policy conversations_tenant_isolation on conversations
-  using (tenant_id = current_setting('app.tenant_id', true)::uuid);
+  using (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
 
 alter table retrieval_traces enable row level security;
 create policy traces_tenant_isolation on retrieval_traces
-  using (tenant_id = current_setting('app.tenant_id', true)::uuid);
+  using (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
 
 -- ---------------------------------------------------------------------------
 -- Dashboard read models (counts reconcile with drill-down queries).

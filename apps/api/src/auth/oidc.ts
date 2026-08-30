@@ -94,19 +94,5 @@ export async function upsertIdentity(
 	return rows[0]
 }
 
-/** Sessions: signed cookie + server-side revocation registry (in-memory). */
-const revoked = new Map<string, number>() // sessionId -> revokedAtEpoch
-
-export function revokeSession(sessionId: string, ttlSeconds: number): void {
-	revoked.set(sessionId, Date.now() + ttlSeconds * 1000)
-}
-
-export function isRevoked(sessionId: string): boolean {
-	const until = revoked.get(sessionId)
-	if (until === undefined) return false
-	if (Date.now() > until) {
-		revoked.delete(sessionId)
-		return false
-	}
-	return true
-}
+// Session revocation moved to the PostgreSQL-backed store (auth/sessionStore):
+// durable across restarts and correct for multiple API instances.
