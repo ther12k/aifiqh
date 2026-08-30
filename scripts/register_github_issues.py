@@ -158,13 +158,14 @@ def main() -> int:
         labels = [f"epic/{t['epic_id']}", f"type/{slug(t['type'])}",
                   f"priority/{t['priority'].lower()}", f"wave-{t['wave']}", "ticket"]
         ms = ms_of.get(t["epic_id"])
+        ms_title = f"{t['epic_id']} — {epics[t['epic_id']]['name']}" if ms else None
         with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:
             f.write(body_for(t))
             body = f.name
         args = ["issue", "create", "-R", repo, "--title", title, "--body-file", body,
                 "--label", ",".join(labels)]
         if ms:
-            args += ["--milestone", str(ms)]
+            args += ["--milestone", ms_title]
         out = gh(*args)
         m = re.search(r"/issues/(\d+)$", out or "")
         if m:
