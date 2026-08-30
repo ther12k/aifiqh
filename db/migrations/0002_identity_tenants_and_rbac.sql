@@ -42,8 +42,13 @@ create table roles (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid references tenants(id),
   key text not null,
-  name text not null,
-  unique (tenant_id, key)
+  name text not null
+);
+
+-- NULL-safe uniqueness: plain unique (tenant_id, key) would allow unlimited
+-- duplicate global templates because NULLs never collide.
+create unique index uq_roles_tenant_key on roles (
+  coalesce(tenant_id, '00000000-0000-0000-0000-000000000000'::uuid), key
 );
 
 create table permissions (

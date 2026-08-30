@@ -5,8 +5,8 @@
  */
 import { Elysia } from 'elysia'
 import type { Config } from '../config'
-import type { Logger } from '../logger'
 import { db } from '../db/client'
+import type { Logger } from '../logger'
 import { type OidcClient, revokeSession, upsertIdentity } from './oidc'
 import {
 	clearSessionCookieHeader,
@@ -39,6 +39,10 @@ export function authPlugin(deps: AuthDeps) {
 	return new Elysia({ name: 'auth' })
 		.get('/auth/login', async ({ set }) => {
 			const ep = await oidc.discovery()
+			// prune abandoned login attempts so the state store cannot grow unbounded
+			const cutoff = Date.now() - 600_000
+			for (const [k, v] of pendingStates)
+				if (v.createdAt < cutoff) pendingStates.delete(k)
 			const state = crypto.randomUUID()
 			const nonce = crypto.randomUUID()
 			pendingStates.set(state, { state, nonce, createdAt: Date.now() })
@@ -79,8 +83,9 @@ export function authPlugin(deps: AuthDeps) {
 				const tokens = (await tokenRes.json()) as { id_token?: string }
 				if (!tokens.id_token) throw new Error('no id_token')
 				const claims = await oidc.verifyIdToken(tokens.id_token)
-				if (claims.nonce && claims.nonce !== state.nonce)
-					throw new Error('nonce mismatch')
+				// we always send a nonce; a missing or mismatched claim is a replay
+				if (claims.nonce !== state.nonce)
+					throw new Error('nonce missing or mismatch')
 				const user = await upsertIdentity(
 					cfg.oidcIssuer,
 					claims.sub,
@@ -106,6 +111,7 @@ export function authPlugin(deps: AuthDeps) {
 				set.headers['set-cookie'] = sessionCookieHeader(
 					signSession(session, cfg.sessionSecret),
 					cfg.sessionTtlSeconds,
+					cfg.env === 'production',
 				)
 				set.headers.location = '/'
 				set.status = 302

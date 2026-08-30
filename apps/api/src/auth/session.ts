@@ -38,8 +38,16 @@ export function verifySession(
 	}
 }
 
-export function sessionCookieHeader(token: string, ttlSeconds: number): string {
-	return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${ttlSeconds}`
+export function sessionCookieHeader(
+	token: string,
+	ttlSeconds: number,
+	secure = false,
+): string {
+	return (
+		`${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax` +
+		(secure ? '; Secure' : '') +
+		`; Max-Age=${ttlSeconds}`
+	)
 }
 
 export function clearSessionCookieHeader(): string {

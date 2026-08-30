@@ -60,9 +60,15 @@ create index idx_failures_trace on operation_failures(trace_id);
 
 -- ---------------------------------------------------------------------------
 -- Tenant row-level security (defense in depth). The application sets
--- `set_config('app.tenant_id', ...)` per transaction. The superuser/owner
--- role used by migrations and tests bypasses RLS (normal Postgres behavior);
--- application roles are expected to be non-owner roles in production.
+-- `set_config('app.tenant_id', ...)` per transaction. Unset context fails
+-- closed (tenant_id = NULL filters every row).
+--
+-- POSTURE (security review): the table OWNER bypasses RLS unless FORCE ROW
+-- LEVEL SECURITY is set. In dev the app connects as the owner, so RLS here
+-- is defense in depth for NON-OWNER application roles (proven by the
+-- integration test running as app_rls_test). Before production: create a
+-- dedicated non-owner app role, or enable FORCE ROW LEVEL SECURITY and run
+-- migrations with a BYPASSRLS role.
 -- ---------------------------------------------------------------------------
 
 alter table sources enable row level security;
@@ -87,14 +93,19 @@ create policy traces_tenant_isolation on retrieval_traces
 
 create view dashboard_source_health_v as
 select
-  s.tenant_id,
-  count(*) filter (where sr.status = 'processing') as revisions_processing,
-  count(*) filter (where sr.status = 'active') as revisions_active,
-  count(*) filter (where sr.status = 'deprecated') as revisions_deprecated,
-  count(*) filter (where s.rights_status = 'unknown') as sources_unknown_rights
-from sources s
-left join source_revisions sr on sr.source_id = s.id
-group by s.tenant_id;
+  t.id as tenant_id,
+  (select count(*) from source_revisions sr
+    join sources s on s.id = sr.source_id
+    where s.tenant_id = t.id and sr.status = 'processing') as revisions_processing,
+  (select count(*) from source_revisions sr
+    join sources s on s.id = sr.source_id
+    where s.tenant_id = t.id and sr.status = 'active') as revisions_active,
+  (select count(*) from source_revisions sr
+    join sources s on s.id = sr.source_id
+    where s.tenant_id = t.id and sr.status = 'deprecated') as revisions_deprecated,
+  (select count(*) from sources s
+    where s.tenant_id = t.id and s.rights_status = 'unknown') as sources_unknown_rights
+from tenants t;
 
 create view dashboard_open_work_v as
 select

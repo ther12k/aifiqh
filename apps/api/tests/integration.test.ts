@@ -364,6 +364,59 @@ describe('source registry API (SRC-001 slice, RBAC + audit)', () => {
 		expect(await list.json()).toEqual([])
 	})
 
+	test('list is scope-filtered: external-only reader sees no root-scoped sources', async () => {
+		const externalReader = await makeUser(
+			`ext2-${suffix}@test`,
+			ids.tenantA,
+			'reader',
+			[ids.scopeExternalA],
+		)
+		const cookie = sessionCookieFor(externalReader.userId, ids.tenantA)
+		const list = await app.handle(
+			new Request('http://localhost/sources', { headers: { cookie } }),
+		)
+		expect(list.status).toBe(200)
+		expect(await list.json()).toEqual([])
+	})
+
+	test('create rejects an access scope from another tenant', async () => {
+		const cookie = sessionCookieFor(ids.editorA, ids.tenantA)
+		const [rootB] = await sql<
+			{ id: string }[]
+		>`select id from access_scopes where tenant_id = ${ids.tenantB} and key = 'root'`
+		const res = await app.handle(
+			new Request('http://localhost/sources', {
+				method: 'POST',
+				headers: { cookie, 'content-type': 'application/json' },
+				body: JSON.stringify({
+					title: 'Scope injection attempt',
+					author: 'x',
+					sourceType: 'book',
+					language: 'id',
+					rightsStatus: 'licensed',
+					accessScopeId: rootB.id,
+				}),
+			}),
+		)
+		expect(res.status).toBe(400)
+		expect((await res.json()).error).toBe('invalid_access_scope')
+	})
+
+	test('TRUNCATE on append-only tables is rejected (AUD-001 hardening)', async () => {
+		await expectReject(sql`truncate audit_events`, 'append-only')
+	})
+
+	test('global role templates stay unique across repeated seeding', async () => {
+		const before = await sql<
+			{ n: string }[]
+		>`select count(*) as n from roles where tenant_id is null and key = 'editor'`
+		await sql`insert into roles (tenant_id, key, name) values (null, 'editor', 'editor') on conflict do nothing`
+		const after = await sql<
+			{ n: string }[]
+		>`select count(*) as n from roles where tenant_id is null and key = 'editor'`
+		expect(after[0].n).toBe(before[0].n)
+	})
+
 	test('scope denial is explicit for a scopeless principal', async () => {
 		// adminB has no grants in tenant A, but tenant isolation already 404s;
 		// verify SCOPE_DENIED with a reader whose grant is on external only.

@@ -75,7 +75,7 @@ async function main() {
 		await sql`
       insert into roles (tenant_id, key, name)
       values (null, ${role}, ${role})
-      on conflict (tenant_id, key) do nothing
+      on conflict do nothing
     `
 		const globalRole = await sql<{ id: string }[]>`
       select id from roles where tenant_id is null and key = ${role}

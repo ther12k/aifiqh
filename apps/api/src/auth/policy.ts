@@ -29,10 +29,10 @@ export function checkPermission(
 		return { allowed: false, reasonCode: 'NO_ROLES' }
 	}
 	if (!hasPermission(principal, permission)) {
-		const roles = principal.roles.join(',')
+		// client-facing code omits the caller's roles; server logs keep full context
 		return {
 			allowed: false,
-			reasonCode: `PERMISSION_DENIED:${permission} (roles=${roles})`,
+			reasonCode: `PERMISSION_DENIED:${permission}`,
 		}
 	}
 	return { allowed: true, reasonCode: 'OK' }

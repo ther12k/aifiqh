@@ -50,6 +50,11 @@ create trigger audit_events_append_only
   before update or delete on audit_events
   for each row execute function reject_mutation();
 
+-- TRUNCATE is statement-level; block it separately.
+create trigger audit_events_no_truncate
+  before truncate on audit_events
+  for each statement execute function reject_mutation();
+
 create index idx_audit_tenant on audit_events(tenant_id, occurred_at desc);
 create index idx_audit_actor on audit_events(actor_type, actor_id, occurred_at desc);
 create index idx_audit_entity on audit_events(entity_type, entity_id, occurred_at desc);

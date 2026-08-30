@@ -128,6 +128,10 @@ create trigger gate_results_append_only
   before update or delete on gate_results
   for each row execute function reject_mutation();
 
+create trigger gate_results_no_truncate
+  before truncate on gate_results
+  for each statement execute function reject_mutation();
+
 -- Close the deferred FK from knowledge_releases.
 alter table knowledge_releases
   add constraint fk_releases_gate_result

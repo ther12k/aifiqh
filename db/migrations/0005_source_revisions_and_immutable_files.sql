@@ -30,6 +30,10 @@ create trigger source_files_immutable
   before update or delete on source_files
   for each row execute function reject_mutation();
 
+create trigger source_files_no_truncate
+  before truncate on source_files
+  for each statement execute function reject_mutation();
+
 create table source_revision_status_events (
   id uuid primary key default gen_random_uuid(),
   source_revision_id uuid not null references source_revisions(id),

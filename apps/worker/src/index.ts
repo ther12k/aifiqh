@@ -5,6 +5,7 @@
 import postgres from 'postgres'
 import { config } from '../../api/src/config'
 import { createLogger } from '../../api/src/logger'
+import { getTracer, recordSpan } from '../../api/src/observability/otel'
 import { withSpan } from '../../api/src/observability/trace'
 
 const cfg = config()

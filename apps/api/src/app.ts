@@ -13,6 +13,7 @@ import type { Config } from './config'
 import type { Sql } from './db/client'
 import { dbOk } from './db/client'
 import type { Logger } from './logger'
+import { getTracer, recordSpan } from './observability/otel'
 import { newTraceId } from './observability/trace'
 
 export interface AppDeps {
@@ -38,25 +39,49 @@ export class HttpError extends Error {
 
 interface RequestStore {
 	traceId: string
+	startedAt?: number
 }
 
 export function buildApp(deps: AppDeps) {
 	const { cfg, log, sql } = deps
 	const storageProbe = deps.probes?.storage ?? defaultStorageProbe(cfg)
+	const tracer = getTracer('aifiqh-api')
 
 	const app = new Elysia({ name: 'aifiqh-api' })
 		.request((ctx) => {
 			const traceId = ctx.request.headers.get('x-request-id') ?? newTraceId()
-			ctx.store = { ...(ctx.store ?? {}), traceId } as RequestStore
+			ctx.store = {
+				...(ctx.store ?? {}),
+				traceId,
+				startedAt: Date.now(),
+			} as RequestStore
 			ctx.set.headers['x-trace-id'] = traceId
 		})
 		.afterResponse((ctx) => {
+			const store = ctx.store as RequestStore
+			const status = typeof ctx.set.status === 'number' ? ctx.set.status : 200
 			log.info('request', {
 				method: ctx.request.method,
 				path: new URL(ctx.request.url).pathname,
-				status: typeof ctx.set.status === 'number' ? ctx.set.status : 200,
-				traceId: (ctx.store as RequestStore).traceId,
+				status,
+				traceId: store.traceId,
 			})
+			// OTel-compatible span export (no-op unless an endpoint is configured)
+			recordSpan(
+				tracer,
+				'http.request',
+				store.startedAt ?? Date.now(),
+				Date.now(),
+				store.traceId,
+				{
+					'http.request.method': ctx.request.method,
+					'url.path': new URL(ctx.request.url).pathname,
+					'http.response.status_code': status,
+					...(cfg.env !== 'development'
+						? { 'deployment.environment': cfg.env }
+						: {}),
+				},
+			)
 		})
 		.error((ctx) => {
 			const err = ctx.error
@@ -197,7 +222,7 @@ interface HandlerCtx {
 }
 
 function sourceRoutes(deps: AppDeps) {
-	const { cfg, log, sql } = deps
+	const { log, sql } = deps
 	return new Elysia({ name: 'sources' })
 		.post('/sources', async (rawCtx) => {
 			const ctx = rawCtx as unknown as HandlerCtx
@@ -207,6 +232,19 @@ function sourceRoutes(deps: AppDeps) {
 			if (missing.length > 0) {
 				ctx.set.status = 400
 				return { error: 'validation_failed', fields: missing }
+			}
+			// the access scope must exist, belong to the caller's tenant, and be
+			// within the caller's granted scopes (no cross-tenant scope injection)
+			const [scope] = await sql<{ tenant_id: string }[]>`
+				select tenant_id from access_scopes where id = ${body.accessScopeId as string}::uuid limit 1
+			`
+			if (
+				!scope ||
+				scope.tenant_id !== principal.tenantId ||
+				!principal.scopes.includes(body.accessScopeId as string)
+			) {
+				ctx.set.status = 400
+				return { error: 'invalid_access_scope', fields: ['accessScopeId'] }
 			}
 			const [row] = await sql<SourceRow[]>`
           insert into sources
@@ -262,10 +300,14 @@ function sourceRoutes(deps: AppDeps) {
 		.get('/sources', async (rawCtx) => {
 			const ctx = rawCtx as unknown as HandlerCtx
 			const principal = await ctx.requirePermission('source:read')
+			// principal.scopes is pre-expanded to descendants, so this restricts
+			// the list exactly like the detail endpoint's scope check
 			return sql<SourceRow[]>`
-        select * from sources where tenant_id = ${principal.tenantId}::uuid
-        order by created_at desc limit 100
-      `
+				select * from sources
+				where tenant_id = ${principal.tenantId}::uuid
+					and access_scope_id = any(${principal.scopes}::uuid[])
+				order by created_at desc limit 100
+			`
 		})
 		.patch('/sources/:id/metadata', async (rawCtx) => {
 			const ctx = rawCtx as unknown as HandlerCtx

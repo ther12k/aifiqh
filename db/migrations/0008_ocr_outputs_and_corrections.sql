@@ -19,6 +19,10 @@ create trigger ocr_outputs_append_only
   before update or delete on ocr_outputs
   for each row execute function reject_mutation();
 
+create trigger ocr_outputs_no_truncate
+  before truncate on ocr_outputs
+  for each statement execute function reject_mutation();
+
 create table ocr_output_spans (
   id uuid primary key default gen_random_uuid(),
   ocr_output_id uuid not null references ocr_outputs(id),
