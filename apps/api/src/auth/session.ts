@@ -44,11 +44,7 @@ export function sessionCookieHeader(
 	ttlSeconds: number,
 	secure = false,
 ): string {
-	return (
-		`${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax` +
-		(secure ? '; Secure' : '') +
-		`; Max-Age=${ttlSeconds}`
-	)
+	return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}; Max-Age=${ttlSeconds}`
 }
 
 export function clearSessionCookieHeader(): string {
@@ -69,11 +65,7 @@ export function csrfCookieHeader(
 	ttlSeconds: number,
 	secure = false,
 ): string {
-	return (
-		`${CSRF_COOKIE}=${token}; Path=/; SameSite=Lax` +
-		(secure ? '; Secure' : '') +
-		`; Max-Age=${ttlSeconds}`
-	)
+	return `${CSRF_COOKIE}=${token}; Path=/; SameSite=Lax${secure ? '; Secure' : ''}; Max-Age=${ttlSeconds}`
 }
 
 export function clearCsrfCookieHeader(): string {
