@@ -18,10 +18,17 @@ interface MigrationRow {
 	checksum: string | null
 }
 
+export interface MigrationOptions {
+	/** apply only migrations with filename <= until (inclusive); used by the
+	 * populated-database rehearsal to stage an older schema state */
+	until?: string
+}
+
 export async function applyMigrations(
 	sql: ReturnType<typeof postgres>,
 	dir: string = MIGRATIONS_DIR,
 	log: (msg: string) => void = console.log,
+	opts: MigrationOptions = {},
 ): Promise<string[]> {
 	await sql`create table if not exists schema_migrations (
     filename text primary key,
@@ -42,6 +49,7 @@ export async function applyMigrations(
 		)
 		const files = readdirSync(dir)
 			.filter((f) => f.endsWith('.sql'))
+			.filter((f) => !opts.until || f <= opts.until)
 			.sort()
 		const justApplied: string[] = []
 		for (const file of files) {

@@ -45,10 +45,10 @@ const MIGRATIONS_DIR = join(
 
 // owner client: superuser bootstrap role for migrations + fixture setup
 const sql = postgres(DB_URL, { max: 5 })
-// dedicated non-superuser app role (created by migration 0020): the API
-// path runs through this client so RLS genuinely applies
 const APP_URL = DB_URL.replace(/:\/\/[^@]+@/, '://aifiqh_app:aifiqh_app@')
 const appSql = postgres(APP_URL, { max: 5 })
+// dedicated non-superuser app role (created by migration 0020): the API
+// path runs through this client so RLS genuinely applies
 const silentLog = createLogger('error', {}, () => {})
 const cfg: Config = loadConfig({
 	DATABASE_URL: APP_URL,
@@ -1242,15 +1242,19 @@ describe('content-addressed upload pipeline (SRC-002)', () => {
 		// pick a source that genuinely belongs to tenant B: the owner client
 		// bypasses RLS, so an unfiltered `limit 1` can return any tenant's row
 		const srcB = await scopedTransaction(sql, ids.tenantB, async (tx) => {
-			const [found] = await tx<{ id: string }[]>`
-				select id from sources where tenant_id = ${ids.tenantB}::uuid limit 1`
+			const found = await tx<{ id: string }[]>`
+				select id from sources where tenant_id = ${ids.tenantB}::uuid limit 1`.then(
+				(r) => r[0],
+			)
 			if (found) return found
-			const [root] = await tx<{ id: string }[]>`
-				select id from access_scopes where tenant_id = ${ids.tenantB}::uuid and key = 'root' limit 1`
-			const [created] = await tx<{ id: string }[]>`
+			const root = await tx<{ id: string }[]>`
+				select id from access_scopes where tenant_id = ${ids.tenantB}::uuid and key = 'root' limit 1`.then(
+				(r) => r[0],
+			)
+			const created = await tx<{ id: string }[]>`
 				insert into sources (tenant_id, title, author, source_type, language, rights_status, access_scope_id)
-				values (${ids.tenantB}::uuid, 'B upload fixture', 'x', 'book', 'id', 'licensed', ${root.id})
-				returning id`
+				values (${ids.tenantB}::uuid, 'B upload fixture', 'x', 'book', 'id', 'licensed', ${root?.id})
+				returning id`.then((r) => r[0])
 			return created
 		})
 		expect(srcB).toBeDefined()
@@ -1629,6 +1633,239 @@ describe('revision deprecation lifecycle (SRC-003)', () => {
 		)
 		expect(res.status).toBe(400)
 		expect((await res.json()).fields).toContain('reason')
+	})
+})
+
+describe('publication and alias races (REL-HARD-005 / 0024)', () => {
+	async function makePublishedPath(): Promise<{
+		answerId: string
+		runId: string
+		msgId: string
+		traceId: string
+	}> {
+		const [conv] = await sql<{ id: string }[]>`
+			insert into conversations (tenant_id, created_by)
+			values (${ids.tenantA}, ${ids.editorA}) returning id`
+		const [msg] = await sql<{ id: string }[]>`
+			insert into messages (conversation_id, ordinal, role, content)
+			values (${conv.id}, floor(random()*800000+100000)::bigint, 'assistant', 'a') returning id`
+		const [trace] = await sql<{ id: string }[]>`
+			insert into retrieval_traces (tenant_id, user_id, query_original)
+			values (${ids.tenantA}, ${ids.editorA}, 'q') returning id`
+		const [ans] = await sql<{ id: string }[]>`
+			insert into answers (message_id, trace_id, status)
+			values (${msg.id}, ${trace.id}, 'validated') returning id`
+		const [run] = await sql<{ id: string }[]>`
+			insert into validation_runs (answer_id, validator_version, finished_at)
+			values (${ans.id}, 'v1', now()) returning id`
+		return { answerId: ans.id, runId: run.id, msgId: msg.id, traceId: trace.id }
+	}
+
+	test('critical issue commit races publication: final state has no published answer with unresolved critical', async () => {
+		// both legs run as the app role WITH tenant GUC, so RLS passes and the
+		// 0024 serialization triggers are what get exercised; each leg gets a
+		// FRESH answer because the first leg may permanently publish it
+		for (const order of ['publish-first', 'issue-first'] as const) {
+			const { answerId, runId } = await makePublishedPath()
+			const clientA = postgres(APP_URL, { max: 1 })
+			const clientB = postgres(APP_URL, { max: 1 })
+			try {
+				const publish = () =>
+					scopedTransaction(
+						clientA as unknown as Sql,
+						ids.tenantA,
+						async (tx) => {
+							await tx`update answers set status = 'published' where id = ${answerId}::uuid`
+							await Bun.sleep(80) // hold the race window open
+						},
+					)
+				const insertIssue = () =>
+					scopedTransaction(
+						clientB as unknown as Sql,
+						ids.tenantA,
+						(tx) =>
+							tx`insert into validation_issues (run_id, severity, code, resolved)
+							values (${runId}::uuid, 'critical', 'RACE', false)`,
+					)
+
+				if (order === 'issue-first') {
+					// B claims FOR SHARE on the answer first; A's publish UPDATE
+					// waits for B to commit, then its guard re-reads issues and must
+					// reject because B inserted an unresolved critical
+					const [pubOutcome] = await Promise.allSettled([
+						(async () => {
+							await Bun.sleep(40)
+							return publish()
+						})(),
+						insertIssue(),
+					])
+					expect(pubOutcome.status).toBe('rejected')
+					if (pubOutcome.status === 'rejected') {
+						expect(String(pubOutcome.reason)).toContain('unresolved critical')
+					}
+					await sql`delete from validation_issues where run_id = ${runId}::uuid and code = 'RACE'`
+				} else {
+					// publish commits first: B's late insert must be rejected
+					await publish()
+					await expectReject(
+						scopedTransaction(
+							clientB as unknown as Sql,
+							ids.tenantA,
+							(tx) =>
+								tx`insert into validation_issues (run_id, severity, code, resolved)
+								values (${runId}::uuid, 'critical', 'RACE', false)`,
+						),
+						'published answer',
+					)
+				}
+				// invariant: never a published answer with an unresolved critical
+				const bad = await sql<{ n: string }[]>`
+					select count(*) as n from answers a
+					join validation_runs vr on vr.answer_id = a.id
+					join validation_issues vi on vi.run_id = vr.id
+					where a.id = ${answerId}::uuid and a.status = 'published'
+						and vi.severity = 'critical' and vi.resolved = false`
+				expect(Number(bad[0].n)).toBe(0)
+			} finally {
+				await clientA.end({ timeout: 1 }).catch(() => {})
+				await clientB.end({ timeout: 1 }).catch(() => {})
+			}
+		}
+	})
+
+	test('release publish races item insert: frozen manifest never gains items', async () => {
+		const [concept] = await sql<{ id: string }[]>`
+			insert into knowledge_concepts (tenant_id, type_key, access_scope_id, created_by)
+			values (${ids.tenantA}, 'definition', ${ids.scopeRootA}, ${ids.editorA}) returning id`
+		const [rev] = await sql<{ id: string }[]>`
+			insert into knowledge_concept_revisions
+				(concept_id, revision_number, title, body_markdown, content_hash, created_by)
+			values (${concept.id}, 1, 'Race', 'b', 'hash-race', ${ids.editorA}) returning id`
+		const [rel] = await sql<{ id: string }[]>`
+			insert into knowledge_releases (tenant_id, manifest_hash)
+			values (${ids.tenantA}, 'race-manifest') returning id`
+
+		const clientA = postgres(APP_URL, { max: 1 })
+		const clientB = postgres(APP_URL, { max: 1 })
+		try {
+			// TX A publishes (locks the release row via item guard FOR SHARE)
+			const pub = clientA`update knowledge_releases set state = 'published' where id = ${rel.id}::uuid`
+			// TX B inserts an item inside the window: must wait, then fail
+			await Bun.sleep(60)
+			const outcome = await Promise.allSettled([
+				pub,
+				clientB`insert into knowledge_release_items (release_id, concept_id, concept_revision_id)
+					values (${rel.id}::uuid, ${concept.id}::uuid, ${rev.id}::uuid)`,
+			])
+			expect(outcome[0].status).toBe('fulfilled') // publish won
+			expect(outcome[1].status).toBe('rejected') // late insert rejected
+			const items = await sql<{ n: string }[]>`
+				select count(*) as n from knowledge_release_items where release_id = ${rel.id}::uuid`
+			expect(Number(items[0].n)).toBe(0)
+		} finally {
+			await clientA.end({ timeout: 1 }).catch(() => {})
+			await clientB.end({ timeout: 1 }).catch(() => {})
+		}
+	})
+})
+
+describe('mutation-time permission recheck (REL-HARD-005)', () => {
+	test('revocation between request start and write transaction denies', async () => {
+		const editor = await authFor(ids.editorA, ids.tenantA, true)
+		const body = JSON.stringify({
+			title: 'Recheck probe',
+			author: 'x',
+			sourceType: 'book',
+			language: 'id',
+			rightsStatus: 'licensed',
+			accessScopeId: ids.scopeRootA,
+		})
+		// simulate revocation landing mid-request: strip the permission right
+		// before the write path runs (the recheck reads role_permissions in-tx)
+		const [role] = await sql<{ id: string }[]>`
+			select id from roles where tenant_id is null and key = 'editor'`
+		await sql`delete from role_permissions
+			where role_id = ${role.id} and permission_key = 'source:create'`
+		try {
+			const res = await app.handle(
+				new Request('http://localhost/sources', {
+					method: 'POST',
+					headers: { ...editor, 'content-type': 'application/json' },
+					body,
+				}),
+			)
+			// initial gate may already deny; the in-tx recheck must too
+			expect(res.status).toBe(403)
+		} finally {
+			await sql`insert into role_permissions (role_id, permission_key)
+				values (${role.id}, 'source:create') on conflict do nothing`
+		}
+	})
+})
+
+describe('direct-SQL cross-tenant matrix as aifiqh_app (REL-HARD-003)', () => {
+	test('CRUD against foreign tenant rows fails closed on every path', async () => {
+		// pick a tenant-B source and try A-scoped CRUD against it
+		const foreign = await scopedTransaction(sql, ids.tenantB, (tx) =>
+			tx<{ id: string }[]>`
+				select id from sources where tenant_id = ${ids.tenantB}::uuid limit 1`.then(
+				(r) => r[0],
+			),
+		)
+		expect(foreign).toBeDefined()
+		const foreignId = foreign!.id
+
+		// SELECT: invisible
+		const sel = await appSql<{ id: string }[]>`
+			select id from sources where id = ${foreignId}::uuid`
+		expect(sel.length).toBe(0)
+		// UPDATE: affects nothing
+		const upd = await appSql`
+			update sources set title = 'hijacked' where id = ${foreignId}::uuid`
+		expect(upd.count).toBe(0)
+		// DELETE: affects nothing
+		const del = await appSql`
+			delete from sources where id = ${foreignId}::uuid`
+		expect(del.count).toBe(0)
+		// INSERT with foreign tenant_id: blocked by WITH CHECK
+		const rootB = await scopedTransaction(sql, ids.tenantB, (tx) =>
+			tx<{ id: string }[]>`
+				select id from access_scopes where tenant_id = ${ids.tenantB}::uuid and key = 'root'`.then(
+				(r) => r[0],
+			),
+		)
+		await expectReject(
+			scopedTransaction(
+				appSql,
+				ids.tenantA,
+				(tx) =>
+					tx`insert into sources (tenant_id, title, author, source_type, language, rights_status, access_scope_id)
+					values (${ids.tenantB}::uuid, 'injected', 'x', 'book', 'id', 'licensed', ${rootB!.id})`,
+			),
+			'violates row-level security policy',
+		)
+		// child-table read through the join path: still invisible
+		const viaSpan = await appSql<{ n: string }[]>`
+			select count(*) as n from source_spans ss
+			join source_revisions sr on sr.id = ss.source_revision_id
+			join sources s on s.id = sr.source_id
+			where s.tenant_id = ${ids.tenantB}::uuid`
+		expect(Number(viaSpan[0].n)).toBe(0)
+		// dashboard view runs with caller RLS (security_invoker) and must not
+		// enumerate foreign tenants (0024 added the app_tenant() filter):
+		// bare (no-GUC) → zero rows; scoped → exactly the caller's tenant
+		const bareView = await appSql<{ tenant_id: string }[]>`
+			select tenant_id from dashboard_source_health_v`
+		expect(bareView.length).toBe(0)
+		const scopedView = await scopedTransaction(
+			appSql,
+			ids.tenantA,
+			(tx) =>
+				tx<
+					{ tenant_id: string }[]
+				>`select tenant_id from dashboard_source_health_v`,
+		)
+		expect(scopedView.map((r) => r.tenant_id)).toEqual([ids.tenantA])
 	})
 })
 

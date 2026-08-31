@@ -165,6 +165,39 @@ export function buildApp(deps: AppDeps) {
 						throw new HttpError(403, 'forbidden', decision.reasonCode)
 					}
 				},
+				/**
+				 * Mutation-time authorization re-check (REL-HARD-005): re-loads
+				 * effective permissions inside the caller's transaction, so a
+				 * revocation that lands between request start and the write
+				 * transaction still denies high-impact mutations.
+				 */
+				async recheckPermissionInTx(
+					tx: Sql,
+					principal: Principal,
+					permission: Permission,
+				): Promise<void> {
+					const rows = await tx<{ allowed: number }[]>`
+						select count(*)::int as allowed
+						from tenant_memberships tm
+						join membership_roles mr on mr.membership_id = tm.id
+						join role_permissions rp on rp.role_id = mr.role_id
+						where tm.user_id = ${principal.userId}::uuid
+							and tm.tenant_id = ${principal.tenantId}::uuid
+							and tm.status = 'active'
+							and rp.permission_key = ${permission}`
+					if ((rows[0]?.allowed ?? 0) === 0) {
+						log.warn('permission revoked mid-request', {
+							permission,
+							userId: principal.userId,
+							traceId,
+						})
+						throw new HttpError(
+							403,
+							'forbidden',
+							`PERMISSION_REVOKED:${permission}`,
+						)
+					}
+				},
 			}
 		})
 		.get('/healthz', () => ({ status: 'healthy' }))
@@ -252,6 +285,11 @@ interface HandlerCtx {
 	traceId: string
 	requirePermission: (p: Permission) => Promise<Principal>
 	requireCsrf: () => void
+	recheckPermissionInTx: (
+		tx: unknown,
+		principal: Principal,
+		p: Permission,
+	) => Promise<void>
 }
 
 function sourceRoutes(deps: AppDeps) {
