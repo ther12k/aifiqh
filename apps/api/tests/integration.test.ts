@@ -1662,78 +1662,87 @@ describe('publication and alias races (REL-HARD-005 / 0024)', () => {
 	}
 
 	test('critical issue commit races publication: final state has no published answer with unresolved critical', async () => {
-		// both legs run as the app role WITH tenant GUC, so RLS passes and the
-		// 0024 serialization triggers are what get exercised; each leg gets a
-		// FRESH answer because the first leg may permanently publish it
-		for (const order of ['publish-first', 'issue-first'] as const) {
-			const { answerId, runId } = await makePublishedPath()
-			const clientA = postgres(APP_URL, { max: 1 })
-			const clientB = postgres(APP_URL, { max: 1 })
-			try {
-				const publish = () =>
-					scopedTransaction(
-						clientA as unknown as Sql,
-						ids.tenantA,
-						async (tx) => {
-							await tx`update answers set status = 'published' where id = ${answerId}::uuid`
-							await Bun.sleep(80) // hold the race window open
-						},
-					)
-				const insertIssue = () =>
-					scopedTransaction(
-						clientB as unknown as Sql,
-						ids.tenantA,
-						(tx) =>
-							tx`insert into validation_issues (run_id, severity, code, resolved)
-							values (${runId}::uuid, 'critical', 'RACE', false)`,
-					)
+		const { answerId, runId } = await makePublishedPath()
+		// Deterministic interleaving via lock gates: B's issue insert takes the
+		// 0024 FOR SHARE row lock and HOLDS it (commit gated) before A starts
+		// publishing — no timing-dependent race in the test itself.
+		const clientA = postgres(APP_URL, { max: 1 })
+		const clientB = postgres(APP_URL, { max: 1 })
 
-				if (order === 'issue-first') {
-					// B claims FOR SHARE on the answer first; A's publish UPDATE
-					// waits for B to commit, then its guard re-reads issues and must
-					// reject because B inserted an unresolved critical
-					const [pubOutcome] = await Promise.allSettled([
-						(async () => {
-							await Bun.sleep(40)
-							return publish()
-						})(),
-						insertIssue(),
-					])
-					expect(pubOutcome.status).toBe('rejected')
-					if (pubOutcome.status === 'rejected') {
-						expect(String(pubOutcome.reason)).toContain('unresolved critical')
-					}
-					await sql`delete from validation_issues where run_id = ${runId}::uuid and code = 'RACE'`
-				} else {
-					// publish commits first: B's late insert must be rejected
-					await publish()
-					await expectReject(
-						scopedTransaction(
-							clientB as unknown as Sql,
-							ids.tenantA,
-							(tx) =>
-								tx`insert into validation_issues (run_id, severity, code, resolved)
-								values (${runId}::uuid, 'critical', 'RACE', false)`,
-						),
-						'published answer',
-					)
-				}
-				// invariant: never a published answer with an unresolved critical
-				const bad = await sql<{ n: string }[]>`
-					select count(*) as n from answers a
-					join validation_runs vr on vr.answer_id = a.id
-					join validation_issues vi on vi.run_id = vr.id
-					where a.id = ${answerId}::uuid and a.status = 'published'
-						and vi.severity = 'critical' and vi.resolved = false`
-				expect(Number(bad[0].n)).toBe(0)
-			} finally {
-				await clientA.end({ timeout: 1 }).catch(() => {})
-				await clientB.end({ timeout: 1 }).catch(() => {})
-			}
+		let bHeldLock: () => void = () => {}
+		const lockHeld = new Promise<void>((r) => {
+			bHeldLock = r
+		})
+		let bCommit: () => void = () => {}
+		const commitB = new Promise<void>((r) => {
+			bCommit = r
+		})
+
+		// leg 1: B holds the row (unresolved critical inserted, uncommitted);
+		// A publishes only after B holds — A must wait for B's commit, then the
+		// guard re-reads issues and rejects
+		const bTx = scopedTransaction(
+			clientB as unknown as Sql,
+			ids.tenantA,
+			async (tx) => {
+				await tx`insert into validation_issues (run_id, severity, code, resolved)
+				values (${runId}::uuid, 'critical', 'RACE', false)`
+				bHeldLock()
+				await commitB
+			},
+		)
+		await lockHeld
+		const pubOutcome = await Promise.allSettled([
+			scopedTransaction(
+				clientA as unknown as Sql,
+				ids.tenantA,
+				(tx) =>
+					tx`update answers set status = 'published' where id = ${answerId}::uuid`,
+			),
+			(async () => {
+				await Bun.sleep(60) // give A time to block on B's row lock
+				bCommit()
+				await bTx
+			})(),
+		])
+		expect(pubOutcome[0].status).toBe('rejected')
+		if (pubOutcome[0].status === 'rejected') {
+			expect(String(pubOutcome[0].reason)).toContain('unresolved critical')
 		}
+		// invariant: never a published answer with an unresolved critical
+		const bad1 = await sql<{ n: string }[]>`
+			select count(*) as n from answers a
+			join validation_runs vr on vr.answer_id = a.id
+			join validation_issues vi on vi.run_id = vr.id
+			where a.id = ${answerId}::uuid and a.status = 'published'
+				and vi.severity = 'critical' and vi.resolved = false`
+		expect(Number(bad1[0].n)).toBe(0)
+
+		// leg 2: resolve leg-1's issue, publish fully, then a late critical
+		// insert must be rejected
+		await sql`update validation_issues set resolved = true
+			where run_id = ${runId}::uuid and code = 'RACE'`
+		await scopedTransaction(clientA as unknown as Sql, ids.tenantA, (tx) =>
+			tx`update answers set status = 'published' where id = ${answerId}::uuid`)
+		await expectReject(
+			scopedTransaction(
+				clientB as unknown as Sql,
+				ids.tenantA,
+				(tx) =>
+					tx`insert into validation_issues (run_id, severity, code, resolved)
+						values (${runId}::uuid, 'critical', 'RACE2', false)`,
+			),
+			'published answer',
+		)
+		const bad2 = await sql<{ n: string }[]>`
+			select count(*) as n from validation_issues
+			where run_id = ${runId}::uuid and code = 'RACE2'`
+		expect(Number(bad2[0].n)).toBe(0)
+		await clientA.end({ timeout: 1 }).catch(() => {})
+		await clientB.end({ timeout: 1 }).catch(() => {})
 	})
 
-	test('release publish races item insert: frozen manifest never gains items', async () => {
+	test('release publish races item insert: frozen manifest never gains late items', async () => {
 		const [concept] = await sql<{ id: string }[]>`
 			insert into knowledge_concepts (tenant_id, type_key, access_scope_id, created_by)
 			values (${ids.tenantA}, 'definition', ${ids.scopeRootA}, ${ids.editorA}) returning id`
@@ -1745,27 +1754,68 @@ describe('publication and alias races (REL-HARD-005 / 0024)', () => {
 			insert into knowledge_releases (tenant_id, manifest_hash)
 			values (${ids.tenantA}, 'race-manifest') returning id`
 
+		// deterministic: B's item insert holds the release FOR SHARE lock before
+		// A publishes; A's publish waits for B to commit, then the guard rejects
 		const clientA = postgres(APP_URL, { max: 1 })
 		const clientB = postgres(APP_URL, { max: 1 })
-		try {
-			// TX A publishes (locks the release row via item guard FOR SHARE)
-			const pub = clientA`update knowledge_releases set state = 'published' where id = ${rel.id}::uuid`
-			// TX B inserts an item inside the window: must wait, then fail
-			await Bun.sleep(60)
-			const outcome = await Promise.allSettled([
-				pub,
-				clientB`insert into knowledge_release_items (release_id, concept_id, concept_revision_id)
+		let bHeldLock: () => void = () => {}
+		const lockHeld = new Promise<void>((r) => {
+			bHeldLock = r
+		})
+		let bCommit: () => void = () => {}
+		const commitB = new Promise<void>((r) => {
+			bCommit = r
+		})
+
+		const bTx = scopedTransaction(
+			clientB as unknown as Sql,
+			ids.tenantA,
+			async (tx) => {
+				await tx`insert into knowledge_release_items (release_id, concept_id, concept_revision_id)
+				values (${rel.id}::uuid, ${concept.id}::uuid, ${rev.id}::uuid)`
+				bHeldLock()
+				await commitB
+			},
+		)
+		await lockHeld
+		const [pubOutcome] = await Promise.allSettled([
+			(async () => {
+				await scopedTransaction(
+					clientA as unknown as Sql,
+					ids.tenantA,
+					(tx) =>
+						tx`update knowledge_releases set state = 'published' where id = ${rel.id}::uuid`,
+				)
+				await Bun.sleep(60) // hold past B's commit
+			})(),
+			(async () => {
+				await Bun.sleep(60)
+				bCommit()
+				await bTx
+			})(),
+		])
+		// B's item committed BEFORE the freeze (it held the lock while A
+		// waited): it must be INCLUDED in the manifest, then publication lands
+		expect(pubOutcome.status).toBe('fulfilled')
+		const items = await sql<{ n: string }[]>`
+			select count(*) as n from knowledge_release_items where release_id = ${rel.id}::uuid`
+		expect(Number(items[0].n)).toBe(1)
+		const state = await sql<{ state: string }[]>`
+			select state from knowledge_releases where id = ${rel.id}::uuid`
+		expect(state[0].state).toBe('published')
+		// and once published, no further items can land (deterministic reject)
+		await expectReject(
+			scopedTransaction(
+				clientB as unknown as Sql,
+				ids.tenantA,
+				(tx) =>
+					tx`insert into knowledge_release_items (release_id, concept_id, concept_revision_id)
 					values (${rel.id}::uuid, ${concept.id}::uuid, ${rev.id}::uuid)`,
-			])
-			expect(outcome[0].status).toBe('fulfilled') // publish won
-			expect(outcome[1].status).toBe('rejected') // late insert rejected
-			const items = await sql<{ n: string }[]>`
-				select count(*) as n from knowledge_release_items where release_id = ${rel.id}::uuid`
-			expect(Number(items[0].n)).toBe(0)
-		} finally {
-			await clientA.end({ timeout: 1 }).catch(() => {})
-			await clientB.end({ timeout: 1 }).catch(() => {})
-		}
+			),
+			'cannot change after publish',
+		)
+		await clientA.end({ timeout: 1 }).catch(() => {})
+		await clientB.end({ timeout: 1 }).catch(() => {})
 	})
 })
 
