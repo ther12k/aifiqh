@@ -1,3 +1,4 @@
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 /**
  * DB-backed integration tests. Require DATABASE_URL (default local dev DB
  * on :5434, CI service container on :5432). Skipped when the DB is absent.
@@ -6,7 +7,7 @@
  * RLS tables (sources, knowledge_concepts, ...) must run inside
  * scopedTransaction with app.tenant_id set — unset GUC fails closed.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { Principal } from '@aifiqh/shared'
 import { SESSION_COOKIE } from '@aifiqh/shared'
@@ -52,7 +53,7 @@ const silentLog = createLogger('error', {}, () => {})
 const cfg: Config = loadConfig({
 	DATABASE_URL: APP_URL,
 	SESSION_SECRET: 'test-session-secret',
-	STORAGE_ENDPOINT: 'http://localhost:9999',
+	STORAGE_ENDPOINT: process.env.STORAGE_ENDPOINT ?? 'http://localhost:9000',
 } as unknown as NodeJS.ProcessEnv)
 
 const suffix = crypto.randomUUID().slice(0, 8)
@@ -1116,6 +1117,207 @@ describe('migration drift protection (HARD-008)', () => {
 			'migration drift',
 		)
 		await sql`delete from schema_migrations where filename = '9999_drift_probe.sql'`
+	})
+})
+
+describe('content-addressed upload pipeline (SRC-002)', () => {
+	let sourceId = ''
+	const editorAuth = () => authFor(ids.editorA, ids.tenantA, true)
+
+	test('upload stores object, creates revision, hash matches bytes', async () => {
+		const created = await app.handle(
+			new Request('http://localhost/sources', {
+				method: 'POST',
+				headers: {
+					...(await editorAuth()),
+					'content-type': 'application/json',
+				},
+				body: JSON.stringify({
+					title: 'Upload target',
+					author: 'x',
+					sourceType: 'book',
+					language: 'ar',
+					rightsStatus: 'licensed',
+					accessScopeId: ids.scopeRootA,
+				}),
+			}),
+		)
+		expect(created.status).toBe(201)
+		sourceId = (await created.json()).id
+
+		const payload = Buffer.from(
+			`Bismillah — test pdf bytes ${crypto.randomUUID()}`,
+		)
+		const sha = createHash('sha256').update(payload).digest('hex')
+		const up = await app.handle(
+			new Request(`http://localhost/sources/${sourceId}/revisions`, {
+				method: 'POST',
+				headers: { ...(await editorAuth()), 'content-type': 'application/pdf' },
+				body: new Uint8Array(payload),
+			}),
+		)
+		expect(up.status).toBe(201)
+		const body = await up.json()
+		expect(body.sha256).toBe(sha)
+		expect(body.objectKey).toBe(`originals/${sha}`)
+		expect(body.deduplicated).toBeFalse()
+		expect(body.sizeBytes).toBe(payload.length)
+
+		// GET streams the identical bytes back with the hash header
+		const down = await app.handle(
+			new Request(
+				`http://localhost/sources/${sourceId}/revisions/${body.revisionId}/file`,
+				{
+					headers: { cookie: (await authFor(ids.readerA, ids.tenantA)).cookie },
+				},
+			),
+		)
+		expect(down.status).toBe(200)
+		expect(down.headers.get('x-content-sha256')).toBe(sha)
+		const roundtrip = Buffer.from(await down.arrayBuffer())
+		expect(roundtrip.equals(payload)).toBeTrue()
+	})
+
+	test('identical bytes dedupe onto the same object key', async () => {
+		const payload = Buffer.from('duplicate me — same bytes everywhere')
+		const first = await app.handle(
+			new Request(`http://localhost/sources/${sourceId}/revisions`, {
+				method: 'POST',
+				headers: { ...(await editorAuth()), 'content-type': 'text/plain' },
+				body: new Uint8Array(payload),
+			}),
+		)
+		expect(first.status).toBe(201)
+		const second = await app.handle(
+			new Request(`http://localhost/sources/${sourceId}/revisions`, {
+				method: 'POST',
+				headers: { ...(await editorAuth()), 'content-type': 'text/plain' },
+				body: new Uint8Array(payload),
+			}),
+		)
+		expect(second.status).toBe(201)
+		const b1 = await first.json()
+		const b2 = await second.json()
+		expect(b2.deduplicated).toBeTrue()
+		expect(b2.objectKey).toBe(b1.objectKey)
+		expect(b2.revisionNumber).toBeGreaterThan(b1.revisionNumber)
+	})
+
+	test('an 8MB binary upload keeps hash integrity end to end', async () => {
+		const big = crypto.getRandomValues(new Uint8Array(8 * 1024 * 1024))
+		const sha = createHash('sha256').update(Buffer.from(big)).digest('hex')
+		const up = await app.handle(
+			new Request(`http://localhost/sources/${sourceId}/revisions`, {
+				method: 'POST',
+				headers: {
+					...(await editorAuth()),
+					'content-type': 'application/octet-stream',
+				},
+				body: big,
+			}),
+		)
+		expect(up.status).toBe(201)
+		const { revisionId } = await up.json()
+		const down = await app.handle(
+			new Request(
+				`http://localhost/sources/${sourceId}/revisions/${revisionId}/file`,
+				{
+					headers: { cookie: (await editorAuth()).cookie },
+				},
+			),
+		)
+		const got = Buffer.from(await down.arrayBuffer())
+		expect(got.length).toBe(big.length)
+		expect(createHash('sha256').update(got).digest('hex')).toBe(sha)
+	})
+
+	test('failed upload leaves no active revision (foreign source id)', async () => {
+		const before = await app.handle(
+			new Request(`http://localhost/sources/${sourceId}/revisions`, {
+				headers: { cookie: (await editorAuth()).cookie },
+			}),
+		)
+		const countBefore = (await before.json()).length
+		// tenant A editor uploading to a tenant B source: 404, no revision row
+		const srcB = await scopedTransaction(sql, ids.tenantB, (tx) =>
+			tx<{ id: string }[]>`select id from sources limit 1`.then((r) => r[0]),
+		)
+		expect(srcB).toBeDefined()
+		const res = await app.handle(
+			new Request(`http://localhost/sources/${srcB!.id}/revisions`, {
+				method: 'POST',
+				headers: { ...(await editorAuth()), 'content-type': 'text/plain' },
+				body: new Uint8Array(Buffer.from('orphan candidate bytes')),
+			}),
+		)
+		expect(res.status).toBe(404)
+		const after = await app.handle(
+			new Request(`http://localhost/sources/${sourceId}/revisions`, {
+				headers: { cookie: (await editorAuth()).cookie },
+			}),
+		)
+		expect((await after.json()).length).toBe(countBefore)
+	})
+
+	test('cross-tenant file download is 404, scope denial is 403', async () => {
+		const list = await app.handle(
+			new Request(`http://localhost/sources/${sourceId}/revisions`, {
+				headers: { cookie: (await editorAuth()).cookie },
+			}),
+		)
+		const revisions = await list.json()
+		const revId = revisions[0].id
+		// tenant B admin cannot even see the source
+		const cross = await app.handle(
+			new Request(
+				`http://localhost/sources/${sourceId}/revisions/${revId}/file`,
+				{
+					headers: { cookie: (await authFor(ids.adminB, ids.tenantB)).cookie },
+				},
+			),
+		)
+		expect(cross.status).toBe(404)
+		// external-only reader: same tenant, wrong scope
+		const extReader = await makeUser(
+			`ext3-${suffix}@test`,
+			ids.tenantA,
+			'reader',
+			[ids.scopeExternalA],
+		)
+		const denied = await app.handle(
+			new Request(
+				`http://localhost/sources/${sourceId}/revisions/${revId}/file`,
+				{
+					headers: {
+						cookie: (await authFor(extReader.userId, ids.tenantA)).cookie,
+					},
+				},
+			),
+		)
+		expect(denied.status).toBe(403)
+	})
+
+	test('concurrent uploads get distinct sequential revision numbers', async () => {
+		const results = await Promise.all(
+			[1, 2, 3].map(async (i) =>
+				app.handle(
+					new Request(`http://localhost/sources/${sourceId}/revisions`, {
+						method: 'POST',
+						headers: { ...(await editorAuth()), 'content-type': 'text/plain' },
+						body: new Uint8Array(
+							Buffer.from(`concurrent payload ${i} ${crypto.randomUUID()}`),
+						),
+					}),
+				),
+			),
+		)
+		const numbers = [] as number[]
+		for (const r of results) {
+			expect(r.status).toBe(201)
+			numbers.push((await r.json()).revisionNumber)
+		}
+		expect(new Set(numbers).size).toBe(3)
+		expect(Math.max(...numbers) - Math.min(...numbers)).toBe(2)
 	})
 })
 

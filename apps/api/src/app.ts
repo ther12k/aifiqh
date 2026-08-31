@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { HealthReport, Permission, Principal } from '@aifiqh/shared'
 /**
  * API composition root: trace middleware, health contract, auth guard, and
@@ -22,6 +23,7 @@ import { dbOk } from './db/client'
 import type { Logger } from './logger'
 import { getTracer, recordSpan } from './observability/otel'
 import { newTraceId } from './observability/trace'
+import { contentKey, getObject, headObject, putObject } from './storage/s3'
 
 export interface AppDeps {
 	cfg: Config
@@ -211,6 +213,9 @@ function defaultStorageProbe(cfg: Config) {
 	}
 }
 
+/** single-object upload ceiling for the buffered MVP path (bytes) */
+const MAX_UPLOAD_BYTES = 256 * 1024 * 1024
+
 const REQUIRED_SOURCE_FIELDS = [
 	'title',
 	'author',
@@ -250,38 +255,42 @@ interface HandlerCtx {
 }
 
 function sourceRoutes(deps: AppDeps) {
-	const { log, sql } = deps
-	return new Elysia({ name: 'sources' })
-		.post('/sources', async (rawCtx) => {
-			const ctx = rawCtx as unknown as HandlerCtx
-			const principal = await ctx.requirePermission('source:create')
-			// CSRF after auth so unauthenticated requests still get a 401
-			ctx.requireCsrf()
-			const body = ctx.body as Record<string, unknown>
-			const missing = REQUIRED_SOURCE_FIELDS.filter((f) => !body?.[f])
-			if (missing.length > 0) {
-				ctx.set.status = 400
-				return { error: 'validation_failed', fields: missing }
-			}
-			// the access scope must exist, belong to the caller's tenant, and be
-			// within the caller's granted scopes (no cross-tenant scope injection).
-			// the lookup runs inside the tenant transaction: access_scopes carries
-			// RLS, so an out-of-transaction read cannot see it at all
-			const row = await scopedTransaction(
-				sql,
-				principal.tenantId,
-				async (tx) => {
-					const [scope] = await tx<{ tenant_id: string }[]>`
+	const { cfg, log, sql } = deps
+	return (
+		new Elysia({ name: 'sources' })
+			.post('/sources', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('source:create')
+				// CSRF after auth so unauthenticated requests still get a 401
+				ctx.requireCsrf()
+				const body = ctx.body as Record<string, unknown>
+				const missing = REQUIRED_SOURCE_FIELDS.filter((f) => !body?.[f])
+				if (missing.length > 0) {
+					ctx.set.status = 400
+					return { error: 'validation_failed', fields: missing }
+				}
+				// the access scope must exist, belong to the caller's tenant, and be
+				// within the caller's granted scopes (no cross-tenant scope injection).
+				// the lookup runs inside the tenant transaction: access_scopes carries
+				// RLS, so an out-of-transaction read cannot see it at all
+				const row = await scopedTransaction(
+					sql,
+					principal.tenantId,
+					async (tx) => {
+						const [scope] = await tx<{ tenant_id: string }[]>`
 					select tenant_id from access_scopes where id = ${body.accessScopeId as string}::uuid limit 1
 				`
-					if (
-						!scope ||
-						scope.tenant_id !== principal.tenantId ||
-						!principal.scopes.includes(body.accessScopeId as string)
-					) {
-						return { error: 'invalid_access_scope', fields: ['accessScopeId'] }
-					}
-					const [inserted] = await tx<SourceRow[]>`
+						if (
+							!scope ||
+							scope.tenant_id !== principal.tenantId ||
+							!principal.scopes.includes(body.accessScopeId as string)
+						) {
+							return {
+								error: 'invalid_access_scope',
+								fields: ['accessScopeId'],
+							}
+						}
+						const [inserted] = await tx<SourceRow[]>`
           insert into sources
             (tenant_id, title, author, source_type, language, edition, publisher,
              rights_status, access_scope_id, created_by)
@@ -293,136 +302,137 @@ function sourceRoutes(deps: AppDeps) {
              ${principal.userId}::uuid)
           returning *
         `
-					if (!inserted) throw new HttpError(500, 'insert_failed')
-					// business change + audit commit atomically (HARD-007)
-					await recordAuditInTx(tx, {
-						tenantId: principal.tenantId,
-						actorType: 'user',
-						actorId: principal.userId,
-						action: 'source.created',
-						entityType: 'source',
-						entityId: inserted.id,
-						afterRef: { title: inserted.title },
-						reason: (body.reason as string) || null,
-						traceId: ctx.traceId,
-					})
-					return { created: inserted }
-				},
-			)
-			if ('error' in row) {
-				ctx.set.status = 400
-				return row
-			}
-			ctx.set.status = 201
-			return { id: row.created.id, title: row.created.title }
-		})
-		.get('/sources/:id', async (rawCtx) => {
-			const ctx = rawCtx as unknown as HandlerCtx
-			const principal = await ctx.requirePermission('source:read')
-			const row = await scopedTransaction(sql, principal.tenantId, (tx) =>
-				tx<SourceRow[]>`
+						if (!inserted) throw new HttpError(500, 'insert_failed')
+						// business change + audit commit atomically (HARD-007)
+						await recordAuditInTx(tx, {
+							tenantId: principal.tenantId,
+							actorType: 'user',
+							actorId: principal.userId,
+							action: 'source.created',
+							entityType: 'source',
+							entityId: inserted.id,
+							afterRef: { title: inserted.title },
+							reason: (body.reason as string) || null,
+							traceId: ctx.traceId,
+						})
+						return { created: inserted }
+					},
+				)
+				if ('error' in row) {
+					ctx.set.status = 400
+					return row
+				}
+				ctx.set.status = 201
+				return { id: row.created.id, title: row.created.title }
+			})
+			.get('/sources/:id', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('source:read')
+				const row = await scopedTransaction(sql, principal.tenantId, (tx) =>
+					tx<SourceRow[]>`
         select * from sources where id = ${ctx.params.id}::uuid limit 1
       `.then((rows) => rows[0]),
-			)
-			if (!row || row.tenant_id !== principal.tenantId) {
-				ctx.set.status = 404
-				return { error: 'not_found' }
-			}
-			const decision = await checkAccess(
-				sql,
-				principal,
-				'source:read',
-				row.access_scope_id,
-			)
-			if (!decision.allowed) {
-				log.warn('scope denied', {
-					reasonCode: decision.reasonCode,
-					traceId: ctx.traceId,
-				})
-				throw new HttpError(403, 'forbidden', decision.reasonCode)
-			}
-			return row
-		})
-		.get('/sources', async (rawCtx) => {
-			const ctx = rawCtx as unknown as HandlerCtx
-			const principal = await ctx.requirePermission('source:read')
-			// principal.scopes is pre-expanded to descendants, so this restricts
-			// the list exactly like the detail endpoint's scope check
-			return scopedTransaction(
-				sql,
-				principal.tenantId,
-				(tx) =>
-					tx<SourceRow[]>`
+				)
+				if (!row || row.tenant_id !== principal.tenantId) {
+					ctx.set.status = 404
+					return { error: 'not_found' }
+				}
+				const decision = await checkAccess(
+					sql,
+					principal,
+					'source:read',
+					row.access_scope_id,
+				)
+				if (!decision.allowed) {
+					log.warn('scope denied', {
+						reasonCode: decision.reasonCode,
+						traceId: ctx.traceId,
+					})
+					throw new HttpError(403, 'forbidden', decision.reasonCode)
+				}
+				return row
+			})
+			.get('/sources', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('source:read')
+				// principal.scopes is pre-expanded to descendants, so this restricts
+				// the list exactly like the detail endpoint's scope check
+				return scopedTransaction(
+					sql,
+					principal.tenantId,
+					(tx) =>
+						tx<SourceRow[]>`
 					select * from sources
 					where tenant_id = ${principal.tenantId}::uuid
 						and access_scope_id = any(${principal.scopes}::uuid[])
 					order by created_at desc limit 100
 				`,
-			)
-		})
-		.patch('/sources/:id/metadata', async (rawCtx) => {
-			const ctx = rawCtx as unknown as HandlerCtx
-			const principal = await ctx.requirePermission('source:update_metadata')
-			ctx.requireCsrf()
-			const body = (ctx.body ?? {}) as Record<string, unknown>
-			const patch = {
-				title: typeof body.title === 'string' && body.title ? body.title : null,
-				author:
-					typeof body.author === 'string' && body.author ? body.author : null,
-				language:
-					typeof body.language === 'string' && body.language
-						? body.language
-						: null,
-				edition:
-					typeof body.edition === 'string' && body.edition
-						? body.edition
-						: null,
-				publisher:
-					typeof body.publisher === 'string' && body.publisher
-						? body.publisher
-						: null,
-				rights_status:
-					typeof body.rightsStatus === 'string' && body.rightsStatus
-						? body.rightsStatus
-						: null,
-			}
-			if (Object.values(patch).every((v) => v === null)) {
-				ctx.set.status = 400
-				return {
-					error: 'validation_failed',
-					fields: ['title|author|language|edition|publisher|rightsStatus'],
+				)
+			})
+			.patch('/sources/:id/metadata', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('source:update_metadata')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				const patch = {
+					title:
+						typeof body.title === 'string' && body.title ? body.title : null,
+					author:
+						typeof body.author === 'string' && body.author ? body.author : null,
+					language:
+						typeof body.language === 'string' && body.language
+							? body.language
+							: null,
+					edition:
+						typeof body.edition === 'string' && body.edition
+							? body.edition
+							: null,
+					publisher:
+						typeof body.publisher === 'string' && body.publisher
+							? body.publisher
+							: null,
+					rights_status:
+						typeof body.rightsStatus === 'string' && body.rightsStatus
+							? body.rightsStatus
+							: null,
 				}
-			}
-			// read-before-write + scope check + update + audit in ONE
-			// tenant-scoped transaction (HARD-007)
-			const outcome = await scopedTransaction(
-				sql,
-				principal.tenantId,
-				async (tx) => {
-					const [b] = await tx<SourceRow[]>`
+				if (Object.values(patch).every((v) => v === null)) {
+					ctx.set.status = 400
+					return {
+						error: 'validation_failed',
+						fields: ['title|author|language|edition|publisher|rightsStatus'],
+					}
+				}
+				// read-before-write + scope check + update + audit in ONE
+				// tenant-scoped transaction (HARD-007)
+				const outcome = await scopedTransaction(
+					sql,
+					principal.tenantId,
+					async (tx) => {
+						const [b] = await tx<SourceRow[]>`
 					select * from sources where id = ${ctx.params.id}::uuid limit 1
 				`
-					if (!b || b.tenant_id !== principal.tenantId)
-						return { code: 'not_found' as const }
-					// scope check on the CURRENT scope: tenant-wide update_metadata
-					// alone must not touch out-of-scope sources
-					const scopeDecision = await checkAccess(
-						tx,
-						principal,
-						'source:read',
-						b.access_scope_id,
-					)
-					if (!scopeDecision.allowed) {
-						log.warn('scope denied', {
-							reasonCode: scopeDecision.reasonCode,
-							traceId: ctx.traceId,
-						})
-						return {
-							code: 'forbidden' as const,
-							reasonCode: scopeDecision.reasonCode,
+						if (!b || b.tenant_id !== principal.tenantId)
+							return { code: 'not_found' as const }
+						// scope check on the CURRENT scope: tenant-wide update_metadata
+						// alone must not touch out-of-scope sources
+						const scopeDecision = await checkAccess(
+							tx,
+							principal,
+							'source:read',
+							b.access_scope_id,
+						)
+						if (!scopeDecision.allowed) {
+							log.warn('scope denied', {
+								reasonCode: scopeDecision.reasonCode,
+								traceId: ctx.traceId,
+							})
+							return {
+								code: 'forbidden' as const,
+								reasonCode: scopeDecision.reasonCode,
+							}
 						}
-					}
-					const [a] = await tx<SourceRow[]>`
+						const [a] = await tx<SourceRow[]>`
 					update sources set
 						title = coalesce(${patch.title}, title),
 						author = coalesce(${patch.author}, author),
@@ -433,36 +443,222 @@ function sourceRoutes(deps: AppDeps) {
 					where id = ${ctx.params.id}::uuid
 					returning *
 				`
-					if (!a) throw new HttpError(500, 'update_failed')
-					await recordAuditInTx(tx, {
-						tenantId: principal.tenantId,
-						actorType: 'user',
-						actorId: principal.userId,
-						action: 'source.metadata_updated',
-						entityType: 'source',
-						entityId: ctx.params.id,
-						beforeRef: { title: b.title, rights_status: b.rights_status },
-						afterRef: { title: a.title, rights_status: a.rights_status },
-						reason: (body.reason as string) || null,
-						traceId: ctx.traceId,
-					})
-					return { code: 'ok' as const, before: b, after: a }
-				},
-			)
-			if (outcome.code === 'not_found') {
-				ctx.set.status = 404
-				return { error: 'not_found' }
-			}
-			if (outcome.code === 'forbidden') {
-				throw new HttpError(403, 'forbidden', outcome.reasonCode)
-			}
-			return { id: outcome.after.id, title: outcome.after.title }
-		})
-		.get('/audit/events', async (rawCtx) => {
-			const ctx = rawCtx as unknown as HandlerCtx
-			const principal = await ctx.requirePermission('audit:read')
-			return scopedTransaction(sql, principal.tenantId, (tx) =>
-				listAudit(tx, { tenantId: principal.tenantId, limit: 100 }),
-			)
-		})
+						if (!a) throw new HttpError(500, 'update_failed')
+						await recordAuditInTx(tx, {
+							tenantId: principal.tenantId,
+							actorType: 'user',
+							actorId: principal.userId,
+							action: 'source.metadata_updated',
+							entityType: 'source',
+							entityId: ctx.params.id,
+							beforeRef: { title: b.title, rights_status: b.rights_status },
+							afterRef: { title: a.title, rights_status: a.rights_status },
+							reason: (body.reason as string) || null,
+							traceId: ctx.traceId,
+						})
+						return { code: 'ok' as const, before: b, after: a }
+					},
+				)
+				if (outcome.code === 'not_found') {
+					ctx.set.status = 404
+					return { error: 'not_found' }
+				}
+				if (outcome.code === 'forbidden') {
+					throw new HttpError(403, 'forbidden', outcome.reasonCode)
+				}
+				return { id: outcome.after.id, title: outcome.after.title }
+			})
+
+			// ------------------------------------------------------------------
+			// SRC-002: content-addressed immutable upload pipeline
+			// ------------------------------------------------------------------
+			.post('/sources/:id/revisions', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('source:create')
+				ctx.requireCsrf()
+				const buf = Buffer.from(await ctx.request.arrayBuffer())
+				if (buf.length === 0) {
+					ctx.set.status = 400
+					return { error: 'empty_file' }
+				}
+				if (buf.length > MAX_UPLOAD_BYTES) {
+					ctx.set.status = 413
+					return { error: 'file_too_large', maxBytes: MAX_UPLOAD_BYTES }
+				}
+				const sha256 = createHash('sha256').update(buf).digest('hex')
+				const key = contentKey(sha256)
+				// content-addressed dedupe: identical bytes already stored → reuse
+				const stat = await headObject(cfg, key)
+				const deduplicated = stat.exists
+				if (!stat.exists) {
+					// the object is fully written BEFORE any revision row exists, so
+					// a failed/interrupted upload can never leave an active revision
+					await putObject(
+						cfg,
+						key,
+						buf,
+						ctx.request.headers.get('content-type') ??
+							'application/octet-stream',
+					)
+				}
+				// revision numbers race under concurrent uploads: retry on conflict
+				let outcome:
+					| { code: 'not_found' }
+					| { code: 'ok'; revisionId: string; revisionNumber: number } = {
+					code: 'not_found',
+				}
+				for (let attempt = 0; attempt < 3; attempt++) {
+					try {
+						outcome = await scopedTransaction(
+							sql,
+							principal.tenantId,
+							async (tx) => {
+								const [src] = await tx<
+									{ id: string; tenant_id: string; access_scope_id: string }[]
+								>`select id, tenant_id, access_scope_id from sources
+							where id = ${ctx.params.id}::uuid limit 1`
+								if (!src || src.tenant_id !== principal.tenantId)
+									return { code: 'not_found' as const }
+								const scopeDecision = await checkAccess(
+									tx,
+									principal,
+									'source:read',
+									src.access_scope_id,
+								)
+								if (!scopeDecision.allowed)
+									throw new HttpError(
+										403,
+										'forbidden',
+										scopeDecision.reasonCode,
+									)
+								const [max] = await tx<{ n: number }[]>`
+							select coalesce(max(revision_number), 0)::int as n
+							from source_revisions where source_id = ${src.id}::uuid`
+								const [rev] = await tx<
+									{ id: string; revision_number: number }[]
+								>`
+							insert into source_revisions (source_id, revision_number, status, created_by)
+							values (${src.id}::uuid, ${(max?.n ?? 0) + 1}, 'active', ${principal.userId}::uuid)
+							returning id, revision_number`
+								await tx`
+							insert into source_files
+								(source_revision_id, sha256, storage_key, mime_type, size_bytes)
+							values
+								(${rev.id}::uuid, ${sha256}, ${key},
+								 ${ctx.request.headers.get('content-type') ?? 'application/octet-stream'},
+								 ${buf.length})`
+								await recordAuditInTx(tx, {
+									tenantId: principal.tenantId,
+									actorType: 'user',
+									actorId: principal.userId,
+									action: 'source.revision_created',
+									entityType: 'source_revision',
+									entityId: rev.id,
+									afterRef: { sha256, sizeBytes: buf.length, deduplicated },
+									traceId: ctx.traceId,
+								})
+								return {
+									code: 'ok' as const,
+									revisionId: rev.id,
+									revisionNumber: rev.revision_number,
+								}
+							},
+						)
+						break
+					} catch (err) {
+						const retryable =
+							err instanceof Error &&
+							err.message.includes('source_revisions_source_id')
+						if (!retryable || attempt === 2) throw err
+					}
+				}
+				if (outcome.code === 'not_found') {
+					ctx.set.status = 404
+					return { error: 'not_found' }
+				}
+				ctx.set.status = 201
+				return {
+					revisionId: outcome.revisionId,
+					revisionNumber: outcome.revisionNumber,
+					sha256,
+					sizeBytes: buf.length,
+					objectKey: key,
+					deduplicated,
+				}
+			})
+			.get('/sources/:id/revisions', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('source:read')
+				return scopedTransaction(
+					sql,
+					principal.tenantId,
+					(tx) =>
+						tx`
+					select sr.id, sr.revision_number, sr.status, sr.created_at,
+								 sf.sha256, sf.storage_key, sf.mime_type, sf.size_bytes
+					from source_revisions sr
+					left join source_files sf on sf.source_revision_id = sr.id
+					where sr.source_id = ${ctx.params.id}::uuid
+					order by sr.revision_number desc`,
+				)
+			})
+			.get('/sources/:id/revisions/:revisionId/file', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('source:read')
+				const file = await scopedTransaction(
+					sql,
+					principal.tenantId,
+					async (tx) => {
+						const [row] = await tx<
+							{
+								storage_key: string
+								mime_type: string
+								sha256: string
+								size_bytes: number
+								access_scope_id: string
+							}[]
+						>`select sf.storage_key, sf.mime_type, sf.sha256, sf.size_bytes, s.access_scope_id
+					from source_revisions sr
+					join sources s on s.id = sr.source_id
+					join source_files sf on sf.source_revision_id = sr.id
+					where sr.id = ${ctx.params.revisionId}::uuid
+						and sr.source_id = ${ctx.params.id}::uuid
+					limit 1`
+						if (!row) return null
+						const decision = await checkAccess(
+							tx,
+							principal,
+							'source:read',
+							row.access_scope_id,
+						)
+						if (!decision.allowed)
+							throw new HttpError(403, 'forbidden', decision.reasonCode)
+						return row
+					},
+				)
+				if (!file) {
+					ctx.set.status = 404
+					return { error: 'not_found' }
+				}
+				const stored = await getObject(cfg, file.storage_key)
+				if (!stored.ok || !stored.body) {
+					ctx.set.status = 404
+					return { error: 'stored_object_missing' }
+				}
+				return new Response(stored.body, {
+					headers: {
+						'content-type': file.mime_type,
+						'x-content-sha256': file.sha256,
+						'content-length': String(file.size_bytes),
+					},
+				})
+			})
+			.get('/audit/events', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('audit:read')
+				return scopedTransaction(sql, principal.tenantId, (tx) =>
+					listAudit(tx, { tenantId: principal.tenantId, limit: 100 }),
+				)
+			})
+	)
 }

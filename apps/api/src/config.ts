@@ -22,6 +22,7 @@ export interface Config {
 	storageBucket: string
 	storageAccessKey: string
 	storageSecretKey: string
+	storageRegion: string
 	oidcIssuer: string
 	oidcClientId: string
 	oidcClientSecret: string
@@ -50,6 +51,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		storageBucket: optional(env, 'STORAGE_BUCKET', 'aifiqh-originals'),
 		storageAccessKey: optional(env, 'STORAGE_ACCESS_KEY', 'minioadmin'),
 		storageSecretKey: optional(env, 'STORAGE_SECRET_KEY', 'minioadmin'),
+		storageRegion: optional(env, 'STORAGE_REGION', 'us-east-1'),
 		oidcIssuer: optional(env, 'OIDC_ISSUER', 'http://localhost:4011'),
 		oidcClientId: optional(env, 'OIDC_CLIENT_ID', 'aifiqh-api'),
 		oidcClientSecret: optional(env, 'OIDC_CLIENT_SECRET', 'dev-client-secret'),

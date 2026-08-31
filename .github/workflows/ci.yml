@@ -35,6 +35,20 @@ jobs:
           # the archive must announce itself as non-runtime
           head -5 docs/archive/okf-prototype/README.md | grep -q "Archived Design Artifact"
 
+      - name: Start disposable MinIO container
+        run: |
+          docker rm -f aifiqh-ci-minio 2>/dev/null || true
+          docker run -d --name aifiqh-ci-minio \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            -p 127.0.0.1:19000:9000 minio/minio:latest server /data
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:19000/minio/health/live && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:19000/minio/health/live
+          docker run --rm --network host minio/mc:latest \
+            sh -c "mc alias set ci http://127.0.0.1:19000 minioadmin minioadmin && mc mb --ignore-existing ci/aifiqh-originals"
+
       - name: Start disposable pgvector container
         run: |
           docker rm -f aifiqh-ci-pg 2>/dev/null || true
@@ -69,12 +83,14 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Test (unit + DB integration)
+      - name: Test (unit + DB integration + storage)
         run: bun test
+        env:
+          STORAGE_ENDPOINT: http://127.0.0.1:19000
 
       - name: Build
         run: bun run build
 
-      - name: Stop pgvector container
+      - name: Stop disposable containers
         if: always()
-        run: docker rm -f aifiqh-ci-pg
+        run: docker rm -f aifiqh-ci-pg aifiqh-ci-minio
