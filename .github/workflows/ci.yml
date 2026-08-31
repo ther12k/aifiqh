@@ -41,11 +41,19 @@ jobs:
           docker run -d --name aifiqh-ci-pg \
             -e POSTGRES_USER=aifiqh -e POSTGRES_PASSWORD=aifiqh -e POSTGRES_DB=aifiqh \
             -p 127.0.0.1:15432:5432 pgvector/pgvector:pg16
-          for i in $(seq 1 30); do
-            docker exec aifiqh-ci-pg pg_isready -U aifiqh -d aifiqh && break
+          # postgres entrypoint restarts once during first init; require
+          # consecutive successes so the check cannot land in that window
+          ready=0
+          for i in $(seq 1 60); do
+            if docker exec aifiqh-ci-pg pg_isready -U aifiqh -d aifiqh >/dev/null 2>&1; then
+              ready=$((ready+1))
+              [ "$ready" -ge 3 ] && break
+            else
+              ready=0
+            fi
             sleep 1
           done
-          docker exec aifiqh-ci-pg pg_isready -U aifiqh -d aifiqh
+          [ "$ready" -ge 3 ] || { docker logs aifiqh-ci-pg | tail -30; exit 1; }
 
       - uses: oven-sh/setup-bun@v2
         with:
