@@ -80,6 +80,9 @@ jobs:
       - name: Lint (biome)
         run: bunx biome check .
 
+      - name: RLS policy lint (advisory report)
+        run: bun scripts/check_rls_policies.ts
+
       - name: Typecheck
         run: bun run typecheck
 

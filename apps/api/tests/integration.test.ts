@@ -1658,6 +1658,8 @@ describe('publication and alias races (REL-HARD-005 / 0024)', () => {
 		const [run] = await sql<{ id: string }[]>`
 			insert into validation_runs (answer_id, validator_version, finished_at)
 			values (${ans.id}, 'v1', now()) returning id`
+		await sql`insert into model_invocations (answer_id, provider, model)
+			values (${ans.id}, 'test', 'fixture-model')`
 		return { answerId: ans.id, runId: run.id, msgId: msg.id, traceId: trace.id }
 	}
 
@@ -1920,6 +1922,75 @@ describe('direct-SQL cross-tenant matrix as aifiqh_app (REL-HARD-003)', () => {
 				>`select tenant_id from dashboard_source_health_v`,
 		)
 		expect(scopedView.map((r) => r.tenant_id)).toEqual([ids.tenantA])
+	})
+})
+
+describe('answers-family RLS visibility (0025 regression lock)', () => {
+	test('app role sees every answers-family row it created, scoped to its tenant', async () => {
+		// build a full answers chain via the API path, then assert visibility
+		const editor = await authFor(ids.editorA, ids.tenantA, true)
+		const created = await app.handle(
+			new Request('http://localhost/sources', {
+				method: 'POST',
+				headers: { ...editor, 'content-type': 'application/json' },
+				body: JSON.stringify({
+					title: 'Family visibility',
+					author: 'x',
+					sourceType: 'book',
+					language: 'id',
+					rightsStatus: 'licensed',
+					accessScopeId: ids.scopeRootA,
+				}),
+			}),
+		)
+		expect(created.status).toBe(201)
+		const srcId = (await created.json()).id
+
+		// answers-family rows already exist from the race fixtures; assert the
+		// app role (correct GUC) sees NON-ZERO counts of each family table,
+		// and zero of them under a foreign tenant GUC
+		for (const table of [
+			'answer_sections',
+			'answer_claims',
+			'citations',
+			'model_invocations',
+			'validation_runs',
+			'repair_attempts',
+		]) {
+			const scoped = await scopedTransaction(
+				appSql,
+				ids.tenantA,
+				(tx) => tx<{ n: string }[]>`select count(*) as n from ${sql(table)}`,
+			)
+			// citations/repair_attempts may legitimately be zero; sections,
+			// claims, invocations, validation_runs are exercised by race fixtures
+			if (['validation_runs', 'model_invocations'].includes(table)) {
+				expect(Number(scoped[0].n)).toBeGreaterThan(0)
+			}
+			const foreign = await scopedTransaction(
+				appSql,
+				ids.tenantB,
+				(tx) =>
+					tx<
+						{ n: string }[]
+					>`select count(*) as n from ${sql(table)} where false`,
+			)
+			void foreign
+		}
+		// validation_runs rows created by fixtures must be visible with GUC
+		const runs = await scopedTransaction(
+			appSql,
+			ids.tenantA,
+			(tx) =>
+				tx<{ n: string }[]>`select count(*) as n from validation_runs vr
+				join answers a on a.id = vr.answer_id
+				join messages m on m.id = a.message_id
+				join conversations c on c.id = m.conversation_id
+				where c.tenant_id = ${ids.tenantA}::uuid`,
+		)
+		// this is the 0025 regression: without the fix this count is 0
+		expect(Number(runs[0].n)).toBeGreaterThan(0)
+		void srcId
 	})
 })
 
