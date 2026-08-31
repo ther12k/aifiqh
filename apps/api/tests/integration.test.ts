@@ -1239,9 +1239,20 @@ describe('content-addressed upload pipeline (SRC-002)', () => {
 		)
 		const countBefore = (await before.json()).length
 		// tenant A editor uploading to a tenant B source: 404, no revision row
-		const srcB = await scopedTransaction(sql, ids.tenantB, (tx) =>
-			tx<{ id: string }[]>`select id from sources limit 1`.then((r) => r[0]),
-		)
+		// pick a source that genuinely belongs to tenant B: the owner client
+		// bypasses RLS, so an unfiltered `limit 1` can return any tenant's row
+		const srcB = await scopedTransaction(sql, ids.tenantB, async (tx) => {
+			const [found] = await tx<{ id: string }[]>`
+				select id from sources where tenant_id = ${ids.tenantB}::uuid limit 1`
+			if (found) return found
+			const [root] = await tx<{ id: string }[]>`
+				select id from access_scopes where tenant_id = ${ids.tenantB}::uuid and key = 'root' limit 1`
+			const [created] = await tx<{ id: string }[]>`
+				insert into sources (tenant_id, title, author, source_type, language, rights_status, access_scope_id)
+				values (${ids.tenantB}::uuid, 'B upload fixture', 'x', 'book', 'id', 'licensed', ${root.id})
+				returning id`
+			return created
+		})
 		expect(srcB).toBeDefined()
 		const res = await app.handle(
 			new Request(`http://localhost/sources/${srcB!.id}/revisions`, {
