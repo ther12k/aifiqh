@@ -1722,8 +1722,12 @@ describe('publication and alias races (REL-HARD-005 / 0024)', () => {
 		// insert must be rejected
 		await sql`update validation_issues set resolved = true
 			where run_id = ${runId}::uuid and code = 'RACE'`
-		await scopedTransaction(clientA as unknown as Sql, ids.tenantA, (tx) =>
-			tx`update answers set status = 'published' where id = ${answerId}::uuid`)
+		await scopedTransaction(
+			clientA as unknown as Sql,
+			ids.tenantA,
+			(tx) =>
+				tx`update answers set status = 'published' where id = ${answerId}::uuid`,
+		)
 		await expectReject(
 			scopedTransaction(
 				clientB as unknown as Sql,
