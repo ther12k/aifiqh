@@ -1332,6 +1332,306 @@ describe('content-addressed upload pipeline (SRC-002)', () => {
 	})
 })
 
+describe('upload hardening (review findings)', () => {
+	test('unauthorized upload never touches object storage', async () => {
+		const badId = crypto.randomUUID()
+		const payload = Buffer.from(`should never be stored ${crypto.randomUUID()}`)
+		const key = `originals/${createHash('sha256').update(payload).digest('hex')}`
+		const res = await app.handle(
+			new Request(`http://localhost/sources/${badId}/revisions`, {
+				method: 'POST',
+				headers: {
+					...(await authFor(ids.editorA, ids.tenantA, true)),
+					'content-type': 'text/plain',
+				},
+				body: new Uint8Array(payload),
+			}),
+		)
+		expect(res.status).toBe(404)
+		// no orphaned object left behind
+		const { headObject } = await import('../src/storage/s3')
+		expect((await headObject(cfg, key)).exists).toBeFalse()
+	})
+
+	test('out-of-scope editor cannot upload (and nothing is stored)', async () => {
+		const extEditor = await makeUser(
+			`ext4-${suffix}@test`,
+			ids.tenantA,
+			'editor',
+			[ids.scopeExternalA],
+		)
+		const payload = Buffer.from(`out of scope upload ${crypto.randomUUID()}`)
+		const key = `originals/${createHash('sha256').update(payload).digest('hex')}`
+		const list = await app.handle(
+			new Request('http://localhost/sources', {
+				headers: { cookie: (await authFor(ids.editorA, ids.tenantA)).cookie },
+			}),
+		)
+		const sources = await list.json()
+		const target = sources[0].id
+		const res = await app.handle(
+			new Request(`http://localhost/sources/${target}/revisions`, {
+				method: 'POST',
+				headers: {
+					...(await authFor(extEditor.userId, ids.tenantA, true)),
+					'content-type': 'text/plain',
+				},
+				body: new Uint8Array(payload),
+			}),
+		)
+		expect(res.status).toBe(403)
+		const { headObject } = await import('../src/storage/s3')
+		expect((await headObject(cfg, key)).exists).toBeFalse()
+	})
+
+	test('revision list enforces the source access scope', async () => {
+		const extReader = await makeUser(
+			`ext5-${suffix}@test`,
+			ids.tenantA,
+			'reader',
+			[ids.scopeExternalA],
+		)
+		const list = await app.handle(
+			new Request('http://localhost/sources', {
+				headers: { cookie: (await authFor(ids.editorA, ids.tenantA)).cookie },
+			}),
+		)
+		const target = (await list.json())[0].id
+		const denied = await app.handle(
+			new Request(`http://localhost/sources/${target}/revisions`, {
+				headers: {
+					cookie: (await authFor(extReader.userId, ids.tenantA)).cookie,
+				},
+			}),
+		)
+		expect(denied.status).toBe(403)
+		expect((await denied.json()).reasonCode).toContain('SCOPE_DENIED')
+	})
+})
+
+describe('revision deprecation lifecycle (SRC-003)', () => {
+	let sourceId = ''
+	let revisionId = ''
+
+	test('admin deprecates an active revision with reason + replacement', async () => {
+		const created = await app.handle(
+			new Request('http://localhost/sources', {
+				method: 'POST',
+				headers: {
+					...(await authFor(ids.editorA, ids.tenantA, true)),
+					'content-type': 'application/json',
+				},
+				body: JSON.stringify({
+					title: 'Deprecation target',
+					author: 'x',
+					sourceType: 'book',
+					language: 'ar',
+					rightsStatus: 'licensed',
+					accessScopeId: ids.scopeRootA,
+				}),
+			}),
+		)
+		sourceId = (await created.json()).id
+		const first = await app.handle(
+			new Request(`http://localhost/sources/${sourceId}/revisions`, {
+				method: 'POST',
+				headers: {
+					...(await authFor(ids.editorA, ids.tenantA, true)),
+					'content-type': 'text/plain',
+				},
+				body: new Uint8Array(Buffer.from(`old edition ${crypto.randomUUID()}`)),
+			}),
+		)
+		const second = await app.handle(
+			new Request(`http://localhost/sources/${sourceId}/revisions`, {
+				method: 'POST',
+				headers: {
+					...(await authFor(ids.editorA, ids.tenantA, true)),
+					'content-type': 'text/plain',
+				},
+				body: new Uint8Array(Buffer.from(`new edition ${crypto.randomUUID()}`)),
+			}),
+		)
+		revisionId = (await first.json()).revisionId
+		const replacementId = (await second.json()).revisionId
+
+		const dep = await app.handle(
+			new Request(
+				`http://localhost/sources/${sourceId}/revisions/${revisionId}/deprecate`,
+				{
+					method: 'POST',
+					headers: {
+						...(await authFor(ids.adminA, ids.tenantA, true)),
+						'content-type': 'application/json',
+					},
+					body: JSON.stringify({
+						reason: 'superseded print',
+						replacementRevisionId: replacementId,
+					}),
+				},
+			),
+		)
+		expect(dep.status).toBe(200)
+		expect((await dep.json()).status).toBe('deprecated')
+
+		// replacement chain + status event + audit recorded
+		const chain = await scopedTransaction(
+			sql,
+			ids.tenantA,
+			(tx) =>
+				tx<{ replaces_revision_id: string | null }[]>`
+				select replaces_revision_id from source_revisions where id = ${replacementId}::uuid`,
+		)
+		expect(chain[0].replaces_revision_id).toBe(revisionId)
+		const events = await scopedTransaction(
+			sql,
+			ids.tenantA,
+			(tx) =>
+				tx<{ to_status: string; reason: string }[]>`
+				select to_status, reason from source_revision_status_events
+				where source_revision_id = ${revisionId}::uuid`,
+		)
+		expect(events[0].to_status).toBe('deprecated')
+		expect(events[0].reason).toBe('superseded print')
+		const audits = await scopedTransaction(
+			sql,
+			ids.tenantA,
+			(tx) =>
+				tx<{ action: string }[]>`
+				select action from audit_events where entity_id = ${revisionId} order by occurred_at`,
+		)
+		expect(audits.map((a) => a.action)).toContain('source.revision_deprecated')
+	})
+
+	test('editor without source:deprecate is denied', async () => {
+		const res = await app.handle(
+			new Request(
+				`http://localhost/sources/${sourceId}/revisions/${revisionId}/deprecate`,
+				{
+					method: 'POST',
+					headers: {
+						...(await authFor(ids.editorA, ids.tenantA, true)),
+						'content-type': 'application/json',
+					},
+					body: JSON.stringify({ reason: 'not allowed' }),
+				},
+			),
+		)
+		expect(res.status).toBe(403)
+		expect((await res.json()).reasonCode).toContain(
+			'PERMISSION_DENIED:source:deprecate',
+		)
+	})
+
+	test('deprecating a non-active revision returns 409', async () => {
+		const res = await app.handle(
+			new Request(
+				`http://localhost/sources/${sourceId}/revisions/${revisionId}/deprecate`,
+				{
+					method: 'POST',
+					headers: {
+						...(await authFor(ids.adminA, ids.tenantA, true)),
+						'content-type': 'application/json',
+					},
+					body: JSON.stringify({ reason: 'double deprecate' }),
+				},
+			),
+		)
+		expect(res.status).toBe(409)
+		expect((await res.json()).error).toBe('invalid_state')
+	})
+
+	test('deprecated revision still resolves: file download and listing', async () => {
+		const down = await app.handle(
+			new Request(
+				`http://localhost/sources/${sourceId}/revisions/${revisionId}/file`,
+				{
+					headers: { cookie: (await authFor(ids.readerA, ids.tenantA)).cookie },
+				},
+			),
+		)
+		expect(down.status).toBe(200)
+		expect((await down.arrayBuffer()).byteLength).toBeGreaterThan(0)
+
+		const all = await app.handle(
+			new Request(`http://localhost/sources/${sourceId}/revisions`, {
+				headers: { cookie: (await authFor(ids.readerA, ids.tenantA)).cookie },
+			}),
+		)
+		const rows = await all.json()
+		expect(rows.find((r: { id: string }) => r.id === revisionId).status).toBe(
+			'deprecated',
+		)
+
+		// latest eligible = active only (what new processing must use)
+		const active = await app.handle(
+			new Request(
+				`http://localhost/sources/${sourceId}/revisions?status=active`,
+				{
+					headers: { cookie: (await authFor(ids.readerA, ids.tenantA)).cookie },
+				},
+			),
+		)
+		const activeRows = await active.json()
+		expect(
+			activeRows.every((r: { status: string }) => r.status === 'active'),
+		).toBeTrue()
+		expect(
+			activeRows.find((r: { id: string }) => r.id === revisionId),
+		).toBeUndefined()
+	})
+
+	test('DB rejects resurrection and cross-source replacement pointers', async () => {
+		await expectReject(
+			scopedTransaction(
+				sql,
+				ids.tenantA,
+				(tx) =>
+					tx`update source_revisions set status = 'active' where id = ${revisionId}::uuid`,
+			),
+			'invalid source revision transition',
+		)
+		// replacement must be an ACTIVE revision of the SAME source
+		await expectReject(
+			scopedTransaction(
+				sql,
+				ids.tenantA,
+				(tx) =>
+					tx`update source_revisions set replaces_revision_id = ${revisionId}::uuid
+					where id = ${revisionId}::uuid`,
+			),
+			'replaces_revision_id must reference',
+		)
+	})
+
+	test('reason is required', async () => {
+		const list = await app.handle(
+			new Request(
+				`http://localhost/sources/${sourceId}/revisions?status=active`,
+				{
+					headers: { cookie: (await authFor(ids.adminA, ids.tenantA)).cookie },
+				},
+			),
+		)
+		const target = (await list.json())[0].id
+		const res = await app.handle(
+			new Request(
+				`http://localhost/sources/${sourceId}/revisions/${target}/deprecate`,
+				{
+					method: 'POST',
+					headers: {
+						...(await authFor(ids.adminA, ids.tenantA, true)),
+						'content-type': 'application/json',
+					},
+					body: JSON.stringify({}),
+				},
+			),
+		)
+		expect(res.status).toBe(400)
+		expect((await res.json()).fields).toContain('reason')
+	})
+})
+
 describe('durable auth state (sessionStore / 0020)', () => {
 	test('issued session is not revoked; revocation sticks; unknown fails closed', async () => {
 		const sessionId = crypto.randomUUID()

@@ -40,13 +40,13 @@ jobs:
           docker rm -f aifiqh-ci-minio 2>/dev/null || true
           docker run -d --name aifiqh-ci-minio \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            -p 127.0.0.1:19000:9000 minio/minio:latest server /data
+            -p 127.0.0.1:19000:9000 minio/minio:RELEASE.2024-06-13T22-53-53Z server /data
           for i in $(seq 1 30); do
             curl -sf http://127.0.0.1:19000/minio/health/live && break
             sleep 1
           done
           curl -sf http://127.0.0.1:19000/minio/health/live
-          docker run --rm --network host --entrypoint /bin/sh minio/mc:latest \
+          docker run --rm --network host --entrypoint /bin/sh minio/mc:RELEASE.2024-11-21T17-21-54Z \
             -c "mc alias set ci http://127.0.0.1:19000 minioadmin minioadmin && mc mb --ignore-existing ci/aifiqh-originals"
 
       - name: Start disposable pgvector container
@@ -54,7 +54,7 @@ jobs:
           docker rm -f aifiqh-ci-pg 2>/dev/null || true
           docker run -d --name aifiqh-ci-pg \
             -e POSTGRES_USER=aifiqh -e POSTGRES_PASSWORD=aifiqh -e POSTGRES_DB=aifiqh \
-            -p 127.0.0.1:15432:5432 pgvector/pgvector:pg16
+            -p 127.0.0.1:15432:5432 pgvector/pgvector:0.8.0-pg16
           # postgres entrypoint restarts once during first init; require
           # consecutive successes so the check cannot land in that window
           ready=0

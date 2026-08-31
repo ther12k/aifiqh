@@ -476,6 +476,53 @@ function sourceRoutes(deps: AppDeps) {
 				const ctx = rawCtx as unknown as HandlerCtx
 				const principal = await ctx.requirePermission('source:create')
 				ctx.requireCsrf()
+				// refuse oversized bodies before buffering anything
+				const declaredLength = Number(
+					ctx.request.headers.get('content-length') ?? '0',
+				)
+				if (declaredLength > MAX_UPLOAD_BYTES) {
+					ctx.set.status = 413
+					return { error: 'file_too_large', maxBytes: MAX_UPLOAD_BYTES }
+				}
+				// authorize BEFORE touching object storage: an upload against a
+				// missing/foreign/out-of-scope source must not leave an orphaned
+				// object behind (content-addressed keys would keep it forever)
+				const precheck = await scopedTransaction(
+					sql,
+					principal.tenantId,
+					async (tx) => {
+						const [src] = await tx<
+							{ id: string; tenant_id: string; access_scope_id: string }[]
+						>`select id, tenant_id, access_scope_id from sources
+							where id = ${ctx.params.id}::uuid limit 1`
+						if (!src || src.tenant_id !== principal.tenantId)
+							return { code: 'not_found' as const }
+						const decision = await checkAccess(
+							tx,
+							principal,
+							'source:read',
+							src.access_scope_id,
+						)
+						if (!decision.allowed) {
+							log.warn('scope denied', {
+								reasonCode: decision.reasonCode,
+								traceId: ctx.traceId,
+							})
+							return {
+								code: 'forbidden' as const,
+								reasonCode: decision.reasonCode,
+							}
+						}
+						return { code: 'ok' as const }
+					},
+				)
+				if (precheck.code === 'not_found') {
+					ctx.set.status = 404
+					return { error: 'not_found' }
+				}
+				if (precheck.code === 'forbidden') {
+					throw new HttpError(403, 'forbidden', precheck.reasonCode)
+				}
 				const buf = Buffer.from(await ctx.request.arrayBuffer())
 				if (buf.length === 0) {
 					ctx.set.status = 400
@@ -589,18 +636,50 @@ function sourceRoutes(deps: AppDeps) {
 			.get('/sources/:id/revisions', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
 				const principal = await ctx.requirePermission('source:read')
-				return scopedTransaction(
+				const statusFilter = (
+					ctx as unknown as { query?: Record<string, string> }
+				).query?.status
+				const result = await scopedTransaction(
 					sql,
 					principal.tenantId,
-					(tx) =>
-						tx`
-					select sr.id, sr.revision_number, sr.status, sr.created_at,
-								 sf.sha256, sf.storage_key, sf.mime_type, sf.size_bytes
-					from source_revisions sr
-					left join source_files sf on sf.source_revision_id = sr.id
-					where sr.source_id = ${ctx.params.id}::uuid
-					order by sr.revision_number desc`,
+					async (tx) => {
+						// same scope discipline as the detail/download routes: the
+						// caller must hold the source's access scope
+						const [src] = await tx<{ access_scope_id: string }[]>`
+							select access_scope_id from sources
+							where id = ${ctx.params.id}::uuid limit 1`
+						if (!src) return { code: 'not_found' as const }
+						const decision = await checkAccess(
+							tx,
+							principal,
+							'source:read',
+							src.access_scope_id,
+						)
+						if (!decision.allowed) {
+							return {
+								code: 'forbidden' as const,
+								reasonCode: decision.reasonCode,
+							}
+						}
+						const rows = await tx`
+						select sr.id, sr.revision_number, sr.status, sr.created_at,
+									 sf.sha256, sf.storage_key, sf.mime_type, sf.size_bytes
+						from source_revisions sr
+						left join source_files sf on sf.source_revision_id = sr.id
+						where sr.source_id = ${ctx.params.id}::uuid
+							and (${statusFilter ?? null}::text is null or sr.status = ${statusFilter ?? null})
+						order by sr.revision_number desc`
+						return { code: 'ok' as const, rows }
+					},
 				)
+				if (result.code === 'not_found') {
+					ctx.set.status = 404
+					return { error: 'not_found' }
+				}
+				if (result.code === 'forbidden') {
+					throw new HttpError(403, 'forbidden', result.reasonCode)
+				}
+				return result.rows
 			})
 			.get('/sources/:id/revisions/:revisionId/file', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
@@ -652,6 +731,98 @@ function sourceRoutes(deps: AppDeps) {
 						'content-length': String(file.size_bytes),
 					},
 				})
+			})
+			// ------------------------------------------------------------------
+			// SRC-003: revision deprecation lifecycle + historical resolution
+			// ------------------------------------------------------------------
+			.post('/sources/:id/revisions/:revisionId/deprecate', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('source:deprecate')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				const reason = typeof body.reason === 'string' ? body.reason.trim() : ''
+				if (!reason) {
+					ctx.set.status = 400
+					return { error: 'validation_failed', fields: ['reason'] }
+				}
+				const replacement =
+					typeof body.replacementRevisionId === 'string' &&
+					body.replacementRevisionId
+						? body.replacementRevisionId
+						: null
+				const result = await scopedTransaction(
+					sql,
+					principal.tenantId,
+					async (tx) => {
+						const [src] = await tx<{ access_scope_id: string }[]>`
+							select access_scope_id from sources
+							where id = ${ctx.params.id}::uuid limit 1`
+						if (!src) return { code: 'not_found' as const }
+						const scopeDecision = await checkAccess(
+							tx,
+							principal,
+							'source:read',
+							src.access_scope_id,
+						)
+						if (!scopeDecision.allowed) {
+							return {
+								code: 'forbidden' as const,
+								reasonCode: scopeDecision.reasonCode,
+							}
+						}
+						const [rev] = await tx<{ id: string; status: string }[]>`
+							select id, status from source_revisions
+							where id = ${ctx.params.revisionId}::uuid
+								and source_id = ${ctx.params.id}::uuid limit 1`
+						if (!rev) return { code: 'not_found' as const }
+						if (rev.status !== 'active') {
+							return { code: 'invalid_state' as const, status: rev.status }
+						}
+						// link the replacement chain: the successor replaces the
+						// deprecated revision (validated by the DB trigger)
+						if (replacement) {
+							await tx`
+								update source_revisions set replaces_revision_id = ${ctx.params.revisionId}::uuid
+								where id = ${replacement}::uuid
+									and source_id = ${ctx.params.id}::uuid
+									and status = 'active'`
+						}
+						await tx`
+							update source_revisions
+							set status = 'deprecated', deprecation_reason = ${reason}
+							where id = ${rev.id}::uuid`
+						await tx`
+							insert into source_revision_status_events
+								(source_revision_id, from_status, to_status, actor_type, actor_id, reason)
+							values
+								(${rev.id}::uuid, 'active', 'deprecated', 'user', ${principal.userId}, ${reason})`
+						await recordAuditInTx(tx, {
+							tenantId: principal.tenantId,
+							actorType: 'user',
+							actorId: principal.userId,
+							action: 'source.revision_deprecated',
+							entityType: 'source_revision',
+							entityId: rev.id,
+							beforeRef: { status: 'active' },
+							afterRef: { status: 'deprecated', reason, replacement },
+							reason,
+							traceId: ctx.traceId,
+						})
+						return { code: 'ok' as const }
+					},
+				)
+				if (result.code === 'not_found') {
+					ctx.set.status = 404
+					return { error: 'not_found' }
+				}
+				if (result.code === 'forbidden') {
+					throw new HttpError(403, 'forbidden', result.reasonCode)
+				}
+				if (result.code === 'invalid_state') {
+					ctx.set.status = 409
+					return { error: 'invalid_state', status: result.status }
+				}
+				return { revisionId: ctx.params.revisionId, status: 'deprecated' }
 			})
 			.get('/audit/events', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
