@@ -18,6 +18,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Archive quarantine assertions
+        run: |
+          # no runtime package may import from the archived design artifact
+          if grep -rn "docs/archive" apps packages; then
+            echo "::error::runtime code references docs/archive"; exit 1
+          fi
+          # no migration may reference archived schemas
+          if grep -rniE "\bokf\b" db/migrations; then
+            echo "::error::migration references archived OKF schemas"; exit 1
+          fi
+          # no deploy artifact may copy the archive
+          if grep -rn "docs/archive" docker Dockerfile* 2>/dev/null; then
+            echo "::error::deployment copies archived material"; exit 1
+          fi
+          # the archive must announce itself as non-runtime
+          head -5 docs/archive/okf-prototype/README.md | grep -q "Archived Design Artifact"
+
       - name: Start disposable pgvector container
         run: |
           docker rm -f aifiqh-ci-pg 2>/dev/null || true

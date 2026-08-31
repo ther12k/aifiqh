@@ -6,7 +6,7 @@ tags: [rz-fiqh, epic, wave-5]
 status: draft
 generated:
   by: agent:zcode
-  at: 2026-08-30T13:14:29Z
+  at: 2026-08-31T04:51:53+07:00
 sources:
   - resource: ../../docs/RZ-Fiqh_Database_First_Engineering_Backlog_v2.0.md
     id: backlog-v2

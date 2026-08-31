@@ -12,6 +12,10 @@ import type { Principal } from '@aifiqh/shared'
 import { SESSION_COOKIE } from '@aifiqh/shared'
 import postgres from 'postgres'
 import { applyMigrations } from '../../../scripts/migrate'
+import {
+	acquireIngestionLock,
+	releaseIngestionLock,
+} from '../../worker/src/ingestLock'
 import { buildApp } from '../src/app'
 import { type OidcClient, upsertIdentity } from '../src/auth/oidc'
 import { checkAccess, loadPrincipal } from '../src/auth/policy'
@@ -1140,4 +1144,112 @@ describe('durable auth state (sessionStore / 0020)', () => {
 		// replay returns nothing
 		expect(await consumeLoginState(sql, state)).toBeNull()
 	})
+})
+
+describe('worker single-instance guard (advisory lock)', () => {
+	test('second worker cannot acquire; release re-enables', async () => {
+		const c1 = postgres(APP_URL, { max: 1 })
+		const c2 = postgres(APP_URL, { max: 1 })
+		expect(await acquireIngestionLock(c1)).toBeTrue()
+		// a second replica exits at startup
+		expect(await acquireIngestionLock(c2)).toBeFalse()
+		await releaseIngestionLock(c1)
+		expect(await acquireIngestionLock(c2)).toBeTrue()
+		await releaseIngestionLock(c2)
+		await c1.end({ timeout: 1 })
+		await c2.end({ timeout: 1 })
+	})
+})
+
+describe('runtime role properties (REL-HARD-003, partial)', () => {
+	test('aifiqh_app has no privilege escalations and owns nothing', async () => {
+		const [role] = await sql<
+			{
+				rolsuper: boolean
+				rolbypassrls: boolean
+				rolcreatedb: boolean
+				rolcreaterole: boolean
+				rolinherit: boolean
+			}[]
+		>`select rolsuper, rolbypassrls, rolcreatedb, rolcreaterole, rolinherit
+			from pg_roles where rolname = 'aifiqh_app'`
+		expect(role).toBeDefined()
+		expect(role!.rolsuper).toBeFalse()
+		expect(role!.rolbypassrls).toBeFalse()
+		expect(role!.rolcreatedb).toBeFalse()
+		expect(role!.rolcreaterole).toBeFalse()
+		// inheritance is only safe while the role has NO member roles — assert that
+		const memberships = await sql<{ n: string }[]>`
+			select count(*) as n from pg_auth_members m
+			join pg_roles granted on granted.oid = m.roleid
+			join pg_roles member on member.oid = m.member
+			where member.rolname = 'aifiqh_app'`
+		expect(Number(memberships[0].n)).toBe(0)
+		// the runtime role must not own protected tables
+		const owned = await sql<{ relname: string }[]>`
+			select c.relname from pg_class c
+			join pg_roles r on r.oid = c.relowner
+			where r.rolname = 'aifiqh_app' and c.relkind = 'r'`
+		expect(owned.length).toBe(0)
+	})
+})
+
+describe('pooled-session RLS isolation stress (REL-HARD-002)', () => {
+	test('1000 mixed requests over a 2-connection pool never leak tenant context', async () => {
+		const pool = postgres(APP_URL, { max: 2 })
+		// guarantee one identifiable source per tenant
+		const tenants = [ids.tenantA, ids.tenantB]
+		for (const tid of tenants) {
+			await scopedTransaction(pool, tid, async (tx) => {
+				const [existing] = await tx<{ n: string }[]>`
+					select count(*) as n from sources`
+				if (Number(existing.n) === 0) {
+					const [root] = await tx<{ id: string }[]>`
+						select id from access_scopes where tenant_id = ${tid}::uuid and key = 'root' limit 1`
+					await tx`
+						insert into sources (tenant_id, title, author, source_type, language, rights_status, access_scope_id)
+						values (${tid}::uuid, ${`stress-${tid.slice(0, 8)}`}, 'x', 'book', 'id', 'licensed', ${root.id})`
+				}
+			})
+		}
+
+		const tenantsOf = async (rows: { tenant_id: string | null }[]) => [
+			...new Set(rows.map((r) => r.tenant_id)),
+		]
+
+		// pattern: A, B, unauthenticated, A, C(=B), rollback-case every 100th
+		const pattern = [tenants[0], tenants[1], null, tenants[0], tenants[1]]
+		for (let i = 1; i <= 1000; i++) {
+			if (i % 100 === 0) {
+				// aborted transaction must not poison the connection for the
+				// next user: rollback discards the GUC, bare queries fail closed
+				await pool
+					.begin(async (tx) => {
+						await tx`select set_config('app.tenant_id', ${tenants[0]}, true)`
+						throw new Error('deliberate rollback')
+					})
+					.catch(() => {})
+			}
+			const tid = pattern[(i - 1) % pattern.length]
+			if (tid === null) {
+				const bare = await pool<{ tenant_id: string | null }[]>`
+					select tenant_id from sources limit 5`
+				expect(await tenantsOf(bare)).toEqual([])
+			} else {
+				const rows = await scopedTransaction(
+					pool,
+					tid,
+					(tx) =>
+						tx<
+							{ tenant_id: string | null }[]
+						>`select tenant_id from sources limit 5`,
+				)
+				const seen = await tenantsOf(rows)
+				// exactly its own tenant, never empty (each tenant has a source),
+				// never the other tenant
+				expect(seen).toEqual([tid])
+			}
+		}
+		await pool.end({ timeout: 1 })
+	}, 60_000)
 })

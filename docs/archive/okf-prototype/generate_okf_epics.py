@@ -2,8 +2,8 @@
 """Generate OKF v0.2 epic concept files from the RZ-Fiqh backlog JSON.
 
 Usage: python3 scripts/generate_okf_epics.py
-Reads  docs/RZ-Fiqh_Database_First_Engineering_Backlog_v2.0.json
-Writes okf/epics/EP-XX-<slug>.md
+Reads  <repo>/docs/RZ-Fiqh_Database_First_Engineering_Backlog_v2.0.json
+Writes ./epics/EP-XX-<slug>.md (archive-local)
 """
 import json
 import re
@@ -11,9 +11,9 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[3]
 BACKLOG = ROOT / "docs" / "RZ-Fiqh_Database_First_Engineering_Backlog_v2.0.json"
-OUT_DIR = ROOT / "okf" / "epics"
+OUT_DIR = Path(__file__).resolve().parent / "epics"
 
 GENERATED_AT = (
     subprocess.run(["git", "log", "-1", "--format=%cI"], cwd=ROOT, capture_output=True, text=True).stdout.strip()

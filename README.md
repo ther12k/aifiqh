@@ -9,11 +9,8 @@ Private repository for **RZ-Fiqh**, a citation-first Islamic jurisprudence (fiqh
 ## Repository layout
 
 ```text
-├── okf/            # OKF v0.2 knowledge bundle (Google Open Knowledge Format)
-│   ├── index.md, product-overview.md, architecture-decisions.md,
-│   ├── delivery-plan.md, database-migration-plan.md, release-gates.md
-│   └── epics/      # 13 epic concepts incl. full ticket detail
 ├── docs/           # authoritative sources: PRD v2.0, Engineering Backlog v2.0 (.md + .json)
+│   └── archive/okf-prototype/  # ARCHIVED design artifact — not runtime (see its README)
 ├── db/migrations/  # 0001..0019 ordered SQL migrations (DB-001..DB-019)
 ├── scripts/        # migrate.ts, seed.ts, OKF generator, GitHub issue registration
 ├── docker/         # local OIDC provider (oidc-provider)
@@ -55,13 +52,25 @@ bun run build         # api, worker, web
 
 CI runs the same gate on every push with a pgvector service container (`.github/workflows/ci.yml`).
 
-## OKF v0.2 bundle
+## Archived design material
 
-The [`okf/`](okf/) directory is an [Open Knowledge Format v0.2](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundle: Markdown concepts with YAML frontmatter, provenance `sources` (the PRD/backlog under `docs/`), `generated` trust metadata, and lifecycle `status`. Regenerate epic concepts after editing the backlog JSON:
+The OKF v0.2 planning bundle now lives in [`docs/archive/okf-prototype/`](docs/archive/okf-prototype/) as a historical design artifact — **not** part of the runtime architecture (curated knowledge is canonical in PostgreSQL). CI enforces the quarantine: no runtime package may import from `docs/archive/`, and no migration may reference those schemas.
 
-```bash
-python3 scripts/generate_okf_epics.py
-```
+## Release-readiness gates
+
+Next milestone: *Database-First Foundation Accepted for Corpus and Retrieval Development* (GitHub milestone, issues #96–101):
+
+1. Tests and CI remain green
+2. Migration 0021 succeeds on realistic populated data (REL-HARD-001)
+3. No cross-tenant leak through reused pooled sessions (REL-HARD-002)
+4. Runtime role passes direct-database adversarial tests (REL-HARD-003)
+5. Release and answer state-machine races are controlled (REL-HARD-005)
+6. Database + object-storage restore reproduces an answer trace (REL-HARD-004)
+7. RLS hot paths meet the latency budget (REL-HARD-006)
+8. Archived design material is unmistakably non-runtime (done)
+9. Worker concurrency technically restricted until claim/lease lands (done)
+
+Product development proceeds in parallel: EP-02 ingestion → EP-05 compiler → EP-06 exact/lexical benchmark **before** the pgvector lane (exact-source precision must not regress), then EP-07 evidence selection.
 
 ## Issue tracking
 
