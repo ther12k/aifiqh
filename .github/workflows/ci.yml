@@ -46,8 +46,8 @@ jobs:
             sleep 1
           done
           curl -sf http://127.0.0.1:19000/minio/health/live
-          docker run --rm --network host minio/mc:latest \
-            sh -c "mc alias set ci http://127.0.0.1:19000 minioadmin minioadmin && mc mb --ignore-existing ci/aifiqh-originals"
+          docker run --rm --network host --entrypoint /bin/sh minio/mc:latest \
+            -c "mc alias set ci http://127.0.0.1:19000 minioadmin minioadmin && mc mb --ignore-existing ci/aifiqh-originals"
 
       - name: Start disposable pgvector container
         run: |
