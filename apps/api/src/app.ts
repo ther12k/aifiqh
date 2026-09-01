@@ -20,9 +20,20 @@ import type { Config } from './config'
 import { type Sql as ScopedSql, scopedTransaction } from './db/client'
 import type { Sql } from './db/client'
 import { dbOk } from './db/client'
+import {
+	addReviewerNote,
+	createConcept,
+	createRevision,
+	getConcept,
+	getTypeProfiles,
+	listConceptRevisions,
+	listStaleConcepts,
+	recordVerification,
+} from './knowledge/knowledgeService'
 import type { Logger } from './logger'
 import { getTracer, recordSpan } from './observability/otel'
 import { newTraceId } from './observability/trace'
+import { resolveSpan } from './sources/spanResolver'
 import { contentKey, getObject, headObject, putObject } from './storage/s3'
 
 export interface AppDeps {
@@ -860,9 +871,357 @@ function sourceRoutes(deps: AppDeps) {
 					ctx.set.status = 409
 					return { error: 'invalid_state', status: result.status }
 				}
-				return { revisionId: ctx.params.revisionId, status: 'deprecated' }
-			})
-			.get('/audit/events', async (rawCtx) => {
+					return { revisionId: ctx.params.revisionId, status: 'deprecated' }
+				})
+				.get('/sources/:id/revisions/:revisionId/pages', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('source:read')
+					const result = await scopedTransaction(
+						sql,
+						principal.tenantId,
+						async (tx) => {
+							const [src] = await tx<{ access_scope_id: string }[]>`
+								select access_scope_id from sources
+								where id = ${ctx.params.id}::uuid limit 1`
+							if (!src) return { code: 'not_found' as const }
+							const decision = await checkAccess(
+								tx,
+								principal,
+								'source:read',
+								src.access_scope_id,
+							)
+							if (!decision.allowed) {
+								return { code: 'forbidden' as const, reasonCode: decision.reasonCode }
+							}
+							const pages = await tx<{ id: string; page_number: number; image_storage_key: string | null }[]>`
+								select id, page_number, image_storage_key
+								from source_pages
+								where source_revision_id = ${ctx.params.revisionId}::uuid
+								order by page_number asc`
+							return { code: 'ok' as const, pages }
+						},
+					)
+					if (result.code === 'not_found') {
+						ctx.set.status = 404
+						return { error: 'not_found' }
+					}
+					if (result.code === 'forbidden') {
+						throw new HttpError(403, 'forbidden', result.reasonCode)
+					}
+					return result.pages
+				})
+				.get('/sources/:id/revisions/:revisionId/sections', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('source:read')
+					const result = await scopedTransaction(
+						sql,
+						principal.tenantId,
+						async (tx) => {
+							const [src] = await tx<{ access_scope_id: string }[]>`
+								select access_scope_id from sources
+								where id = ${ctx.params.id}::uuid limit 1`
+							if (!src) return { code: 'not_found' as const }
+							const decision = await checkAccess(
+								tx,
+								principal,
+								'source:read',
+								src.access_scope_id,
+							)
+							if (!decision.allowed) {
+								return { code: 'forbidden' as const, reasonCode: decision.reasonCode }
+							}
+							const sections = await tx<{ id: string; ordinal: number; heading: string | null; parent_section_id: string | null }[]>`
+								select id, ordinal, heading, parent_section_id
+								from source_sections
+								where source_revision_id = ${ctx.params.revisionId}::uuid
+								order by ordinal asc`
+							return { code: 'ok' as const, sections }
+						},
+					)
+					if (result.code === 'not_found') {
+						ctx.set.status = 404
+						return { error: 'not_found' }
+					}
+					if (result.code === 'forbidden') {
+						throw new HttpError(403, 'forbidden', result.reasonCode)
+					}
+					return result.sections
+				})
+				.get('/sources/:id/revisions/:revisionId/spans', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('source:read')
+					const query = (ctx as unknown as { query?: Record<string, string> }).query ?? {}
+					const pageNumber = query.page ? Number(query.page) : null
+					const result = await scopedTransaction(
+						sql,
+						principal.tenantId,
+						async (tx) => {
+							const [src] = await tx<{ access_scope_id: string }[]>`
+								select access_scope_id from sources
+								where id = ${ctx.params.id}::uuid limit 1`
+							if (!src) return { code: 'not_found' as const }
+							const decision = await checkAccess(
+								tx,
+								principal,
+								'source:read',
+								src.access_scope_id,
+							)
+							if (!decision.allowed) {
+								return { code: 'forbidden' as const, reasonCode: decision.reasonCode }
+							}
+							const spans = await tx<{
+								id: string
+								span_key: string
+								original_text: string
+								page_number: number | null
+								ordinal: number | null
+								heading: string | null
+							}[]>`
+								select sp.id, sp.span_key, sp.original_text,
+									p.page_number, sec.ordinal, sec.heading
+								from source_spans sp
+								left join source_pages p on p.id = sp.page_id
+								left join source_sections sec on sec.id = sp.section_id
+								where sp.source_revision_id = ${ctx.params.revisionId}::uuid
+									and (${pageNumber}::int is null or p.page_number = ${pageNumber})
+								order by p.page_number asc nulls first, sp.span_key asc`
+							return { code: 'ok' as const, spans }
+						},
+					)
+					if (result.code === 'not_found') {
+						ctx.set.status = 404
+						return { error: 'not_found' }
+					}
+					if (result.code === 'forbidden') {
+						throw new HttpError(403, 'forbidden', result.reasonCode)
+					}
+					return result.spans
+				})
+				.get('/sources/:id/revisions/:revisionId/spans/:spanKey', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('source:read')
+					const result = await scopedTransaction(
+						sql,
+						principal.tenantId,
+						async (tx) => {
+							const [src] = await tx<{ access_scope_id: string }[]>`
+								select access_scope_id from sources
+								where id = ${ctx.params.id}::uuid limit 1`
+							if (!src) return { code: 'not_found' as const }
+							const decision = await checkAccess(
+								tx,
+								principal,
+								'source:read',
+								src.access_scope_id,
+							)
+							if (!decision.allowed) {
+								return { code: 'forbidden' as const, reasonCode: decision.reasonCode }
+							}
+							const resolved = await resolveSpan(
+								tx,
+								ctx.params.id,
+								ctx.params.revisionId,
+								ctx.params.spanKey,
+							)
+							return { code: 'ok' as const, resolved }
+						},
+					)
+					if (result.code === 'not_found') {
+						ctx.set.status = 404
+						return { error: 'not_found' }
+					}
+					if (result.code === 'forbidden') {
+						throw new HttpError(403, 'forbidden', result.reasonCode)
+					}
+					if (!result.resolved) {
+						ctx.set.status = 404
+						return { error: 'span_not_found' }
+					}
+					return result.resolved
+				})
+				.get('/knowledge/profiles', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					await ctx.requirePermission('knowledge:read')
+					return getTypeProfiles(sql)
+				})
+					.post('/knowledge/concepts', async (rawCtx) => {
+						const ctx = rawCtx as unknown as HandlerCtx
+						const principal = await ctx.requirePermission('knowledge:draft')
+						ctx.requireCsrf()
+						const body = (ctx.body ?? {}) as any
+						try {
+							const res = await createConcept(
+								sql,
+								principal,
+								{
+									typeKey: body.typeKey,
+									title: body.title,
+									bodyMarkdown: body.bodyMarkdown,
+									language: body.language,
+									madhhab: body.madhhab,
+									topicPath: body.topicPath,
+									accessScopeId: body.accessScopeId,
+									positionKind: body.positionKind,
+									authorityClass: body.authorityClass,
+									metadataJsonb: body.metadataJsonb,
+									generationMethod: body.generationMethod,
+									modelRef: body.modelRef,
+									staleAfter: body.staleAfter,
+								},
+								ctx.traceId,
+							)
+							ctx.set.status = 201
+							return res
+						} catch (err: any) {
+						if (err.message.includes('Validation failed')) {
+							ctx.set.status = 400
+							return { error: 'validation_failed', message: err.message }
+						}
+						if (err.message.includes('Scope denied')) {
+							ctx.set.status = 403
+							return { error: 'forbidden', reasonCode: err.message }
+						}
+						throw err
+					}
+				})
+				.get('/knowledge/concepts/:id', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('knowledge:read')
+						try {
+							const concept = await getConcept(sql, principal, ctx.params.id)
+							if (!concept) {
+								ctx.set.status = 404
+								return { error: 'not_found' }
+							}
+							return concept
+						} catch (err: any) {
+							if (err.message.includes('Scope denied')) {
+								ctx.set.status = 403
+								return { error: 'forbidden', reasonCode: err.message }
+							}
+							throw err
+						}
+					})
+					.post('/knowledge/concepts/:id/revisions', async (rawCtx) => {
+						const ctx = rawCtx as unknown as HandlerCtx
+						const principal = await ctx.requirePermission('knowledge:draft')
+						ctx.requireCsrf()
+						const body = (ctx.body ?? {}) as any
+						try {
+							const res = await createRevision(
+								sql,
+								principal,
+								ctx.params.id,
+								{
+									title: body.title,
+									bodyMarkdown: body.bodyMarkdown,
+									language: body.language,
+									madhhab: body.madhhab,
+									positionKind: body.positionKind,
+									authorityClass: body.authorityClass,
+									metadataJsonb: body.metadataJsonb,
+									generationMethod: body.generationMethod,
+									modelRef: body.modelRef,
+									staleAfter: body.staleAfter,
+									expectedBaseRevisionNumber: body.expectedBaseRevisionNumber,
+								},
+								ctx.traceId,
+							)
+							ctx.set.status = 201
+							return res
+						} catch (err: any) {
+							if (err.message.includes('Validation failed')) {
+								ctx.set.status = 400
+								return { error: 'validation_failed', message: err.message }
+							}
+							if (err.message.includes('Scope denied')) {
+								ctx.set.status = 403
+								return { error: 'forbidden', reasonCode: err.message }
+							}
+							if (err.message.includes('OPTIMISTIC_CONCURRENCY_CONFLICT')) {
+								ctx.set.status = 409
+								return { error: 'conflict', message: err.message }
+							}
+							if (err.message.includes('DUPLICATE_CONTENT_HASH')) {
+								ctx.set.status = 409
+								return { error: 'duplicate', message: err.message }
+							}
+							if (err.message.includes('Concept not found')) {
+								ctx.set.status = 404
+								return { error: 'not_found' }
+							}
+							throw err
+						}
+					})
+					.get('/knowledge/concepts/:id/revisions', async (rawCtx) => {
+						const ctx = rawCtx as unknown as HandlerCtx
+						const principal = await ctx.requirePermission('knowledge:read')
+						try {
+							return await listConceptRevisions(sql, principal, ctx.params.id)
+						} catch (err: any) {
+							if (err.message.includes('Scope denied')) {
+								ctx.set.status = 403
+								return { error: 'forbidden', reasonCode: err.message }
+							}
+							if (err.message.includes('Concept not found')) {
+								ctx.set.status = 404
+								return { error: 'not_found' }
+							}
+							throw err
+						}
+					})
+					.get('/knowledge/stale', async (rawCtx) => {
+						const ctx = rawCtx as unknown as HandlerCtx
+						const principal = await ctx.requirePermission('knowledge:read')
+						return listStaleConcepts(sql, principal.tenantId)
+					})
+					.post('/knowledge/revisions/:revisionId/notes', async (rawCtx) => {
+						const ctx = rawCtx as unknown as HandlerCtx
+						const principal = await ctx.requirePermission('knowledge:read')
+						const canNote =
+							principal.permissions.includes('knowledge:draft') ||
+							principal.permissions.includes('review:approve')
+						if (!canNote) {
+							throw new HttpError(403, 'forbidden', 'ROLE_NOT_AUTHORIZED_FOR_NOTES')
+						}
+						ctx.requireCsrf()
+						const body = (ctx.body ?? {}) as { note?: string }
+						if (!body.note || !body.note.trim()) {
+							ctx.set.status = 400
+							return { error: 'validation_failed', fields: ['note'] }
+						}
+						const res = await addReviewerNote(
+							sql,
+							principal,
+							ctx.params.revisionId,
+							body.note,
+						)
+						ctx.set.status = 201
+						return res
+					})
+					.post('/knowledge/revisions/:revisionId/verify', async (rawCtx) => {
+						const ctx = rawCtx as unknown as HandlerCtx
+						const principal = await ctx.requirePermission('review:approve')
+						ctx.requireCsrf()
+						const body = (ctx.body ?? {}) as {
+							verdict?: 'approved' | 'rejected'
+							notes?: string
+						}
+						if (!body.verdict || !['approved', 'rejected'].includes(body.verdict)) {
+							ctx.set.status = 400
+							return { error: 'validation_failed', fields: ['verdict'] }
+						}
+						const res = await recordVerification(
+							sql,
+							principal,
+							ctx.params.revisionId,
+							body.verdict,
+							body.notes,
+						)
+						ctx.set.status = 201
+						return res
+					})
+					.get('/audit/events', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
 				const principal = await ctx.requirePermission('audit:read')
 				return scopedTransaction(sql, principal.tenantId, (tx) =>
