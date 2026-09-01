@@ -98,6 +98,7 @@ import {
 	saveCorrection,
 } from './ocr/ocrCorrectionService'
 import { AccessPolicyError, ScopedResultCache } from './retrieval/accessPolicy'
+import { expandEvidenceContext } from './retrieval/evidenceExpansion'
 import {
 	type LaneExecutionOutcome,
 	executeLanePlan,
@@ -1783,6 +1784,28 @@ function sourceRoutes(deps: AppDeps) {
 					})
 
 					const { identifier, quote, lexical, vector } = outcome.lanes
+
+					// structural expansion (EVD-003): adjacent passages,
+					// footnotes, pinned evidence spans and linked concepts for
+					// the selected fragments — scope-checked, cycle-bounded,
+					// every item carrying relation/reason/token estimate
+					let expansion: Awaited<
+						ReturnType<typeof expandEvidenceContext>
+					> | null = null
+					if (body.expandEvidence === true) {
+						const seedSource =
+							outcome.evidence?.selected ?? outcome.fused.candidates
+						expansion = await expandEvidenceContext(
+							sql,
+							principal,
+							indexReleaseId,
+							seedSource.map((c) => ({
+								unitId: c.unitId,
+								logicalUnitId: c.logicalUnitId,
+							})),
+						)
+					}
+
 					return {
 						indexReleaseId,
 						query,
@@ -1794,6 +1817,7 @@ function sourceRoutes(deps: AppDeps) {
 						fused: outcome.fused,
 						rerank: outcome.rerank,
 						evidence: outcome.evidence,
+						expansion,
 					}
 				} catch (err) {
 					if (err instanceof LaneError) {
