@@ -97,6 +97,10 @@ import {
 	restoreCorrection,
 	saveCorrection,
 } from './ocr/ocrCorrectionService'
+import {
+	decideResponse,
+	storeResponseDecision,
+} from './retrieval/abstentionPolicy'
 import { AccessPolicyError, ScopedResultCache } from './retrieval/accessPolicy'
 import {
 	type AssessmentOutcome,
@@ -1815,6 +1819,21 @@ function sourceRoutes(deps: AppDeps) {
 						await storeEvidenceAssessment(sql, planResult.traceId, assessment)
 					}
 
+					// abstention / escalation policy (EVD-005): categorical
+					// decision + language constraints, stored per trace —
+					// never a numeric confidence
+					const decision = assessment
+						? decideResponse(
+								assessment,
+								body.mode === 'allow_general_knowledge'
+									? 'allow_general_knowledge'
+									: 'grounded_only',
+							)
+						: null
+					if (decision) {
+						await storeResponseDecision(sql, planResult.traceId, decision)
+					}
+
 					// structural expansion (EVD-003): adjacent passages,
 					// footnotes, pinned evidence spans and linked concepts for
 					// the selected fragments — scope-checked, cycle-bounded,
@@ -1850,6 +1869,7 @@ function sourceRoutes(deps: AppDeps) {
 						evidence: outcome.evidence,
 						expansion,
 						assessment,
+						decision,
 					}
 				} catch (err) {
 					if (err instanceof LaneError) {
