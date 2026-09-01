@@ -31,6 +31,13 @@ import {
 import { type Sql as ScopedSql, scopedTransaction } from './db/client'
 import type { Sql } from './db/client'
 import { dbOk } from './db/client'
+import {
+	ChangesetError,
+	addChangesetItem,
+	createChangeset,
+	getChangeset,
+	transitionChangeset,
+} from './knowledge/changesetService'
 import type { CreateConceptInput } from './knowledge/knowledgeService'
 import {
 	addReviewerNote,
@@ -1253,6 +1260,123 @@ function sourceRoutes(deps: AppDeps) {
 				const ctx = rawCtx as unknown as HandlerCtx
 				const principal = await ctx.requirePermission('knowledge:read')
 				return listStaleConcepts(sql, principal.tenantId)
+			})
+			.post('/changesets', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:draft')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					const res = await createChangeset(
+						sql,
+						principal,
+						{ title: bodyStr(body.title) ?? '' },
+						ctx.traceId,
+					)
+					ctx.set.status = 201
+					return res
+				} catch (err) {
+					if (err instanceof ChangesetError) {
+						ctx.set.status = 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/changesets/:id/items', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:draft')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					const res = await addChangesetItem(
+						sql,
+						principal,
+						ctx.params.id,
+						{
+							conceptId: bodyStr(body.conceptId) ?? '',
+							proposedRevisionId: bodyStr(body.proposedRevisionId) ?? '',
+							baseRevisionId: bodyStr(body.baseRevisionId),
+						},
+						ctx.traceId,
+					)
+					ctx.set.status = 201
+					return res
+				} catch (err) {
+					if (err instanceof ChangesetError) {
+						ctx.set.status =
+							err.code === 'NOT_FOUND'
+								? 404
+								: err.code === 'SCOPE_DENIED'
+									? 403
+									: 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/changesets/:id/transition', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				// any knowledge participant enters; the service enforces
+				// action-specific roles (submit = knowledge:draft,
+				// approve/publish/reject = review:approve)
+				const principal = await ctx.requirePermission('knowledge:read')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				const action = bodyStr(body.action)
+				if (
+					!action ||
+					![
+						'submitted',
+						'changes_requested',
+						'approved',
+						'published',
+						'rejected',
+					].includes(action)
+				) {
+					ctx.set.status = 400
+					return { error: 'INVALID_TRANSITION', message: 'Unknown action' }
+				}
+				try {
+					const res = await transitionChangeset(
+						sql,
+						principal,
+						ctx.params.id,
+						{
+							action: action as 'submitted',
+							reason: bodyStr(body.reason),
+							expectedState: bodyStr(body.expectedState),
+						},
+						ctx.traceId,
+					)
+					return res
+				} catch (err) {
+					if (err instanceof ChangesetError) {
+						ctx.set.status =
+							err.code === 'NOT_FOUND'
+								? 404
+								: err.code === 'OPTIMISTIC_CONFLICT'
+									? 409
+									: err.code === 'SCOPE_DENIED'
+										? 403
+										: 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/changesets/:id', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				try {
+					return await getChangeset(sql, principal, ctx.params.id)
+				} catch (err) {
+					if (err instanceof ChangesetError) {
+						ctx.set.status = err.code === 'NOT_FOUND' ? 404 : 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
 			})
 			.get(
 				'/knowledge/concepts/:id/revisions/:revisionId/publish-validation',
