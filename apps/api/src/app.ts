@@ -50,9 +50,16 @@ import {
 	listConceptLinks,
 	listSpanLinks,
 } from './knowledge/linkService'
+import { validateForPublish } from './knowledge/publishValidator'
 import type { Logger } from './logger'
 import { getTracer, recordSpan } from './observability/otel'
 import { newTraceId } from './observability/trace'
+import {
+	OcrCorrectionError,
+	getOcrReview,
+	restoreCorrection,
+	saveCorrection,
+} from './ocr/ocrCorrectionService'
 import { resolveSpan } from './sources/spanResolver'
 import { contentKey, getObject, headObject, putObject } from './storage/s3'
 
@@ -1247,6 +1254,100 @@ function sourceRoutes(deps: AppDeps) {
 				const principal = await ctx.requirePermission('knowledge:read')
 				return listStaleConcepts(sql, principal.tenantId)
 			})
+			.get(
+				'/knowledge/concepts/:id/revisions/:revisionId/publish-validation',
+				async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('review:approve')
+					return validateForPublish(
+						sql,
+						principal,
+						ctx.params.id,
+						ctx.params.revisionId,
+					)
+				},
+			)
+			.get('/ocr/outputs/:ocrOutputId/review', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('source:read')
+				try {
+					const review = await getOcrReview(
+						sql,
+						principal,
+						ctx.params.ocrOutputId,
+					)
+					if (!review) {
+						ctx.set.status = 404
+						return { error: 'not_found' }
+					}
+					return review
+				} catch (err) {
+					if (
+						err instanceof OcrCorrectionError &&
+						err.code === 'SCOPE_DENIED'
+					) {
+						throw new HttpError(403, 'forbidden', err.message)
+					}
+					throw err
+				}
+			})
+			.post('/ocr/outputs/:ocrOutputId/corrections', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('source:update_metadata')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					const res = await saveCorrection(
+						sql,
+						principal,
+						ctx.params.ocrOutputId,
+						{
+							correctedText: bodyStr(body.correctedText) ?? '',
+							reason: bodyStr(body.reason) ?? '',
+						},
+						ctx.traceId,
+					)
+					ctx.set.status = 201
+					return res
+				} catch (err) {
+					if (err instanceof OcrCorrectionError) {
+						ctx.set.status = err.code === 'OCR_OUTPUT_NOT_FOUND' ? 404 : 400
+						return { error: err.code, message: err.message }
+					}
+					if (
+						err instanceof OcrCorrectionError &&
+						err.code === 'SCOPE_DENIED'
+					) {
+						throw new HttpError(403, 'forbidden', err.message)
+					}
+					throw err
+				}
+			})
+			.post(
+				'/ocr/outputs/:ocrOutputId/corrections/:correctionId/restore',
+				async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission(
+						'source:update_metadata',
+					)
+					ctx.requireCsrf()
+					try {
+						return await restoreCorrection(
+							sql,
+							principal,
+							ctx.params.ocrOutputId,
+							ctx.params.correctionId,
+							ctx.traceId,
+						)
+					} catch (err) {
+						if (err instanceof OcrCorrectionError) {
+							ctx.set.status = err.code === 'CORRECTION_NOT_FOUND' ? 404 : 403
+							return { error: err.code, message: err.message }
+						}
+						throw err
+					}
+				},
+			)
 			.post('/knowledge/revisions/:revisionId/links', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
 				const principal = await ctx.requirePermission('knowledge:draft')
