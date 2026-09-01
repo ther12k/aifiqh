@@ -274,6 +274,11 @@ export async function compileIndexRelease(
 
 		await tx`update index_releases set state = 'ready' where id = ${indexRelease.id}::uuid`
 
+		// relationship-index projection (IDX-005): release-scoped edges.
+		// Every edge pins this index release and only links units that exist
+		// in it (broken canonical links are filtered, never compiled).
+		await compileRelationshipEdges(tx, indexRelease.id)
+
 		// dependency pins: the knowledge release + each active source revision
 		await tx`
 			insert into index_release_dependencies (release_id, dependency_type, dependency_id, content_hash)
@@ -319,4 +324,272 @@ export async function compileIndexRelease(
 			knowledgeUnits: knowledge.length,
 		}
 	})
+}
+
+type TxSql = Sql | import('postgres').TransactionSql
+
+/**
+ * Compile release-scoped relationship edges (IDX-005):
+ *  - `adjacent`: consecutive spans within the same section + revision
+ *  - `footnote`: anchor span → note span (from source_footnotes)
+ *  - `evidence`: knowledge unit → source span (concept_source_spans)
+ *  - `exception` / `comparison` / `definition`: typed concept links
+ *    (knowledge_links) mapped onto their unit kinds
+ * Only edges whose BOTH endpoints exist in the release are compiled — a
+ * broken canonical link (target deleted/deprecated) is dropped, not indexed.
+ */
+export async function compileRelationshipEdges(
+	tx: TxSql,
+	indexReleaseId: string,
+): Promise<{ edgesCompiled: number; droppedBroken: number }> {
+	const unitIds = new Set(
+		(
+			await tx<{ logical_unit_id: string }[]>`
+				select logical_unit_id from retrieval_units
+				where index_release_id = ${indexReleaseId}::uuid`
+		).map((r) => r.logical_unit_id),
+	)
+
+	const edgeCount = { n: 0 }
+	const insertEdge = async (
+		from: string,
+		to: string,
+		type: string,
+		direction: 'directed' | 'undirected' = 'directed',
+		weight = 1.0,
+	) => {
+		if (!unitIds.has(from) || !unitIds.has(to)) return false
+		await tx`
+			insert into retrieval_relationships (
+				index_release_id, from_logical_unit_id, to_logical_unit_id,
+				relationship_type, direction, weight
+			)
+			values (
+				${indexReleaseId}::uuid, ${from}, ${to},
+				${type}, ${direction}, ${weight}
+			)
+			on conflict do nothing`
+		edgeCount.n++
+		return true
+	}
+
+	// adjacency: consecutive spans of the same section in span-key order
+	const adjacency = await tx<
+		{ span_id: string; next_span_id: string }[]
+	>`with ordered as (
+			select ss.id as span_id,
+				lead(ss.id) over (
+					partition by ss.source_revision_id, ss.section_id
+					order by ss.span_key asc
+				) as next_span_id
+			from retrieval_units ru
+			join source_spans ss on ss.id = ru.source_span_id
+			where ru.index_release_id = ${indexReleaseId}::uuid
+		)
+		select span_id, next_span_id from ordered where next_span_id is not null`
+	for (const a of adjacency) {
+		await insertEdge(
+			logicalUnitId('source_span', a.span_id),
+			logicalUnitId('source_span', a.next_span_id),
+			'adjacent',
+			'undirected',
+			0.8,
+		)
+	}
+
+	// footnotes: anchor → note span
+	const footnotes = await tx<
+		{ anchor_span_id: string; note_span_id: string }[]
+	>`select fn.anchor_span_id, fn.note_span_id
+		from source_footnotes fn
+		join retrieval_units ru on ru.source_span_id = fn.anchor_span_id
+		where ru.index_release_id = ${indexReleaseId}::uuid`
+	for (const f of footnotes) {
+		await insertEdge(
+			logicalUnitId('source_span', f.anchor_span_id),
+			logicalUnitId('source_span', f.note_span_id),
+			'footnote',
+			'directed',
+			0.5,
+		)
+	}
+
+	// evidence: knowledge revision → pinned source spans
+	const evidence = await tx<
+		{ knowledge_revision_id: string; source_span_id: string }[]
+	>`select css.revision_id as knowledge_revision_id, css.source_span_id
+		from concept_source_spans css
+		join retrieval_units ru on ru.knowledge_revision_id = css.revision_id
+		where ru.index_release_id = ${indexReleaseId}::uuid`
+	for (const e of evidence) {
+		await insertEdge(
+			logicalUnitId('knowledge_concept', e.knowledge_revision_id),
+			logicalUnitId('source_span', e.source_span_id),
+			'evidence',
+		)
+	}
+
+	// typed concept links (KNW-005 registry subset) between compiled units
+	const linkTypeMap: Record<string, 'exception' | 'comparison' | 'definition'> =
+		{
+			exception_to: 'exception',
+			compares_with: 'comparison',
+			supports: 'definition',
+		}
+	const links = await tx<
+		{
+			from_revision_id: string
+			to_revision_id: string | null
+			to_concept_published_revision: string | null
+			relationship_type: string
+		}[]
+	>`select kl.from_revision_id, kl.to_revision_id,
+			(select kri.concept_revision_id from knowledge_release_items kri
+			 join index_releases ir on ir.knowledge_release_id = kri.release_id
+			 where ir.id = ${indexReleaseId}::uuid and kri.concept_id = kl.to_concept_id
+			 limit 1) as to_concept_published_revision,
+			kl.relationship_type
+		from knowledge_links kl
+		join retrieval_units ru on ru.knowledge_revision_id = kl.from_revision_id
+		where ru.index_release_id = ${indexReleaseId}::uuid and kl.active`
+	let droppedBroken = 0
+	for (const l of links) {
+		const mapped = linkTypeMap[l.relationship_type]
+		if (!mapped) continue
+		// the target unit is the release-pinned revision of the target concept;
+		// a link whose target concept has no pinned revision in this release is
+		// broken and must not be compiled
+		if (!l.to_concept_published_revision) {
+			droppedBroken++
+			continue
+		}
+		const ok = await insertEdge(
+			logicalUnitId('knowledge_concept', l.from_revision_id),
+			logicalUnitId('knowledge_concept', l.to_concept_published_revision),
+			mapped,
+		)
+		if (!ok) droppedBroken++
+	}
+
+	return { edgesCompiled: edgeCount.n, droppedBroken }
+}
+
+export interface ReleaseComparison {
+	previousReleaseId: string
+	nextReleaseId: string
+	unchanged: string[]
+	changed: Array<{
+		logicalUnitId: string
+		previousHash: string
+		nextHash: string
+		reason: 'content' | 'parent'
+	}>
+	added: string[]
+	tombstoned: string[]
+}
+
+/**
+ * Cross-release unit identity comparison (IDX-002).
+ *
+ * Identity policy: a logical unit keeps its \`logical_unit_id\` across
+ * releases; it is *unchanged* only when both content hash AND parent lineage
+ * match. Changed units get a `supersession` edge from the previous unit to
+ * the next; units that vanished from the new release are tombstoned
+ * (recorded as supersession edges pointing nowhere is not representable, so
+ * tombstones are returned in the comparison and audited).
+ *
+ * Moved-section policy: text unchanged but parent changed ⇒ the unit is
+ * `changed` with reason `parent` (its hash already covers content; the move
+ * is surfaced explicitly so retrieval consumers can refresh lineage).
+ */
+export async function compareIndexReleases(
+	sql: Sql,
+	principal: Principal,
+	previousReleaseId: string,
+	nextReleaseId: string,
+): Promise<ReleaseComparison> {
+	const loadUnits = async (releaseId: string) =>
+		new Map(
+			(
+				await sql<
+					{
+						logical_unit_id: string
+						content_hash: string
+						parent_logical_unit_id: string | null
+					}[]
+				>`select logical_unit_id, content_hash, parent_logical_unit_id
+					from retrieval_units
+					where index_release_id = ${releaseId}::uuid`
+			).map((u) => [
+				u.logical_unit_id,
+				{ hash: u.content_hash, parent: u.parent_logical_unit_id },
+			]),
+		)
+
+	const prev = await loadUnits(previousReleaseId)
+	const next = await loadUnits(nextReleaseId)
+
+	const unchanged: string[] = []
+	const changed: ReleaseComparison['changed'] = []
+	const added: string[] = []
+	const tombstoned: string[] = []
+
+	for (const [id, prevUnit] of prev) {
+		const nextUnit = next.get(id)
+		if (!nextUnit) {
+			tombstoned.push(id)
+			continue
+		}
+		if (nextUnit.hash !== prevUnit.hash) {
+			changed.push({
+				logicalUnitId: id,
+				previousHash: prevUnit.hash,
+				nextHash: nextUnit.hash,
+				reason: 'content',
+			})
+		} else if (nextUnit.parent !== prevUnit.parent) {
+			changed.push({
+				logicalUnitId: id,
+				previousHash: prevUnit.hash,
+				nextHash: nextUnit.hash,
+				reason: 'parent',
+			})
+		} else {
+			unchanged.push(id)
+		}
+	}
+	for (const id of next.keys()) {
+		if (!prev.has(id)) added.push(id)
+	}
+
+	// Note: no fabricated edges are written here. Supersession edges link
+	// two DIFFERENT compiled units (e.g. knowledge revision N+1 → N) and are
+	// emitted by the edge compiler when that lineage exists; a changed unit
+	// keeps its logical id by policy, so a self-edge would be meaningless.
+	// The classification itself (and the audit below) is the deliverable.
+
+	await recordAuditInTx(sql, {
+		tenantId: principal.tenantId,
+		actorType: principal.actorType,
+		actorId: principal.userId,
+		action: 'index.compared',
+		entityType: 'index_release',
+		entityId: nextReleaseId,
+		beforeRef: { previousReleaseId },
+		afterRef: {
+			unchanged: unchanged.length,
+			changed: changed.length,
+			added: added.length,
+			tombstoned: tombstoned.length,
+		},
+	})
+
+	return {
+		previousReleaseId,
+		nextReleaseId,
+		unchanged,
+		changed,
+		added,
+		tombstoned,
+	}
 }

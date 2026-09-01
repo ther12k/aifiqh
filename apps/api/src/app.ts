@@ -31,7 +31,11 @@ import {
 import { type Sql as ScopedSql, scopedTransaction } from './db/client'
 import type { Sql } from './db/client'
 import { dbOk } from './db/client'
-import { IndexCompilerError, compileIndexRelease } from './index/indexCompiler'
+import {
+	IndexCompilerError,
+	compareIndexReleases,
+	compileIndexRelease,
+} from './index/indexCompiler'
 import {
 	ChangesetError,
 	addChangesetItem,
@@ -1449,6 +1453,19 @@ function sourceRoutes(deps: AppDeps) {
 					throw err
 				}
 			})
+			.get(
+				'/index/releases/:prevReleaseId/compare/:nextReleaseId',
+				async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('knowledge:read')
+					return compareIndexReleases(
+						sql,
+						principal,
+						ctx.params.prevReleaseId,
+						ctx.params.nextReleaseId,
+					)
+				},
+			)
 			.post('/index/compile', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
 				const principal = await ctx.requirePermission('review:publish')
