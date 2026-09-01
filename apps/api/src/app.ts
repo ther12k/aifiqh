@@ -98,6 +98,14 @@ import {
 	saveCorrection,
 } from './ocr/ocrCorrectionService'
 import { planAndPersistQuery } from './retrieval/queryPlanner'
+import {
+	LaneError,
+	type LexicalFilters,
+	runExactIdentifierLane,
+	runExactQuoteLane,
+	runLexicalLane,
+	runVectorLane,
+} from './retrieval/retrievalLanes'
 import { resolveSpan } from './sources/spanResolver'
 import { contentKey, getObject, headObject, putObject } from './storage/s3'
 
@@ -1703,6 +1711,112 @@ function sourceRoutes(deps: AppDeps) {
 					},
 					ctx.traceId,
 				)
+			})
+			.post('/retrieval/search', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				const query = bodyStr(body.query) ?? ''
+				if (!query.trim()) {
+					ctx.set.status = 400
+					return { error: 'QUERY_REQUIRED', message: 'query is required' }
+				}
+				const filters: LexicalFilters = {
+					madhhab: bodyStrArray(body.madhhab),
+					language: bodyStr(body.language),
+					topicPath: bodyStrArray(body.topicPath),
+				}
+
+				// release pin: explicit id, else the tenant's production alias —
+				// lanes never search an unpinned "latest" implicitly
+				let indexReleaseId = bodyStr(body.indexReleaseId)
+				if (!indexReleaseId) {
+					const resolved = await resolveIndexAlias(sql, principal, 'production')
+					if (!resolved) {
+						ctx.set.status = 404
+						return {
+							error: 'NO_ACTIVE_RELEASE',
+							message: 'no indexReleaseId given and production alias is unset',
+						}
+					}
+					indexReleaseId = resolved.releaseId
+				}
+
+				try {
+					const identifier = await runExactIdentifierLane(
+						sql,
+						principal,
+						indexReleaseId,
+						query,
+					)
+					const quote = await runExactQuoteLane(
+						sql,
+						principal,
+						indexReleaseId,
+						query,
+					)
+					const lexical = await runLexicalLane(
+						sql,
+						principal,
+						indexReleaseId,
+						query,
+						filters,
+					)
+
+					// vector lane uses the SAME embedding configuration the
+					// release was embedded with (model + version pinned)
+					let vector:
+						| Awaited<ReturnType<typeof runVectorLane>>
+						| { candidates: []; filterReasons: []; skipped: string } = {
+						candidates: [],
+						filterReasons: [],
+						skipped: 'NO_EMBEDDINGS_FOR_RELEASE',
+					}
+					const [model] = await sql<
+						{ model_id: string; version: string; dimensions: number }[]
+					>`select em.model_id, em.version, em.dimensions
+						from index_releases ir
+						join index_configurations ic on ic.id = ir.configuration_id
+						join embedding_models em on em.id = ic.embedding_model_id
+						where ir.id = ${indexReleaseId}::uuid`
+					if (model) {
+						const provider = new HashEmbeddingProvider(
+							model.model_id,
+							model.version,
+							model.dimensions,
+						)
+						const [queryEmbedding] = await provider.embed([query])
+						const vectorResult = await runVectorLane(
+							sql,
+							principal,
+							indexReleaseId,
+							{
+								queryEmbedding,
+								modelId: model.model_id,
+								modelVersion: model.version,
+							},
+							filters,
+						)
+						if (vectorResult.candidates.length > 0) vector = vectorResult
+					}
+
+					return {
+						indexReleaseId,
+						query,
+						filters,
+						identifier,
+						quote,
+						lexical,
+						vector,
+					}
+				} catch (err) {
+					if (err instanceof LaneError) {
+						ctx.set.status = 400
+						return { error: err.code, lane: err.lane, message: err.message }
+					}
+					throw err
+				}
 			})
 			.post('/index/releases/:id/rebuild-verify', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
