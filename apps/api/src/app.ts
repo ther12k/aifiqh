@@ -98,6 +98,11 @@ import {
 	saveCorrection,
 } from './ocr/ocrCorrectionService'
 import { AccessPolicyError, ScopedResultCache } from './retrieval/accessPolicy'
+import {
+	type AssessmentOutcome,
+	assessEvidenceFromPipeline,
+	storeEvidenceAssessment,
+} from './retrieval/evidenceAssessment'
 import { expandEvidenceContext } from './retrieval/evidenceExpansion'
 import {
 	type LaneExecutionOutcome,
@@ -1785,6 +1790,31 @@ function sourceRoutes(deps: AppDeps) {
 
 					const { identifier, quote, lexical, vector } = outcome.lanes
 
+					// sufficiency assessment (EVD-004): deterministic verdict
+					// with reason codes, stored on the retrieval trace —
+					// the planner runs first so the trace exists
+					const planResult = await planAndPersistQuery(sql, principal, {
+						originalQuery: query,
+						indexReleaseId,
+						requestedMadhhab: filters.madhhab,
+					})
+					let assessment: AssessmentOutcome | null = null
+					if (outcome.evidence) {
+						assessment = await assessEvidenceFromPipeline(
+							sql,
+							principal,
+							indexReleaseId,
+							{
+								intent: planResult.plan.intent,
+								exactCandidatesCount:
+									identifier.candidates.length + quote.candidates.length,
+								evidence: outcome.evidence,
+								requestedMadhhab: bodyStrArray(body.ensureMadhhab) ?? [],
+							},
+						)
+						await storeEvidenceAssessment(sql, planResult.traceId, assessment)
+					}
+
 					// structural expansion (EVD-003): adjacent passages,
 					// footnotes, pinned evidence spans and linked concepts for
 					// the selected fragments — scope-checked, cycle-bounded,
@@ -1810,6 +1840,7 @@ function sourceRoutes(deps: AppDeps) {
 						indexReleaseId,
 						query,
 						filters,
+						traceId: planResult.traceId,
 						identifier,
 						quote,
 						lexical,
@@ -1818,6 +1849,7 @@ function sourceRoutes(deps: AppDeps) {
 						rerank: outcome.rerank,
 						evidence: outcome.evidence,
 						expansion,
+						assessment,
 					}
 				} catch (err) {
 					if (err instanceof LaneError) {
