@@ -103,6 +103,7 @@ import {
 	executeLanePlan,
 } from './retrieval/laneFusion'
 import { planAndPersistQuery } from './retrieval/queryPlanner'
+import { HashRerankerProvider } from './retrieval/reranker'
 import { LaneError, type LexicalFilters } from './retrieval/retrievalLanes'
 import { resolveSpan } from './sources/spanResolver'
 import { contentKey, getObject, headObject, putObject } from './storage/s3'
@@ -1758,7 +1759,10 @@ function sourceRoutes(deps: AppDeps) {
 
 					// all four lanes run in parallel, fuse with RRF, and every
 					// candidate is re-verified against the live access-scope
-					// policy (fail-closed) before evidence leaves retrieval
+					// policy (fail-closed) before evidence leaves retrieval;
+					// the fused list is then reranked under the relevance
+					// policy (deterministic hash reranker is the built-in
+					// default; opt out with rerank: false)
 					const outcome = await executeLanePlan(sql, principal, {
 						query,
 						indexReleaseId,
@@ -1770,6 +1774,8 @@ function sourceRoutes(deps: AppDeps) {
 									model.dimensions,
 								)
 							: undefined,
+						reranker:
+							body.rerank === false ? undefined : new HashRerankerProvider(),
 						cache: retrievalCache,
 					})
 
@@ -1783,6 +1789,7 @@ function sourceRoutes(deps: AppDeps) {
 						lexical,
 						vector,
 						fused: outcome.fused,
+						rerank: outcome.rerank,
 					}
 				} catch (err) {
 					if (err instanceof LaneError) {

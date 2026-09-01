@@ -7,6 +7,11 @@ import {
 	scopeKeyFor,
 } from './accessPolicy'
 import {
+	type RerankOutcome,
+	type RerankerProvider,
+	rerankCandidates,
+} from './reranker'
+import {
 	LaneError,
 	type LexicalFilters,
 	type RetrievalCandidate,
@@ -216,6 +221,8 @@ export interface LaneExecutionOptions {
 	policy?: FusionPolicy
 	/** provider matching the release's embedding configuration; omit to skip vector */
 	vectorProvider?: EmbeddingProvider
+	/** reranker for the fused list; omit to skip the rerank stage entirely */
+	reranker?: RerankerProvider
 	/** scope-namespaced cache; a hit still requires identical scope identity */
 	cache?: ScopedResultCache<LaneExecutionOutcome>
 }
@@ -232,6 +239,8 @@ export interface LaneExecutionOutcome {
 		vector: Awaited<ReturnType<typeof runVectorLane>> & { error?: string }
 	}
 	fused: FusionOutcome
+	/** null when the rerank stage was not requested */
+	rerank: RerankOutcome | null
 }
 
 /**
@@ -248,7 +257,7 @@ export async function executeLanePlan(
 	const filters = options.filters ?? {}
 	const { query, indexReleaseId } = options
 
-	const cacheKey = `${FUSION_VERSION}|${indexReleaseId}|${query}|${JSON.stringify(filters)}`
+	const cacheKey = `${FUSION_VERSION}|${indexReleaseId}|${query}|${JSON.stringify(filters)}|${options.reranker ? options.reranker.modelId : 'no-rerank'}`
 	const identity = scopeKeyFor(principal)
 	if (options.cache) {
 		const cached = options.cache.get(cacheKey, identity)
@@ -387,11 +396,25 @@ export async function executeLanePlan(
 			lanes.vector.candidates.some((c) => c.unitId === f.unitId),
 	)
 
+	// rerank stage (EVD-001): operates ONLY on the scope-verified fused
+	// list — its output is a subset by construction and by assertion
+	const rerank = options.reranker
+		? await rerankCandidates(
+				sql,
+				principal,
+				query,
+				fused.candidates,
+				options.reranker,
+			)
+		: null
+	if (rerank) fused.candidates = rerank.candidates as FusedCandidate[]
+
 	const outcome: LaneExecutionOutcome = {
 		indexReleaseId,
 		query,
 		lanes,
 		fused,
+		rerank,
 	}
 	if (options.cache) options.cache.set(cacheKey, identity, outcome)
 	return outcome
