@@ -1776,6 +1776,9 @@ function sourceRoutes(deps: AppDeps) {
 							: undefined,
 						reranker:
 							body.rerank === false ? undefined : new HashRerankerProvider(),
+						// evidence selection stage: overlap collapse + source and
+						// madhhab diversity, with every exclusion recorded
+						evidence: { requestedMadhhab: bodyStrArray(body.ensureMadhhab) },
 						cache: retrievalCache,
 					})
 
@@ -1790,6 +1793,7 @@ function sourceRoutes(deps: AppDeps) {
 						vector,
 						fused: outcome.fused,
 						rerank: outcome.rerank,
+						evidence: outcome.evidence,
 					}
 				} catch (err) {
 					if (err instanceof LaneError) {

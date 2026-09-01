@@ -6,6 +6,7 @@ import {
 	filterCandidatesByScope,
 	scopeKeyFor,
 } from './accessPolicy'
+import { type EvidenceSelection, selectEvidence } from './evidenceSelector'
 import {
 	type RerankOutcome,
 	type RerankerProvider,
@@ -223,6 +224,8 @@ export interface LaneExecutionOptions {
 	vectorProvider?: EmbeddingProvider
 	/** reranker for the fused list; omit to skip the rerank stage entirely */
 	reranker?: RerankerProvider
+	/** evidence selection stage; omit to skip dedup/diversity entirely */
+	evidence?: { requestedMadhhab?: string[] }
 	/** scope-namespaced cache; a hit still requires identical scope identity */
 	cache?: ScopedResultCache<LaneExecutionOutcome>
 }
@@ -241,6 +244,8 @@ export interface LaneExecutionOutcome {
 	fused: FusionOutcome
 	/** null when the rerank stage was not requested */
 	rerank: RerankOutcome | null
+	/** null when the evidence selection stage was not requested */
+	evidence: EvidenceSelection | null
 }
 
 /**
@@ -257,7 +262,7 @@ export async function executeLanePlan(
 	const filters = options.filters ?? {}
 	const { query, indexReleaseId } = options
 
-	const cacheKey = `${FUSION_VERSION}|${indexReleaseId}|${query}|${JSON.stringify(filters)}|${options.reranker ? options.reranker.modelId : 'no-rerank'}`
+	const cacheKey = `${FUSION_VERSION}|${indexReleaseId}|${query}|${JSON.stringify(filters)}|${options.reranker ? options.reranker.modelId : 'no-rerank'}|${JSON.stringify(options.evidence?.requestedMadhhab ?? null)}`
 	const identity = scopeKeyFor(principal)
 	if (options.cache) {
 		const cached = options.cache.get(cacheKey, identity)
@@ -409,12 +414,26 @@ export async function executeLanePlan(
 		: null
 	if (rerank) fused.candidates = rerank.candidates as FusedCandidate[]
 
+	// evidence selection stage (EVD-002): dedup + source/madhhab diversity
+	// over the final ranked list, with every drop recorded
+	const evidence = options.evidence
+		? await selectEvidence(
+				sql,
+				principal,
+				indexReleaseId,
+				fused.candidates,
+				undefined,
+				options.evidence.requestedMadhhab ?? [],
+			)
+		: null
+
 	const outcome: LaneExecutionOutcome = {
 		indexReleaseId,
 		query,
 		lanes,
 		fused,
 		rerank,
+		evidence,
 	}
 	if (options.cache) options.cache.set(cacheKey, identity, outcome)
 	return outcome
