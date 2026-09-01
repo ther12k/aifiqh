@@ -132,10 +132,9 @@ export async function runExactIdentifierLane(
 			where index_release_id = ${indexReleaseId}::uuid
 				and tenant_id = ${principal.tenantId}::uuid
 				and access_scope_id = any(${principal.scopes}::uuid[])
-				and (
-					position(lower(${needle}) in lower(original_text)) > 0
-					or position(lower(${needle}) in lower(logical_unit_id)) > 0
-				)
+				-- match ORIGINAL TEXT only: logical unit ids embed uuids, and a
+				-- numeric needle ('12') would substring-match random uuids
+				and position(lower(${needle}) in lower(original_text)) > 0
 			limit ${topK}`
 		const alternatives = rows.length
 		for (const r of rows) {
