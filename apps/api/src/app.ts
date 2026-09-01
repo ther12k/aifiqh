@@ -31,6 +31,7 @@ import {
 import { type Sql as ScopedSql, scopedTransaction } from './db/client'
 import type { Sql } from './db/client'
 import { dbOk } from './db/client'
+import { IndexCompilerError, compileIndexRelease } from './index/indexCompiler'
 import {
 	ChangesetError,
 	addChangesetItem,
@@ -1443,6 +1444,33 @@ function sourceRoutes(deps: AppDeps) {
 				} catch (err) {
 					if (err instanceof ReleaseError) {
 						ctx.set.status = err.code === 'NOT_FOUND' ? 404 : 409
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/index/compile', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('review:publish')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					return await compileIndexRelease(
+						sql,
+						principal,
+						{
+							knowledgeReleaseId: bodyStr(body.knowledgeReleaseId) ?? '',
+							configurationId: bodyStr(body.configurationId) ?? '',
+						},
+						ctx.traceId,
+					)
+				} catch (err) {
+					if (err instanceof IndexCompilerError) {
+						ctx.set.status =
+							err.code === 'CONFIG_NOT_FOUND' ||
+							err.code === 'KNOWLEDGE_RELEASE_NOT_FOUND'
+								? 404
+								: 409
 						return { error: err.code, message: err.message }
 					}
 					throw err
