@@ -59,6 +59,12 @@ import {
 	listSpanLinks,
 } from './knowledge/linkService'
 import { validateForPublish } from './knowledge/publishValidator'
+import {
+	ReleaseError,
+	publishChangeset,
+	resolveAliasRelease,
+	rollbackAlias as rollbackReleaseAlias,
+} from './knowledge/releaseService'
 import type { Logger } from './logger'
 import { getTracer, recordSpan } from './observability/otel'
 import { newTraceId } from './observability/trace'
@@ -1384,6 +1390,84 @@ function sourceRoutes(deps: AppDeps) {
 					}
 					throw err
 				}
+			})
+			.post('/changesets/:id/publish', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('review:publish')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				const alias = bodyStr(body.alias)
+				if (alias !== 'staging' && alias !== 'production') {
+					ctx.set.status = 400
+					return {
+						error: 'ALIAS_INVALID',
+						message: "alias must be 'staging' or 'production'",
+					}
+				}
+				try {
+					return await publishChangeset(
+						sql,
+						principal,
+						ctx.params.id,
+						{ alias },
+						ctx.traceId,
+					)
+				} catch (err) {
+					if (err instanceof ReleaseError) {
+						ctx.set.status = err.code === 'NOT_FOUND' ? 404 : 409
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/releases/aliases/:alias/rollback', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('review:publish')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				if (
+					ctx.params.alias !== 'staging' &&
+					ctx.params.alias !== 'production'
+				) {
+					ctx.set.status = 400
+					return { error: 'ALIAS_INVALID', message: 'unknown alias' }
+				}
+				try {
+					return await rollbackReleaseAlias(
+						sql,
+						principal,
+						ctx.params.alias as 'staging' | 'production',
+						bodyStr(body.targetReleaseId) ?? '',
+						ctx.traceId,
+					)
+				} catch (err) {
+					if (err instanceof ReleaseError) {
+						ctx.set.status = err.code === 'NOT_FOUND' ? 404 : 409
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/releases/aliases/:alias', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				if (
+					ctx.params.alias !== 'staging' &&
+					ctx.params.alias !== 'production'
+				) {
+					ctx.set.status = 400
+					return { error: 'ALIAS_INVALID', message: 'unknown alias' }
+				}
+				const release = await resolveAliasRelease(
+					sql,
+					principal,
+					ctx.params.alias as 'staging' | 'production',
+				)
+				if (!release) {
+					ctx.set.status = 404
+					return { error: 'not_found' }
+				}
+				return release
 			})
 			.get('/changesets/:id', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
