@@ -38,6 +38,7 @@ import {
 	getChangeset,
 	transitionChangeset,
 } from './knowledge/changesetService'
+import { DiffError, computeChangesetDiff } from './knowledge/diffService'
 import type { CreateConceptInput } from './knowledge/knowledgeService'
 import {
 	addReviewerNote,
@@ -1360,6 +1361,25 @@ function sourceRoutes(deps: AppDeps) {
 									: err.code === 'SCOPE_DENIED'
 										? 403
 										: 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/changesets/:id/items/:conceptId/diff', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				try {
+					return await computeChangesetDiff(
+						sql,
+						principal,
+						ctx.params.id,
+						ctx.params.conceptId,
+						ctx.traceId,
+					)
+				} catch (err) {
+					if (err instanceof DiffError) {
+						ctx.set.status = err.code === 'NOT_FOUND' ? 404 : 400
 						return { error: err.code, message: err.message }
 					}
 					throw err
