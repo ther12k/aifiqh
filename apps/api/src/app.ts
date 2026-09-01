@@ -47,6 +47,7 @@ import {
 	rebuildLexicalProjection,
 	searchLexical,
 } from './index/lexicalSearch'
+import { rebuildAndVerifyIndexRelease } from './index/rebuildVerifier'
 import {
 	ChangesetError,
 	addChangesetItem,
@@ -1586,6 +1587,26 @@ function sourceRoutes(deps: AppDeps) {
 							err.code === 'KNOWLEDGE_RELEASE_NOT_FOUND'
 								? 404
 								: 409
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/index/releases/:id/rebuild-verify', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('review:publish')
+				ctx.requireCsrf()
+				try {
+					return await rebuildAndVerifyIndexRelease(
+						sql,
+						principal,
+						ctx.params.id,
+						{},
+						ctx.traceId,
+					)
+				} catch (err) {
+					if (err instanceof IndexCompilerError) {
+						ctx.set.status = 404
 						return { error: err.code, message: err.message }
 					}
 					throw err
