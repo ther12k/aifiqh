@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { sha256Hex } from './sha256'
 
 export const CONCEPT_TYPES = [
 	'definition',
@@ -321,7 +321,7 @@ export function computeConceptContentHash(input: {
 		authorityClass: input.authorityClass ?? null,
 		metadata: input.metadataJsonb ?? {},
 	}
-	return createHash('sha256').update(JSON.stringify(normalized)).digest('hex')
+	return sha256Hex(JSON.stringify(normalized))
 }
 
 export const REQUIRED_FIELDS_BY_TYPE: Record<ConceptType, readonly string[]> = {
