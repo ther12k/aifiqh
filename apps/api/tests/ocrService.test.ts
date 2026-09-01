@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { beforeAll, describe, expect, test } from 'bun:test'
 import postgres from 'postgres'
 import {
 	FakeOcrProvider,
@@ -6,6 +6,7 @@ import {
 } from '../../worker/src/ocr/ocrProvider'
 import { runOcrForPage } from '../../worker/src/ocr/ocrService'
 import { scopedTransaction } from '../src/db/client'
+import { ensureMigrations } from './dbBootstrap'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -61,6 +62,8 @@ async function makePage(): Promise<string> {
 }
 
 describe('Arabic/Indonesian OCR adapter with raw-output preservation (OCR-001)', () => {
+	beforeAll(ensureMigrations)
+
 	test('persists raw output with provider/model/version and preserves Arabic RTL order', async () => {
 		const pageId = await makePage()
 		const arabicText =

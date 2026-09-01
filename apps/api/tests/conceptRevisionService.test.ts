@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { beforeAll, describe, expect, test } from 'bun:test'
 import postgres from 'postgres'
 import { buildApp } from '../src/app'
 import { signSession } from '../src/auth/session'
@@ -6,6 +6,7 @@ import { issueSession } from '../src/auth/sessionStore'
 import { loadConfig } from '../src/config'
 import { scopedTransaction } from '../src/db/client'
 import { createLogger } from '../src/logger'
+import { ensureMigrations } from './dbBootstrap'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -105,6 +106,8 @@ async function authHeaders(userId: string, tenantId: string, withCsrf = false) {
 }
 
 describe('immutable concept revision service & content hashing (KNW-003)', () => {
+	beforeAll(ensureMigrations)
+
 	test('creates sequential revisions with deterministic content hashes', async () => {
 		const { tenantId, scopeId, editorId } = await setupFixtures()
 		const auth = await authHeaders(editorId, tenantId, true)

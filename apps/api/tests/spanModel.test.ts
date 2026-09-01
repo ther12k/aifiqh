@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { beforeAll, describe, expect, test } from 'bun:test'
 import { SESSION_COOKIE } from '@aifiqh/shared'
 import type { ProcessorOutput } from '@aifiqh/shared'
 import postgres from 'postgres'
@@ -13,6 +13,7 @@ import {
 	materializeExtraction,
 	resolveSpan,
 } from '../src/sources/spanResolver'
+import { ensureMigrations } from './dbBootstrap'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'

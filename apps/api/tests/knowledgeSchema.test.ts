@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { beforeAll, describe, expect, test } from 'bun:test'
 import {
 	CONCEPT_TYPES,
 	computeConceptContentHash,
@@ -10,6 +10,7 @@ import { signSession } from '../src/auth/session'
 import { issueSession } from '../src/auth/sessionStore'
 import { loadConfig } from '../src/config'
 import { createLogger } from '../src/logger'
+import { ensureMigrations } from './dbBootstrap'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -100,6 +101,8 @@ async function authHeaders(userId: string, tenantId: string, withCsrf = false) {
 }
 
 describe('canonical database knowledge schema (KNW-001)', () => {
+	beforeAll(ensureMigrations)
+
 	test('computeConceptContentHash is deterministic across key ordering', () => {
 		const h1 = computeConceptContentHash({
 			title: 'Niat Tayamum',

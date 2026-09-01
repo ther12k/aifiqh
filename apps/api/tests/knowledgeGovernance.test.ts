@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { beforeAll, describe, expect, test } from 'bun:test'
 import {
 	CONCEPT_PROFILES_CATALOG,
 	CONCEPT_TYPES,
@@ -11,6 +11,7 @@ import { signSession } from '../src/auth/session'
 import { issueSession } from '../src/auth/sessionStore'
 import { loadConfig } from '../src/config'
 import { createLogger } from '../src/logger'
+import { ensureMigrations } from './dbBootstrap'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -128,6 +129,8 @@ async function authHeaders(userId: string, tenantId: string, withCsrf = false) {
 }
 
 describe('required-field profiles for all 9 concept types (KNW-002)', () => {
+	beforeAll(ensureMigrations)
+
 	test('all 9 concept types have valid profile catalog definitions and examples', () => {
 		expect(CONCEPT_TYPES.length).toBe(9)
 		for (const type of CONCEPT_TYPES) {

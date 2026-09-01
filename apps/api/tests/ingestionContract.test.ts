@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { beforeAll, describe, expect, test } from 'bun:test'
 import {
 	IngestionError,
 	PROCESSING_MANIFEST_SCHEMA_V1,
@@ -14,12 +14,15 @@ import {
 	processIngestionJob,
 } from '../../worker/src/ingestionEngine'
 import { scopedTransaction } from '../src/db/client'
+import { ensureMigrations } from './dbBootstrap'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
 const sql = postgres(DB_URL, { max: 5 })
 
 describe('processor plugin contract & processing manifest (ING-001)', () => {
+	beforeAll(ensureMigrations)
+
 	test('processor registry registers and matches MIME types', () => {
 		const registry = new IngestionRegistry()
 		const noop = new NoOpProcessor()
