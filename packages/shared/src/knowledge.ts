@@ -23,6 +23,68 @@ export type KnowledgeRevisionLifecycleStatus =
 
 export type GenerationMethod = 'manual' | 'model_assisted' | 'imported'
 
+/**
+ * Registry of typed relationships between concept revisions (KNW-005).
+ * Links are directed by default; the registry records which relationships
+ * may be traversed in reverse for lookup.
+ */
+export const KNOWLEDGE_RELATIONSHIP_TYPES = [
+	'supports',
+	'contradicts',
+	'specializes',
+	'generalizes',
+	'exception_to',
+	'compares_with',
+	'supersedes',
+	'relates_to',
+] as const
+
+export type KnowledgeRelationshipType =
+	(typeof KNOWLEDGE_RELATIONSHIP_TYPES)[number]
+
+export interface ConceptLinkInput {
+	toConceptId?: string
+	toRevisionId?: string
+	relationshipType: KnowledgeRelationshipType
+	direction?: 'directed' | 'undirected'
+	notes?: string
+}
+
+export interface ConceptLink {
+	id: string
+	fromRevisionId: string
+	fromConceptId: string
+	fromTitle: string
+	toConceptId: string | null
+	toRevisionId: string | null
+	toTitle: string | null
+	relationshipType: KnowledgeRelationshipType
+	direction: 'directed' | 'undirected'
+	notes: string | null
+	active: boolean
+	createdAt: string
+}
+
+export interface SourceSpanLinkInput {
+	sourceSpanId: string
+	relationshipType?: string
+	quotationText?: string
+	notes?: string
+}
+
+export interface SourceSpanLink {
+	id: string
+	revisionId: string
+	sourceSpanId: string
+	sourceRevisionId: string
+	spanKey: string
+	sourceTitle: string | null
+	relationshipType: string
+	quotationText: string | null
+	notes: string | null
+	createdAt: string
+}
+
 export interface KnowledgeTypeProfile {
 	id: string
 	typeKey: ConceptType

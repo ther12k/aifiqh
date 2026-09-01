@@ -21,6 +21,17 @@ import { type Sql as ScopedSql, scopedTransaction } from './db/client'
 import type { Sql } from './db/client'
 import { dbOk } from './db/client'
 import {
+	ConfigValidationError,
+	addModel,
+	createProvider,
+	listProviders,
+	resolveAlias,
+	rollbackAlias,
+	setAlias,
+	setProviderEnabled,
+	testProviderConnection,
+} from './config/configService'
+import {
 	addReviewerNote,
 	createConcept,
 	createRevision,
@@ -30,6 +41,14 @@ import {
 	listStaleConcepts,
 	recordVerification,
 } from './knowledge/knowledgeService'
+import {
+	LinkValidationError,
+	deactivateLink,
+	linkConcepts,
+	linkSourceSpan,
+	listConceptLinks,
+	listSpanLinks,
+} from './knowledge/linkService'
 import type { Logger } from './logger'
 import { getTracer, recordSpan } from './observability/otel'
 import { newTraceId } from './observability/trace'
@@ -1170,11 +1189,106 @@ function sourceRoutes(deps: AppDeps) {
 							throw err
 						}
 					})
-					.get('/knowledge/stale', async (rawCtx) => {
-						const ctx = rawCtx as unknown as HandlerCtx
-						const principal = await ctx.requirePermission('knowledge:read')
-						return listStaleConcepts(sql, principal.tenantId)
-					})
+				.get('/knowledge/stale', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('knowledge:read')
+					return listStaleConcepts(sql, principal.tenantId)
+				})
+				.post('/knowledge/revisions/:revisionId/links', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('knowledge:draft')
+					ctx.requireCsrf()
+					const body = (ctx.body ?? {}) as any
+					try {
+						return await linkConcepts(
+							sql,
+							principal,
+							ctx.params.revisionId,
+							{
+								toConceptId: body.toConceptId,
+								toRevisionId: body.toRevisionId,
+								relationshipType: body.relationshipType,
+								direction: body.direction,
+								notes: body.notes,
+							},
+							ctx.traceId,
+						)
+					} catch (err) {
+						if (err instanceof LinkValidationError) {
+							ctx.set.status = err.code === 'NOT_FOUND' ? 404 : 400
+							return { error: err.code, message: err.message }
+						}
+						throw err
+					}
+				})
+				.post('/knowledge/links/:linkId/deactivate', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('knowledge:draft')
+					ctx.requireCsrf()
+					try {
+						await deactivateLink(sql, principal, ctx.params.linkId, ctx.traceId)
+						return { id: ctx.params.linkId, active: false }
+					} catch (err) {
+						if (err instanceof LinkValidationError) {
+							ctx.set.status = err.code === 'NOT_FOUND' ? 404 : 400
+							return { error: err.code, message: err.message }
+						}
+						throw err
+					}
+				})
+				.get('/knowledge/concepts/:id/links', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('knowledge:read')
+					try {
+						return await listConceptLinks(sql, principal, ctx.params.id)
+					} catch (err) {
+						if (err instanceof LinkValidationError) {
+							ctx.set.status = err.code === 'NOT_FOUND' ? 404 : 403
+							return { error: err.code, message: err.message }
+						}
+						throw err
+					}
+				})
+				.post('/knowledge/revisions/:revisionId/span-links', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('knowledge:draft')
+					ctx.requireCsrf()
+					const body = (ctx.body ?? {}) as any
+					try {
+						return await linkSourceSpan(
+							sql,
+							principal,
+							ctx.params.revisionId,
+							{
+								sourceSpanId: body.sourceSpanId,
+								relationshipType: body.relationshipType,
+								quotationText: body.quotationText,
+								notes: body.notes,
+							},
+							ctx.traceId,
+						)
+					} catch (err) {
+						if (err instanceof LinkValidationError) {
+							ctx.set.status =
+								err.code === 'NOT_FOUND' || err.code === 'LINK_TARGET_MISSING' ? 404 : 400
+							return { error: err.code, message: err.message }
+						}
+						throw err
+					}
+				})
+				.get('/knowledge/revisions/:revisionId/span-links', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('knowledge:read')
+					try {
+						return await listSpanLinks(sql, principal, ctx.params.revisionId)
+					} catch (err) {
+						if (err instanceof LinkValidationError) {
+							ctx.set.status = err.code === 'NOT_FOUND' ? 404 : 403
+							return { error: err.code, message: err.message }
+						}
+						throw err
+					}
+				})
 					.post('/knowledge/revisions/:revisionId/notes', async (rawCtx) => {
 						const ctx = rawCtx as unknown as HandlerCtx
 						const principal = await ctx.requirePermission('knowledge:read')
@@ -1221,7 +1335,145 @@ function sourceRoutes(deps: AppDeps) {
 						ctx.set.status = 201
 						return res
 					})
-					.get('/audit/events', async (rawCtx) => {
+					.get('/config/providers', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					await ctx.requirePermission('config:manage')
+					return listProviders(sql)
+				})
+				.post('/config/providers', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('config:manage')
+					ctx.requireCsrf()
+					const body = (ctx.body ?? {}) as any
+					try {
+						const res = await createProvider(
+							sql,
+							principal,
+							{
+								key: body.key,
+								provider: body.provider,
+								baseUrl: body.baseUrl,
+								secretRef: body.secretRef,
+							},
+							ctx.traceId,
+						)
+						ctx.set.status = 201
+						return res
+					} catch (err) {
+						if (err instanceof ConfigValidationError) {
+							ctx.set.status = 400
+							return { error: err.code, message: err.message }
+						}
+						throw err
+					}
+				})
+				.post('/config/providers/:id/test', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('config:manage')
+					ctx.requireCsrf()
+					try {
+						return await testProviderConnection(sql, principal, ctx.params.id, ctx.traceId)
+					} catch (err) {
+						if (err instanceof ConfigValidationError) {
+							ctx.set.status = err.code === 'PROVIDER_NOT_FOUND' ? 404 : 400
+							return { error: err.code, message: err.message }
+						}
+						throw err
+					}
+				})
+				.post('/config/providers/:id/enabled', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('config:manage')
+					ctx.requireCsrf()
+					const body = (ctx.body ?? {}) as { enabled?: boolean }
+					try {
+						await setProviderEnabled(sql, principal, ctx.params.id, body.enabled === true, ctx.traceId)
+						return { id: ctx.params.id, enabled: body.enabled === true }
+					} catch (err) {
+						if (err instanceof ConfigValidationError) {
+							ctx.set.status = err.code === 'PROVIDER_NOT_FOUND' ? 404 : 400
+							return { error: err.code, message: err.message }
+						}
+						throw err
+					}
+				})
+				.post('/config/providers/:id/models', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('config:manage')
+					ctx.requireCsrf()
+					const body = (ctx.body ?? {}) as any
+					try {
+						const res = await addModel(
+							sql,
+							principal,
+							ctx.params.id,
+							{
+								modelId: body.modelId,
+								contextWindow: body.contextWindow,
+								capabilities: body.capabilities,
+							},
+							ctx.traceId,
+						)
+						ctx.set.status = 201
+						return res
+					} catch (err) {
+						if (err instanceof ConfigValidationError) {
+							ctx.set.status = err.code === 'PROVIDER_NOT_FOUND' ? 404 : 400
+							return { error: err.code, message: err.message }
+						}
+						throw err
+					}
+				})
+				.get('/config/aliases/:alias', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					await ctx.requirePermission('config:manage')
+					const resolved = await resolveAlias(sql, ctx.params.alias)
+					if (!resolved) {
+						ctx.set.status = 404
+						return { error: 'not_found' }
+					}
+					return resolved
+				})
+				.put('/config/aliases/:alias', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('config:manage')
+					ctx.requireCsrf()
+					const body = (ctx.body ?? {}) as any
+					try {
+						return await setAlias(
+							sql,
+							principal,
+							ctx.params.alias,
+							{
+								targetType: body.targetType,
+								targetId: body.targetId,
+								changeReason: body.changeReason,
+							},
+							ctx.traceId,
+						)
+					} catch (err) {
+						if (err instanceof ConfigValidationError) {
+							ctx.set.status = 400
+							return { error: err.code, message: err.message }
+						}
+						throw err
+					}
+				})
+				.post('/config/aliases/:alias/rollback', async (rawCtx) => {
+					const ctx = rawCtx as unknown as HandlerCtx
+					const principal = await ctx.requirePermission('config:manage')
+					ctx.requireCsrf()
+					try {
+						return await rollbackAlias(sql, principal, ctx.params.alias, ctx.traceId)
+					} catch (err) {
+						if (err instanceof ConfigValidationError) {
+							ctx.set.status = 400
+							return { error: err.code, message: err.message }
+						}
+						throw err
+					}
+				})
+				.get('/audit/events', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
 				const principal = await ctx.requirePermission('audit:read')
 				return scopedTransaction(sql, principal.tenantId, (tx) =>
