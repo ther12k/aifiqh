@@ -1,0 +1,300 @@
+import { beforeAll, describe, expect, test } from 'bun:test'
+import { ANSWER_SCHEMA_VERSION, type StructuredAnswer } from '@aifiqh/shared'
+import {
+	GENERATION_PIPELINE_VERSION,
+	PROMPT_VERSION,
+	generateGroundedAnswer,
+} from '../src/answers/generationPipeline'
+import type { ResponseDecisionOutcome } from '../src/retrieval/abstentionPolicy'
+import type { BuiltContext } from '../src/retrieval/contextBuilder'
+import { ensureMigrations } from './dbBootstrap'
+
+const EV_1 = '11111111-1111-4111-8111-111111111111'
+const EV_2 = '22222222-2222-4222-8222-222222222222'
+const EV_DROPPED = '33333333-3333-4333-8333-333333333333'
+
+function contextFixture(): BuiltContext {
+	return {
+		profile: 'standard',
+		tokenBudget: 4000,
+		tokenTotal: 120,
+		items: [
+			{
+				unitId: EV_1,
+				logicalUnitId: `span:${EV_1}`,
+				relation: 'primary',
+				selectionReason: 'selected evidence rank 1',
+				tokenEstimate: 60,
+				protectedItem: false,
+				included: true,
+				truncationNote: null,
+			},
+			{
+				unitId: EV_2,
+				logicalUnitId: `span:${EV_2}`,
+				relation: 'primary',
+				selectionReason: 'selected evidence rank 2',
+				tokenEstimate: 60,
+				protectedItem: false,
+				included: true,
+				truncationNote: null,
+			},
+			{
+				unitId: EV_DROPPED,
+				logicalUnitId: `span:${EV_DROPPED}`,
+				relation: 'adjacent',
+				selectionReason: 'adjacent context',
+				tokenEstimate: 999,
+				protectedItem: false,
+				included: false, // dropped by the budget pass
+				truncationNote: 'dropped whole to fit token budget 4000',
+			},
+		],
+		downgraded: false,
+		manifestHash: 'a'.repeat(64),
+		version: 'context-builder-v1',
+	}
+}
+
+function decisionFixture(
+	decision: ResponseDecisionOutcome['decision'] = 'answer',
+): ResponseDecisionOutcome {
+	return {
+		decision,
+		languageConstraints: [
+			'CITE_ONLY_VERIFIED_EVIDENCE',
+			'NO_NUMERIC_CONFIDENCE',
+		],
+		rationale: 'test',
+		assessmentStatus: 'sufficient',
+	}
+}
+
+function validAnswerJson(): Record<string, unknown> {
+	return {
+		schemaVersion: ANSWER_SCHEMA_VERSION,
+		language: 'id',
+		sections: [
+			{ kind: 'direct_answer', markdown: 'Jawaban: suci.', claimIds: ['c1'] },
+			{ kind: 'evidence', markdown: 'Dalil.', claimIds: ['c1'] },
+			{ kind: 'method', markdown: 'Metode.' },
+			{ kind: 'caveats', markdown: 'Catatan.' },
+			{ kind: 'sources', markdown: 'Sumber.' },
+		],
+		claims: [
+			{
+				id: 'c1',
+				text: 'Air mutlak suci.',
+				material: true,
+				evidence: [
+					{
+						claimId: 'c1',
+						evidenceId: EV_1,
+						relation: 'direct',
+						quote: 'Air mutlak suci.',
+					},
+				],
+			},
+		],
+	}
+}
+
+function makeGenerate(
+	output: () => string,
+	opts: { finishReason?: string; modelId?: string; throwErr?: Error } = {},
+) {
+	const calls: Array<{
+		messages: Array<{ role: string; content: string }>
+		promptVersion: string
+	}> = []
+	const generate = async (request: {
+		messages: Array<{ role: string; content: string }>
+		promptVersion: string
+	}) => {
+		calls.push(request)
+		if (opts.throwErr) throw opts.throwErr
+		return {
+			text: output(),
+			finishReason: opts.finishReason ?? 'stop',
+			modelId: opts.modelId ?? 'test-model',
+		}
+	}
+	return { generate, calls }
+}
+
+describe('LLM-005: versioned grounded-generation pipeline', () => {
+	beforeAll(ensureMigrations)
+
+	test('valid grounded output is generated with every version pinned', async () => {
+		const { generate, calls } = makeGenerate(() =>
+			JSON.stringify(validAnswerJson()),
+		)
+		const result = await generateGroundedAnswer({
+			query: 'hukum air mutlak',
+			context: contextFixture(),
+			decision: decisionFixture('answer'),
+			providerKey: 'openai',
+			generate,
+		})
+		expect(result.status).toBe('generated')
+		expect(result.answer?.claims).toHaveLength(1)
+		expect(result.issues).toEqual([])
+		expect(result.rawOutput).toBeNull()
+		// prompt/model/context/schema revisions all pinned on the result
+		expect(result.pinned).toEqual({
+			pipelineVersion: GENERATION_PIPELINE_VERSION,
+			promptVersion: PROMPT_VERSION,
+			schemaVersion: ANSWER_SCHEMA_VERSION,
+			contextManifestHash: 'a'.repeat(64),
+			providerKey: 'openai',
+			modelId: 'test-model',
+		})
+		// prompt version also travels to the gateway call
+		expect(calls[0].promptVersion).toBe(PROMPT_VERSION)
+	})
+
+	test('abstain and escalate decisions never call the model', async () => {
+		for (const kind of ['abstain', 'escalate'] as const) {
+			const { generate, calls } = makeGenerate(() =>
+				JSON.stringify(validAnswerJson()),
+			)
+			const result = await generateGroundedAnswer({
+				query: 'q',
+				context: contextFixture(),
+				decision: decisionFixture(kind),
+				providerKey: 'openai',
+				generate,
+			})
+			expect(result.status).toBe('abstained')
+			expect(result.answer).toBeNull()
+			expect(calls).toHaveLength(0)
+		}
+	})
+
+	test('prompt embeds only manifest-included evidence and the language constraints', async () => {
+		const { generate, calls } = makeGenerate(() =>
+			JSON.stringify(validAnswerJson()),
+		)
+		await generateGroundedAnswer({
+			query: 'hukum air mutlak',
+			context: contextFixture(),
+			decision: decisionFixture('answer_with_caveats'),
+			providerKey: 'openai',
+			generate,
+		})
+		const system = calls[0].messages[0].content
+		expect(system).toContain(EV_1)
+		expect(system).toContain(EV_2)
+		// the budget-dropped item never reaches the model
+		expect(system).not.toContain(EV_DROPPED)
+		// decision constraints are binding prompt content
+		expect(system).toContain('CITE_ONLY_VERIFIED_EVIDENCE')
+		expect(system).toContain('NO_NUMERIC_CONFIDENCE')
+		// required sections are demanded
+		for (const kind of [
+			'direct_answer',
+			'evidence',
+			'method',
+			'caveats',
+			'sources',
+		]) {
+			expect(system).toContain(kind)
+		}
+	})
+
+	test('unparseable output fails — no partial draft is ever treated as valid', async () => {
+		const { generate } = makeGenerate(() => 'Ini bukan JSON, hanya prosa.')
+		const result = await generateGroundedAnswer({
+			query: 'q',
+			context: contextFixture(),
+			decision: decisionFixture(),
+			providerKey: 'openai',
+			generate,
+		})
+		expect(result.status).toBe('failed')
+		expect(result.answer).toBeNull()
+		expect(result.issues.map((i) => i.code)).toContain('UNPARSEABLE_JSON')
+		expect(result.rawOutput).toContain('prosa')
+	})
+
+	test('schema-invalid output fails with every issue listed for repair', async () => {
+		const broken = validAnswerJson() as Record<string, unknown>
+		delete (broken as { sections?: unknown }).sections
+		const claims = broken.claims as Array<Record<string, unknown>>
+		claims[0].evidence = [] // material claim without evidence
+		const { generate } = makeGenerate(() => JSON.stringify(broken))
+		const result = await generateGroundedAnswer({
+			query: 'q',
+			context: contextFixture(),
+			decision: decisionFixture(),
+			providerKey: 'openai',
+			generate,
+		})
+		expect(result.status).toBe('failed')
+		expect(result.issues.map((i) => i.code)).toContain('SECTIONS_MISSING')
+		expect(result.issues.map((i) => i.code)).toContain(
+			'MATERIAL_CLAIM_WITHOUT_EVIDENCE',
+		)
+	})
+
+	test('only manifest evidence IDs accepted — unknown id rejected', async () => {
+		const citing = validAnswerJson() as Record<string, unknown>
+		const claims = citing.claims as Array<Record<string, unknown>>
+		;(claims[0].evidence as Array<Record<string, unknown>>)[0].evidenceId =
+			'99999999-9999-4999-8999-999999999999'
+		const { generate } = makeGenerate(() => JSON.stringify(citing))
+		const result = await generateGroundedAnswer({
+			query: 'q',
+			context: contextFixture(),
+			decision: decisionFixture(),
+			providerKey: 'openai',
+			generate,
+		})
+		expect(result.status).toBe('failed')
+		expect(result.issues.map((i) => i.code)).toContain('UNKNOWN_EVIDENCE_ID')
+		expect(result.answer).toBeNull()
+		// the budget-dropped manifest item is equally unacceptable
+		const dropped = validAnswerJson() as Record<string, unknown>
+		const dclaims = dropped.claims as Array<Record<string, unknown>>
+		;(dclaims[0].evidence as Array<Record<string, unknown>>)[0].evidenceId =
+			EV_DROPPED
+		const { generate: gen2 } = makeGenerate(() => JSON.stringify(dropped))
+		const r2 = await generateGroundedAnswer({
+			query: 'q',
+			context: contextFixture(),
+			decision: decisionFixture(),
+			providerKey: 'openai',
+			generate: gen2,
+		})
+		expect(r2.status).toBe('failed')
+		expect(r2.issues.map((i) => i.code)).toContain('UNKNOWN_EVIDENCE_ID')
+	})
+
+	test('gateway errors and truncated generations are failures, never drafts', async () => {
+		const throwing = makeGenerate(() => '', {
+			throwErr: new Error('provider 503'),
+		})
+		const r1 = await generateGroundedAnswer({
+			query: 'q',
+			context: contextFixture(),
+			decision: decisionFixture(),
+			providerKey: 'openai',
+			generate: throwing.generate,
+		})
+		expect(r1.status).toBe('failed')
+		expect(r1.issues.map((i) => i.code)).toContain('GATEWAY_ERROR')
+
+		const truncated = makeGenerate(() => '{"schemaVersion":', {
+			finishReason: 'length',
+		})
+		const r2 = await generateGroundedAnswer({
+			query: 'q',
+			context: contextFixture(),
+			decision: decisionFixture(),
+			providerKey: 'openai',
+			generate: truncated.generate,
+		})
+		expect(r2.status).toBe('failed')
+		expect(r2.issues.map((i) => i.code)).toContain('INCOMPLETE_GENERATION')
+	})
+})
