@@ -36,6 +36,7 @@ import {
 	HashEmbeddingProvider,
 	embedIndexRelease,
 } from './index/embeddingService'
+import { compileIncrementalIndexRelease } from './index/incrementalIndexer'
 import {
 	IndexCompilerError,
 	compareIndexReleases,
@@ -1544,6 +1545,35 @@ function sourceRoutes(deps: AppDeps) {
 						sql,
 						principal,
 						{
+							knowledgeReleaseId: bodyStr(body.knowledgeReleaseId) ?? '',
+							configurationId: bodyStr(body.configurationId) ?? '',
+						},
+						ctx.traceId,
+					)
+				} catch (err) {
+					if (err instanceof IndexCompilerError) {
+						ctx.set.status =
+							err.code === 'CONFIG_NOT_FOUND' ||
+							err.code === 'KNOWLEDGE_RELEASE_NOT_FOUND'
+								? 404
+								: 409
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/index/compile-incremental', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('review:publish')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					return await compileIncrementalIndexRelease(
+						sql,
+						principal,
+						{
+							previousIndexReleaseId:
+								bodyStr(body.previousIndexReleaseId) ?? '',
 							knowledgeReleaseId: bodyStr(body.knowledgeReleaseId) ?? '',
 							configurationId: bodyStr(body.configurationId) ?? '',
 						},
