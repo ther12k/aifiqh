@@ -97,6 +97,7 @@ import {
 	restoreCorrection,
 	saveCorrection,
 } from './ocr/ocrCorrectionService'
+import { planAndPersistQuery } from './retrieval/queryPlanner'
 import { resolveSpan } from './sources/spanResolver'
 import { contentKey, getObject, headObject, putObject } from './storage/s3'
 
@@ -1680,6 +1681,28 @@ function sourceRoutes(deps: AppDeps) {
 					return { error: 'not_found' }
 				}
 				return resolved
+			})
+			.post('/retrieval/plan', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				return planAndPersistQuery(
+					sql,
+					principal,
+					{
+						originalQuery: bodyStr(body.query) ?? '',
+						indexReleaseId: bodyStr(body.indexReleaseId),
+						requestedScope: bodyStrArray(body.requestedScope),
+						requestedMadhhab: bodyStrArray(body.requestedMadhhab),
+						mode: body.mode as
+							| 'grounded_only'
+							| 'allow_general_knowledge'
+							| undefined,
+						conversationId: bodyStr(body.conversationId),
+					},
+					ctx.traceId,
+				)
 			})
 			.post('/index/releases/:id/rebuild-verify', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
