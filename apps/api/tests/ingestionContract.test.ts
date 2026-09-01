@@ -21,7 +21,39 @@ const DB_URL =
 const sql = postgres(DB_URL, { max: 5 })
 
 describe('processor plugin contract & processing manifest (ING-001)', () => {
-	beforeAll(ensureMigrations)
+	let fixtureSourceId = ''
+
+	beforeAll(async () => {
+		await ensureMigrations()
+		const suffix = crypto.randomUUID().slice(0, 8)
+		const [tenant] = await sql<{ id: string }[]>`
+			insert into tenants (slug, name) values (${`ing-t-${suffix}`}, 'Ingestion Test Tenant')
+			returning id`
+		const [scope] = await sql<{ id: string }[]>`
+			insert into access_scopes (tenant_id, key, name)
+			values (${tenant.id}::uuid, 'root', 'Root Scope')
+			returning id`
+		const [src] = await sql<{ id: string }[]>`
+			insert into sources (tenant_id, title, author, source_type, language, rights_status, access_scope_id)
+			values (${tenant.id}::uuid, 'Ingestion Contract Source', 'x', 'book', 'ar', 'licensed', ${scope.id}::uuid)
+			returning id`
+		fixtureSourceId = src.id
+	})
+
+	function makeProcessorInput(revisionId: string): ProcessorInput {
+		return {
+			sourceRevisionId: revisionId,
+			sourceId: fixtureSourceId,
+			tenantId: crypto.randomUUID(),
+			file: {
+				buffer: new Uint8Array([1]),
+				mimeType: 'application/x-noop',
+				sha256: 'c'.repeat(64),
+				storageKey: 'test',
+				sizeBytes: 1,
+			},
+		}
+	}
 
 	test('processor registry registers and matches MIME types', () => {
 		const registry = new IngestionRegistry()
@@ -41,12 +73,10 @@ describe('processor plugin contract & processing manifest (ING-001)', () => {
 
 		const def = await ensureProcessorDefinition(sql, noop)
 
-		// Create a dummy source and revision to satisfy foreign keys
-		const [src] = await sql<{ id: string }[]>`
-			select id from sources limit 1`
+		// Create a revision on the fixture source to satisfy foreign keys
 		const [rev] = await sql<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${src.id}::uuid, floor(random()*100000)::int, 'processing')
+			values (${fixtureSourceId}::uuid, floor(random()*100000)::int, 'processing')
 			returning id`
 
 		const idempotencyKey = `test-unsupported-${crypto.randomUUID()}`
@@ -63,7 +93,7 @@ describe('processor plugin contract & processing manifest (ING-001)', () => {
 			async () =>
 				({
 					sourceRevisionId: rev.id,
-					sourceId: src.id,
+					sourceId: fixtureSourceId,
 					tenantId: crypto.randomUUID(),
 					file: {
 						buffer: new Uint8Array([1, 2, 3]),
@@ -94,10 +124,9 @@ describe('processor plugin contract & processing manifest (ING-001)', () => {
 		registry.register(noop)
 
 		const def = await ensureProcessorDefinition(sql, noop)
-		const [src] = await sql<{ id: string }[]>`select id from sources limit 1`
 		const [rev] = await sql<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${src.id}::uuid, floor(random()*100000)::int, 'processing')
+			values (${fixtureSourceId}::uuid, floor(random()*100000)::int, 'processing')
 			returning id`
 
 		const idempotencyKey = `test-success-${crypto.randomUUID()}`
@@ -114,7 +143,7 @@ describe('processor plugin contract & processing manifest (ING-001)', () => {
 			async () =>
 				({
 					sourceRevisionId: rev.id,
-					sourceId: src.id,
+					sourceId: fixtureSourceId,
 					tenantId: crypto.randomUUID(),
 					file: {
 						buffer: new Uint8Array([10, 20]),
@@ -153,10 +182,9 @@ describe('processor plugin contract & processing manifest (ING-001)', () => {
 		registry.register(noop)
 
 		const def = await ensureProcessorDefinition(sql, noop)
-		const [src] = await sql<{ id: string }[]>`select id from sources limit 1`
 		const [rev] = await sql<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${src.id}::uuid, floor(random()*100000)::int, 'processing')
+			values (${fixtureSourceId}::uuid, floor(random()*100000)::int, 'processing')
 			returning id`
 
 		const idempotencyKey = `test-idempotency-${crypto.randomUUID()}`
@@ -186,7 +214,7 @@ describe('processor plugin contract & processing manifest (ING-001)', () => {
 			async () =>
 				({
 					sourceRevisionId: rev.id,
-					sourceId: src.id,
+					sourceId: fixtureSourceId,
 					tenantId: crypto.randomUUID(),
 					file: {
 						buffer: new Uint8Array([1]),
