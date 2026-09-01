@@ -131,6 +131,7 @@ export async function runExactIdentifierLane(
 			from retrieval_units
 			where index_release_id = ${indexReleaseId}::uuid
 				and tenant_id = ${principal.tenantId}::uuid
+				and access_scope_id = any(${principal.scopes}::uuid[])
 				and (
 					position(lower(${needle}) in lower(original_text)) > 0
 					or position(lower(${needle}) in lower(logical_unit_id)) > 0
@@ -222,16 +223,17 @@ export async function runExactQuoteLane(
 			total_matches: string
 		}[]
 	>`select id, logical_unit_id, unit_kind, source_span_id, knowledge_revision_id, original_text,
-			(position(${phrase} in original_text) > 0) as is_verbatim,
-			count(*) over () as total_matches
-		from retrieval_units
-		where index_release_id = ${indexReleaseId}::uuid
-			and tenant_id = ${principal.tenantId}::uuid
-			and (
-				position(${phrase} in original_text) > 0
-				or position(${normalizedPhrase} in normalized_text) > 0
-			)
-		limit ${topK}`
+				(position(${phrase} in original_text) > 0) as is_verbatim,
+				count(*) over () as total_matches
+			from retrieval_units
+			where index_release_id = ${indexReleaseId}::uuid
+				and tenant_id = ${principal.tenantId}::uuid
+				and access_scope_id = any(${principal.scopes}::uuid[])
+				and (
+					position(${phrase} in original_text) > 0
+					or position(${normalizedPhrase} in normalized_text) > 0
+				)
+			limit ${topK}`
 
 	const totalMatches = rows.length > 0 ? Number(rows[0].total_matches) : 0
 	const candidates = rows
@@ -338,6 +340,7 @@ export async function runLexicalLane(
 		join retrieval_unit_texts t on t.unit_id = ru.id
 		where ru.index_release_id = ${indexReleaseId}::uuid
 			and ru.tenant_id = ${principal.tenantId}::uuid
+			and ru.access_scope_id = any(${principal.scopes}::uuid[])
 			${madhhabFilter}${languageFilter}${topicFilter}
 			and (
 				t.fts @@ websearch_to_tsquery('simple', ${normalized})
@@ -437,6 +440,7 @@ export async function runVectorLane(
 		join retrieval_units ru on ru.id = re.unit_id
 		where ru.index_release_id = ${indexReleaseId}::uuid
 			and ru.tenant_id = ${principal.tenantId}::uuid
+			and ru.access_scope_id = any(${principal.scopes}::uuid[])
 			and re.model_id = ${input.modelId}
 			and re.model_version = ${input.modelVersion}
 			${madhhabFilter}${languageFilter}

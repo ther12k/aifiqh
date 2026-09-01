@@ -97,15 +97,13 @@ import {
 	restoreCorrection,
 	saveCorrection,
 } from './ocr/ocrCorrectionService'
-import { planAndPersistQuery } from './retrieval/queryPlanner'
+import { AccessPolicyError, ScopedResultCache } from './retrieval/accessPolicy'
 import {
-	LaneError,
-	type LexicalFilters,
-	runExactIdentifierLane,
-	runExactQuoteLane,
-	runLexicalLane,
-	runVectorLane,
-} from './retrieval/retrievalLanes'
+	type LaneExecutionOutcome,
+	executeLanePlan,
+} from './retrieval/laneFusion'
+import { planAndPersistQuery } from './retrieval/queryPlanner'
+import { LaneError, type LexicalFilters } from './retrieval/retrievalLanes'
 import { resolveSpan } from './sources/spanResolver'
 import { contentKey, getObject, headObject, putObject } from './storage/s3'
 
@@ -146,6 +144,10 @@ interface RequestStore {
 	traceId: string
 	startedAt?: number
 }
+
+// retrieval result cache — entries are namespaced by tenant + scope-set
+// identity, so a cached result can never be served across scope boundaries
+const retrievalCache = new ScopedResultCache<LaneExecutionOutcome>(30_000)
 
 export function buildApp(deps: AppDeps) {
 	const { cfg, log, sql } = deps
@@ -1744,35 +1746,8 @@ function sourceRoutes(deps: AppDeps) {
 				}
 
 				try {
-					const identifier = await runExactIdentifierLane(
-						sql,
-						principal,
-						indexReleaseId,
-						query,
-					)
-					const quote = await runExactQuoteLane(
-						sql,
-						principal,
-						indexReleaseId,
-						query,
-					)
-					const lexical = await runLexicalLane(
-						sql,
-						principal,
-						indexReleaseId,
-						query,
-						filters,
-					)
-
 					// vector lane uses the SAME embedding configuration the
 					// release was embedded with (model + version pinned)
-					let vector:
-						| Awaited<ReturnType<typeof runVectorLane>>
-						| { candidates: []; filterReasons: []; skipped: string } = {
-						candidates: [],
-						filterReasons: [],
-						skipped: 'NO_EMBEDDINGS_FOR_RELEASE',
-					}
 					const [model] = await sql<
 						{ model_id: string; version: string; dimensions: number }[]
 					>`select em.model_id, em.version, em.dimensions
@@ -1780,27 +1755,25 @@ function sourceRoutes(deps: AppDeps) {
 						join index_configurations ic on ic.id = ir.configuration_id
 						join embedding_models em on em.id = ic.embedding_model_id
 						where ir.id = ${indexReleaseId}::uuid`
-					if (model) {
-						const provider = new HashEmbeddingProvider(
-							model.model_id,
-							model.version,
-							model.dimensions,
-						)
-						const [queryEmbedding] = await provider.embed([query])
-						const vectorResult = await runVectorLane(
-							sql,
-							principal,
-							indexReleaseId,
-							{
-								queryEmbedding,
-								modelId: model.model_id,
-								modelVersion: model.version,
-							},
-							filters,
-						)
-						if (vectorResult.candidates.length > 0) vector = vectorResult
-					}
 
+					// all four lanes run in parallel, fuse with RRF, and every
+					// candidate is re-verified against the live access-scope
+					// policy (fail-closed) before evidence leaves retrieval
+					const outcome = await executeLanePlan(sql, principal, {
+						query,
+						indexReleaseId,
+						filters,
+						vectorProvider: model
+							? new HashEmbeddingProvider(
+									model.model_id,
+									model.version,
+									model.dimensions,
+								)
+							: undefined,
+						cache: retrievalCache,
+					})
+
+					const { identifier, quote, lexical, vector } = outcome.lanes
 					return {
 						indexReleaseId,
 						query,
@@ -1809,11 +1782,17 @@ function sourceRoutes(deps: AppDeps) {
 						quote,
 						lexical,
 						vector,
+						fused: outcome.fused,
 					}
 				} catch (err) {
 					if (err instanceof LaneError) {
 						ctx.set.status = 400
 						return { error: err.code, lane: err.lane, message: err.message }
+					}
+					if (err instanceof AccessPolicyError) {
+						// fail-closed: scope verification unavailable → no evidence
+						ctx.set.status = 503
+						return { error: err.code, message: err.message }
 					}
 					throw err
 				}
