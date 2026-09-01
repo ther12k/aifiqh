@@ -24,6 +24,24 @@ export type KnowledgeRevisionLifecycleStatus =
 export type GenerationMethod = 'manual' | 'model_assisted' | 'imported'
 
 /**
+ * Changeset workflow transitions (REV-001). Kept in shared so the API
+ * service and the review UI agree on legal moves.
+ *   draft → submitted
+ *   submitted → changes_requested | approved | rejected
+ *   changes_requested → submitted
+ *   approved → published
+ */
+export const CHANGESET_TRANSITIONS: Record<string, readonly string[]> = {
+	draft: ['submitted'],
+	submitted: ['changes_requested', 'approved', 'rejected'],
+	changes_requested: ['submitted'],
+	approved: ['published'],
+	published: [],
+	rejected: [],
+	rolled_back: [],
+}
+
+/**
  * Registry of typed relationships between concept revisions (KNW-005).
  * Links are directed by default; the registry records which relationships
  * may be traversed in reverse for lookup.

@@ -1,27 +1,13 @@
-import type { Principal } from '@aifiqh/shared'
+import { CHANGESET_TRANSITIONS, type Principal } from '@aifiqh/shared'
 import { recordAuditInTx } from '../audit/audit'
 import { checkAccess } from '../auth/policy'
 import type { Sql } from '../db/client'
 
 /**
- * Changeset workflow state machine (REV-001).
- * Legal transitions (mirrors the DB trigger exactly):
- *   draft → submitted
- *   submitted → changes_requested | approved | rejected
- *   changes_requested → submitted
- *   approved → published
- * Rollback of published releases is a separate release-level concern (REL-001);
- * this workflow never allows published/rejected → anything.
+ * Changeset workflow state machine (REV-001). Legal transitions mirror the
+ * DB trigger exactly (see CHANGESET_TRANSITIONS in @aifiqh/shared); rollback
+ * of published releases is a separate release-level concern (REL-001).
  */
-export const CHANGESET_TRANSITIONS: Record<string, readonly string[]> = {
-	draft: ['submitted'],
-	submitted: ['changes_requested', 'approved', 'rejected'],
-	changes_requested: ['submitted'],
-	approved: ['published'],
-	published: [],
-	rejected: [],
-	rolled_back: [],
-}
 
 export class ChangesetError extends Error {
 	constructor(
