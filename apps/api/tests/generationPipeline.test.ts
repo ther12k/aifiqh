@@ -219,7 +219,7 @@ describe('LLM-005: versioned grounded-generation pipeline', () => {
 
 	test('schema-invalid output fails with every issue listed for repair', async () => {
 		const broken = validAnswerJson() as Record<string, unknown>
-		delete (broken as { sections?: unknown }).sections
+		broken.sections = undefined
 		const claims = broken.claims as Array<Record<string, unknown>>
 		claims[0].evidence = [] // material claim without evidence
 		const { generate } = makeGenerate(() => JSON.stringify(broken))
