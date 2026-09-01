@@ -144,10 +144,15 @@ export function ConceptEditor({
 						error?: string
 						message?: string
 					}>('POST', '/knowledge/concepts', payload)
-				: await api<{ error?: string; message?: string }>(
-						'POST',
-						`/knowledge/concepts/${conceptId}/revisions`,
-						payload,
+				: await api<{
+							id?: string
+							revisionId?: string
+							error?: string
+							message?: string
+						}>(
+							'POST',
+							`/knowledge/concepts/${conceptId}/revisions`,
+							payload,
 					)
 
 			if (res.status === 201 || res.status === 200) {
