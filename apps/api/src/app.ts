@@ -32,10 +32,20 @@ import { type Sql as ScopedSql, scopedTransaction } from './db/client'
 import type { Sql } from './db/client'
 import { dbOk } from './db/client'
 import {
+	EmbeddingError,
+	HashEmbeddingProvider,
+	embedIndexRelease,
+} from './index/embeddingService'
+import {
 	IndexCompilerError,
 	compareIndexReleases,
 	compileIndexRelease,
 } from './index/indexCompiler'
+import {
+	LexicalSearchError,
+	rebuildLexicalProjection,
+	searchLexical,
+} from './index/lexicalSearch'
 import {
 	ChangesetError,
 	addChangesetItem,
@@ -1448,6 +1458,64 @@ function sourceRoutes(deps: AppDeps) {
 				} catch (err) {
 					if (err instanceof ReleaseError) {
 						ctx.set.status = err.code === 'NOT_FOUND' ? 404 : 409
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/index/releases/:id/search', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				const query =
+					(ctx as unknown as { query?: Record<string, string> }).query ?? {}
+				try {
+					return await searchLexical(
+						sql,
+						principal,
+						ctx.params.id,
+						query.q ?? '',
+						{
+							limit: query.limit ? Number(query.limit) : undefined,
+						},
+					)
+				} catch (err) {
+					if (err instanceof LexicalSearchError) {
+						ctx.set.status = 404
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/index/releases/:id/rebuild-lexical', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('review:publish')
+				ctx.requireCsrf()
+				try {
+					return await rebuildLexicalProjection(sql, principal, ctx.params.id)
+				} catch (err) {
+					if (err instanceof LexicalSearchError) {
+						ctx.set.status = 404
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/index/releases/:id/embed', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('config:manage')
+				ctx.requireCsrf()
+				// deterministic hash provider is the built-in default; remote
+				// providers plug into the same EmbeddingProvider contract
+				try {
+					return await embedIndexRelease(
+						sql,
+						principal,
+						ctx.params.id,
+						new HashEmbeddingProvider(),
+					)
+				} catch (err) {
+					if (err instanceof EmbeddingError) {
+						ctx.set.status = err.code === 'RELEASE_NOT_FOUND' ? 404 : 400
 						return { error: err.code, message: err.message }
 					}
 					throw err
