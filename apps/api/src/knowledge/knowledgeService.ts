@@ -1,9 +1,11 @@
+import postgres from 'postgres'
 import {
 	CONCEPT_PROFILES_CATALOG,
 	type ConceptType,
 	type GenerationMethod,
 	type KnowledgeConceptDetail,
 	type KnowledgeReviewerNote,
+	type KnowledgeRevisionLifecycleStatus,
 	type KnowledgeRevisionProvenance,
 	type KnowledgeTypeProfile,
 	type KnowledgeVerification,
@@ -116,7 +118,7 @@ export async function createConcept(
 				${input.madhhab ?? []},
 				${input.positionKind ?? null},
 				${input.authorityClass ?? null},
-				${tx.json(input.metadataJsonb ?? {})},
+				${tx.json((input.metadataJsonb ?? {}) as unknown as postgres.JSONValue)},
 				${contentHash},
 				'draft',
 				${input.staleAfter ? sql`${input.staleAfter}::timestamptz` : null},
@@ -135,7 +137,9 @@ export async function createConcept(
 			values (
 				${rev.id}::uuid,
 				${generationMethod},
-				${input.modelRef ? tx.json(input.modelRef) : null}
+				${input.modelRef
+					? tx.json(input.modelRef as unknown as postgres.JSONValue)
+					: null}
 			)`
 
 		// Update draft pointer on concept
@@ -161,108 +165,113 @@ export async function createConcept(
 			traceId,
 		})
 
-			return { id: concept.id, revisionId: rev.id }
-		})
-	}
+		return { id: concept.id, revisionId: rev.id }
+	})
+}
 
-	export interface CreateRevisionInput {
-		title: string
-		bodyMarkdown: string
-		language?: string
-		madhhab?: string[]
-		positionKind?: string | null
-		authorityClass?: string | null
-		metadataJsonb?: Record<string, unknown>
-		generationMethod?: GenerationMethod
-		modelRef?: Record<string, unknown>
-		staleAfter?: string | null
-		expectedBaseRevisionNumber?: number
-	}
+export interface CreateRevisionInput {
+	title: string
+	bodyMarkdown: string
+	language?: string
+	madhhab?: string[]
+	positionKind?: string | null
+	authorityClass?: string | null
+	metadataJsonb?: Record<string, unknown>
+	generationMethod?: GenerationMethod
+	modelRef?: Record<string, unknown>
+	staleAfter?: string | null
+	expectedBaseRevisionNumber?: number
+}
 
-	export async function createRevision(
-		sql: Sql,
-		principal: Principal,
-		conceptId: string,
-		input: CreateRevisionInput,
-		traceId?: string,
-	): Promise<{ id: string; revisionNumber: number; contentHash: string }> {
-		return await sql.begin(async (tx) => {
-			const [concept] = await tx<
-				{ id: string; tenant_id: string; type_key: ConceptType; access_scope_id: string }[]
-			>`select id, tenant_id, type_key, access_scope_id
+export async function createRevision(
+	sql: Sql,
+	principal: Principal,
+	conceptId: string,
+	input: CreateRevisionInput,
+	traceId?: string,
+): Promise<{ id: string; revisionNumber: number; contentHash: string }> {
+	return await sql.begin(async (tx) => {
+		const [concept] = await tx<
+			{
+				id: string
+				tenant_id: string
+				type_key: ConceptType
+				access_scope_id: string
+			}[]
+		>`select id, tenant_id, type_key, access_scope_id
 				from knowledge_concepts
 				where id = ${conceptId}::uuid and tenant_id = ${principal.tenantId}::uuid
 				for update`
 
-			if (!concept) {
-				throw new Error('Concept not found')
-			}
+		if (!concept) {
+			throw new Error('Concept not found')
+		}
 
-			const scopeDecision = await checkAccess(
-				tx,
-				principal,
-				'knowledge:draft',
-				concept.access_scope_id,
+		const scopeDecision = await checkAccess(
+			tx,
+			principal,
+			'knowledge:draft',
+			concept.access_scope_id,
+		)
+		if (!scopeDecision.allowed) {
+			throw new Error(`Scope denied: ${scopeDecision.reasonCode}`)
+		}
+
+		const validation = validateConceptFields(concept.type_key, {
+			title: input.title,
+			bodyMarkdown: input.bodyMarkdown,
+			language: input.language,
+			madhhab: input.madhhab,
+		})
+		if (!validation.valid) {
+			throw new Error(
+				`Validation failed for ${concept.type_key}: missing [${validation.missingFields.join(', ')}]`,
 			)
-			if (!scopeDecision.allowed) {
-				throw new Error(`Scope denied: ${scopeDecision.reasonCode}`)
-			}
+		}
 
-			const validation = validateConceptFields(concept.type_key, {
-				title: input.title,
-				bodyMarkdown: input.bodyMarkdown,
-				language: input.language,
-				madhhab: input.madhhab,
-			})
-			if (!validation.valid) {
-				throw new Error(
-					`Validation failed for ${concept.type_key}: missing [${validation.missingFields.join(', ')}]`,
-				)
-			}
-
-			const [latest] = await tx<
-				{ max_rev: number }[]
-			>`select coalesce(max(revision_number), 0) as max_rev
+		const [latest] = await tx<
+			{ max_rev: number }[]
+		>`select coalesce(max(revision_number), 0) as max_rev
 				from knowledge_concept_revisions
 				where concept_id = ${concept.id}::uuid`
 
-			const currentRevNumber = Number(latest?.max_rev ?? 0)
+		const currentRevNumber = Number(latest?.max_rev ?? 0)
 
-			// Optimistic concurrency check
-			if (
-				input.expectedBaseRevisionNumber !== undefined &&
-				input.expectedBaseRevisionNumber !== currentRevNumber
-			) {
-				throw new Error(
-					`OPTIMISTIC_CONCURRENCY_CONFLICT: base revision ${input.expectedBaseRevisionNumber} does not match latest ${currentRevNumber}`,
-				)
-			}
+		// Optimistic concurrency check
+		if (
+			input.expectedBaseRevisionNumber !== undefined &&
+			input.expectedBaseRevisionNumber !== currentRevNumber
+		) {
+			throw new Error(
+				`OPTIMISTIC_CONCURRENCY_CONFLICT: base revision ${input.expectedBaseRevisionNumber} does not match latest ${currentRevNumber}`,
+			)
+		}
 
-			const nextRevNumber = currentRevNumber + 1
-			const contentHash = computeConceptContentHash({
-				title: input.title,
-				bodyMarkdown: input.bodyMarkdown,
-				language: input.language ?? 'id',
-				madhhab: input.madhhab,
-				positionKind: input.positionKind,
-				authorityClass: input.authorityClass,
-				metadataJsonb: input.metadataJsonb,
-			})
+		const nextRevNumber = currentRevNumber + 1
+		const contentHash = computeConceptContentHash({
+			title: input.title,
+			bodyMarkdown: input.bodyMarkdown,
+			language: input.language ?? 'id',
+			madhhab: input.madhhab,
+			positionKind: input.positionKind,
+			authorityClass: input.authorityClass,
+			metadataJsonb: input.metadataJsonb,
+		})
 
-			// Check for identical content_hash on this concept
-			const [duplicate] = await tx<
-				{ id: string; revision_number: number }[]
-			>`select id, revision_number from knowledge_concept_revisions
+		// Check for identical content_hash on this concept
+		const [duplicate] = await tx<
+			{ id: string; revision_number: number }[]
+		>`select id, revision_number from knowledge_concept_revisions
 				where concept_id = ${concept.id}::uuid and content_hash = ${contentHash}
 				limit 1`
 
-			if (duplicate) {
-				throw new Error(
-					`DUPLICATE_CONTENT_HASH: Identical content already exists in revision ${duplicate.revision_number}`,
-				)
-			}
+		if (duplicate) {
+			throw new Error(
+				`DUPLICATE_CONTENT_HASH: Identical content already exists in revision ${duplicate.revision_number}`,
+			)
+		}
 
-			const [rev] = await tx<{ id: string; revision_number: number }[]>`
+		const [rev] = await tx<{ id: string; revision_number: number }[]>`
 				insert into knowledge_concept_revisions (
 					concept_id,
 					revision_number,
@@ -287,7 +296,7 @@ export async function createConcept(
 					${input.madhhab ?? []},
 					${input.positionKind ?? null},
 					${input.authorityClass ?? null},
-					${tx.json(input.metadataJsonb ?? {})},
+					${tx.json((input.metadataJsonb ?? {}) as unknown as postgres.JSONValue)},
 					${contentHash},
 					'draft',
 					${input.staleAfter ? sql`${input.staleAfter}::timestamptz` : null},
@@ -295,9 +304,9 @@ export async function createConcept(
 				)
 				returning id, revision_number`
 
-			// Insert provenance
-			const generationMethod = input.generationMethod ?? 'manual'
-			await tx`
+		// Insert provenance
+		const generationMethod = input.generationMethod ?? 'manual'
+		await tx`
 				insert into knowledge_revision_provenance (
 					revision_id,
 					generation_method,
@@ -306,78 +315,98 @@ export async function createConcept(
 				values (
 					${rev.id}::uuid,
 					${generationMethod},
-					${input.modelRef ? tx.json(input.modelRef) : null}
+					${input.modelRef
+					? tx.json(input.modelRef as unknown as postgres.JSONValue)
+					: null}
 				)`
 
-			// Update draft pointer on concept
-			await tx`
+		// Update draft pointer on concept
+		await tx`
 				update knowledge_concepts
 				set current_draft_revision_id = ${rev.id}::uuid
 				where id = ${concept.id}::uuid`
 
-			// Record audit
-			await recordAuditInTx(tx, {
-				tenantId: principal.tenantId,
-				actorType: principal.actorType,
-				actorId: principal.userId,
-				action: 'knowledge.revision_created',
-				entityType: 'knowledge_concept_revision',
-				entityId: rev.id,
-				afterRef: {
-					conceptId: concept.id,
-					revisionNumber: rev.revision_number,
-					contentHash,
-					title: input.title,
-				},
-				traceId,
-			})
-
-			return {
-				id: rev.id,
+		// Record audit
+		await recordAuditInTx(tx, {
+			tenantId: principal.tenantId,
+			actorType: principal.actorType,
+			actorId: principal.userId,
+			action: 'knowledge.revision_created',
+			entityType: 'knowledge_concept_revision',
+			entityId: rev.id,
+			afterRef: {
+				conceptId: concept.id,
 				revisionNumber: rev.revision_number,
 				contentHash,
-			}
+				title: input.title,
+			},
+			traceId,
 		})
-	}
 
-	export async function listConceptRevisions(
-		sql: Sql,
-		principal: Principal,
-		conceptId: string,
-	): Promise<any[]> {
-		const [concept] = await sql<{ id: string; access_scope_id: string }[]>`
+		return {
+			id: rev.id,
+			revisionNumber: rev.revision_number,
+			contentHash,
+		}
+	})
+}
+
+export interface ConceptRevisionSummary {
+	id: string
+	revisionNumber: number
+	title: string
+	lifecycleStatus: KnowledgeRevisionLifecycleStatus
+	contentHash: string
+	createdAt: string
+}
+
+export async function listConceptRevisions(
+	sql: Sql,
+	principal: Principal,
+	conceptId: string,
+): Promise<ConceptRevisionSummary[]> {
+	const [concept] = await sql<{ id: string; access_scope_id: string }[]>`
 			select id, access_scope_id from knowledge_concepts
 			where id = ${conceptId}::uuid and tenant_id = ${principal.tenantId}::uuid
 			limit 1`
 
-		if (!concept) throw new Error('Concept not found')
+	if (!concept) throw new Error('Concept not found')
 
-		const scopeDecision = await checkAccess(
-			sql,
-			principal,
-			'knowledge:read',
-			concept.access_scope_id,
-		)
-		if (!scopeDecision.allowed) {
-			throw new Error(`Scope denied: ${scopeDecision.reasonCode}`)
-		}
+	const scopeDecision = await checkAccess(
+		sql,
+		principal,
+		'knowledge:read',
+		concept.access_scope_id,
+	)
+	if (!scopeDecision.allowed) {
+		throw new Error(`Scope denied: ${scopeDecision.reasonCode}`)
+	}
 
-		return await sql<
-			{
-				id: string
-				revision_number: number
-				title: string
-				lifecycle_status: string
-				content_hash: string
-				created_at: string
-			}[]
-		>`select id, revision_number, title, lifecycle_status, content_hash, created_at::text
+	const rows = await sql<
+		{
+			id: string
+			revision_number: number
+			title: string
+			lifecycle_status: KnowledgeRevisionLifecycleStatus
+			content_hash: string
+			created_at: string
+		}[]
+	>`select id, revision_number, title, lifecycle_status, content_hash, created_at::text
 			from knowledge_concept_revisions
 			where concept_id = ${conceptId}::uuid
 			order by revision_number desc`
-	}
 
-	export async function addReviewerNote(
+	return rows.map((r) => ({
+		id: r.id,
+		revisionNumber: r.revision_number,
+		title: r.title,
+		lifecycleStatus: r.lifecycle_status,
+		contentHash: r.content_hash,
+		createdAt: r.created_at,
+	}))
+}
+
+export async function addReviewerNote(
 	sql: Sql,
 	principal: Principal,
 	revisionId: string,
@@ -421,7 +450,9 @@ export async function recordVerification(
 export async function listStaleConcepts(
 	sql: Sql,
 	tenantId: string,
-): Promise<{ conceptId: string; revisionId: string; title: string; staleAfter: string }[]> {
+): Promise<
+	{ conceptId: string; revisionId: string; title: string; staleAfter: string }[]
+> {
 	const rows = await sql<
 		{
 			concept_id: string
@@ -494,7 +525,7 @@ export async function getConcept(
 			authority_class: string | null
 			metadata_jsonb: Record<string, unknown>
 			content_hash: string
-			lifecycle_status: any
+			lifecycle_status: KnowledgeRevisionLifecycleStatus
 			valid_from: string | null
 			stale_after: string | null
 			supersedes_revision_id: string | null
@@ -607,9 +638,13 @@ export async function getConcept(
 	}))
 
 	const currentDraft =
-		formattedRevisions.find((r) => r.id === concept.current_draft_revision_id) ?? null
+		formattedRevisions.find(
+			(r) => r.id === concept.current_draft_revision_id,
+		) ?? null
 	const currentPublished =
-		formattedRevisions.find((r) => r.id === concept.current_published_revision_id) ?? null
+		formattedRevisions.find(
+			(r) => r.id === concept.current_published_revision_id,
+		) ?? null
 
 	return {
 		id: concept.id,

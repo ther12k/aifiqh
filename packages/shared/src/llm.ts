@@ -62,7 +62,7 @@ export interface GenerateResponse {
 	usage: ModelUsage
 	providerId: string
 	modelId: string
-	rawResponse?: Record<string, unknown>
+	rawResponse?: unknown
 }
 
 export interface StreamChunk {

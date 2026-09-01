@@ -89,7 +89,9 @@ Air mutlak adalah air yang suci menyucikan.
 		const input = makeInput(htmlContent, 'text/html')
 		const output = await proc.process(input)
 
-		expect(output.warnings?.some((w) => w.code === 'SCRIPTS_STRIPPED')).toBeTrue()
+		expect(
+			output.warnings?.some((w) => w.code === 'SCRIPTS_STRIPPED'),
+		).toBeTrue()
 		expect(output.sections.some((s) => s.heading === 'Hukum Puasa')).toBeTrue()
 		expect(
 			output.spans.some((s) =>
@@ -97,7 +99,9 @@ Air mutlak adalah air yang suci menyucikan.
 			),
 		).toBeTrue()
 		// Ensure script content was NOT included as span text
-		expect(output.spans.some((s) => s.originalText.includes('malicious'))).toBeFalse()
+		expect(
+			output.spans.some((s) => s.originalText.includes('malicious')),
+		).toBeFalse()
 	})
 })
 
@@ -148,7 +152,9 @@ val1,val2,val3`
 		const input = makeInput(csvData, 'text/csv')
 		const output = await proc.process(input)
 
-		expect(output.warnings?.some((w) => w.code === 'ROW_COLUMN_MISMATCH')).toBeTrue()
+		expect(
+			output.warnings?.some((w) => w.code === 'ROW_COLUMN_MISMATCH'),
+		).toBeTrue()
 		expect(output.spans.length).toBe(2)
 	})
 })

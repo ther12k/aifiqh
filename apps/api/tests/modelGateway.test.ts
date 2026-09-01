@@ -45,9 +45,13 @@ describe('model gateway interfaces & normalized error contract (LLM-001)', () =>
 			messages: [{ role: 'user', content: 'Hitung angka' }],
 		}
 
-		const res = await gateway.stream('stream-mock', req, (chunk: StreamChunk) => {
-			chunks.push(chunk.deltaText)
-		})
+		const res = await gateway.stream(
+			'stream-mock',
+			req,
+			(chunk: StreamChunk) => {
+				chunks.push(chunk.deltaText)
+			},
+		)
 
 		expect(res.text).toBe('Satu dua tiga empat')
 		expect(chunks.join('')).toBe('Satu dua tiga empat')
@@ -67,38 +71,37 @@ describe('model gateway interfaces & normalized error contract (LLM-001)', () =>
 		)
 		gateway.registerProvider(fake)
 
-		let caughtErr: any
+		let caughtErr: ModelGatewayError | undefined
 		try {
 			await gateway.generate('error-mock', {
 				modelId: 'gpt-4o',
 				messages: [{ role: 'user', content: 'test' }],
 			})
 		} catch (err) {
-			caughtErr = err
+			caughtErr = err instanceof ModelGatewayError ? err : undefined
 		}
 
-		expect(caughtErr).toBeDefined()
 		expect(caughtErr).toBeInstanceOf(ModelGatewayError)
-		expect(caughtErr.code).toBe('RATE_LIMIT_EXCEEDED')
-		expect(caughtErr.retryable).toBeTrue()
-		expect(caughtErr.statusCode).toBe(429)
+		expect(caughtErr?.code).toBe('RATE_LIMIT_EXCEEDED')
+		expect(caughtErr?.retryable).toBeTrue()
+		expect(caughtErr?.statusCode).toBe(429)
 	})
 
 	test('unregistered provider returns PROVIDER_UNAVAILABLE', async () => {
 		const gateway = new DefaultModelGateway(silentLog)
 
-		let caughtErr: any
+		let caughtErr: ModelGatewayError | undefined
 		try {
 			await gateway.generate('non-existent', {
 				modelId: 'any-model',
 				messages: [{ role: 'user', content: 'test' }],
 			})
 		} catch (err) {
-			caughtErr = err
+			caughtErr = err instanceof ModelGatewayError ? err : undefined
 		}
 
-		expect(caughtErr).toBeDefined()
-		expect(caughtErr.code).toBe('PROVIDER_UNAVAILABLE')
+		expect(caughtErr).toBeInstanceOf(ModelGatewayError)
+		expect(caughtErr?.code).toBe('PROVIDER_UNAVAILABLE')
 	})
 
 	test('aborted signal cancels request and emits CANCELLED error', async () => {
@@ -109,7 +112,7 @@ describe('model gateway interfaces & normalized error contract (LLM-001)', () =>
 		const controller = new AbortController()
 		controller.abort()
 
-		let caughtErr: any
+		let caughtErr: ModelGatewayError | undefined
 		try {
 			await gateway.generate('abort-mock', {
 				modelId: 'test-model',
@@ -117,11 +120,11 @@ describe('model gateway interfaces & normalized error contract (LLM-001)', () =>
 				signal: controller.signal,
 			})
 		} catch (err) {
-			caughtErr = err
+			caughtErr = err instanceof ModelGatewayError ? err : undefined
 		}
 
-		expect(caughtErr).toBeDefined()
-		expect(caughtErr.code).toBe('CANCELLED')
-		expect(caughtErr.retryable).toBeFalse()
+		expect(caughtErr).toBeInstanceOf(ModelGatewayError)
+		expect(caughtErr?.code).toBe('CANCELLED')
+		expect(caughtErr?.retryable).toBeFalse()
 	})
 })

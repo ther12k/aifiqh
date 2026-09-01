@@ -3,6 +3,7 @@ import {
 	type GenerateResponse,
 	type ModelCapabilities,
 	ModelGatewayError,
+	type ModelGatewayErrorCode,
 	type ModelProviderAdapter,
 	type StreamChunk,
 } from '@aifiqh/shared'
@@ -93,18 +94,22 @@ export class FrontierModelAdapter implements ModelProviderAdapter {
 		if (!res.ok) {
 			const status = res.status
 			const errText = await res.text().catch(() => '')
-			let code: any = 'PROVIDER_UNAVAILABLE'
+			let code: ModelGatewayErrorCode = 'PROVIDER_UNAVAILABLE'
 			if (status === 401 || status === 403) code = 'AUTHENTICATION_FAILED'
 			if (status === 429) code = 'RATE_LIMIT_EXCEEDED'
-			throw new ModelGatewayError(code, `Anthropic error ${status}: ${errText}`, {
-				providerId: this.providerKey,
-				modelId: request.modelId,
-				statusCode: status,
-				retryable: status >= 500 || status === 429,
-			})
+			throw new ModelGatewayError(
+				code,
+				`Anthropic error ${status}: ${errText}`,
+				{
+					providerId: this.providerKey,
+					modelId: request.modelId,
+					statusCode: status,
+					retryable: status >= 500 || status === 429,
+				},
+			)
 		}
 
-		const data = (await res.json()) as any
+		const data = (await res.json()) as AnthropicResponse
 		const text = data.content?.[0]?.text ?? ''
 		return {
 			text,
@@ -149,7 +154,7 @@ export class FrontierModelAdapter implements ModelProviderAdapter {
 		if (!res.ok) {
 			const status = res.status
 			const errText = await res.text().catch(() => '')
-			let code: any = 'PROVIDER_UNAVAILABLE'
+			let code: ModelGatewayErrorCode = 'PROVIDER_UNAVAILABLE'
 			if (status === 401 || status === 403) code = 'AUTHENTICATION_FAILED'
 			if (status === 429) code = 'RATE_LIMIT_EXCEEDED'
 			throw new ModelGatewayError(code, `Gemini error ${status}: ${errText}`, {
@@ -160,7 +165,7 @@ export class FrontierModelAdapter implements ModelProviderAdapter {
 			})
 		}
 
-		const data = (await res.json()) as any
+		const data = (await res.json()) as GeminiResponse
 		const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
 		return {
 			text,
@@ -175,5 +180,23 @@ export class FrontierModelAdapter implements ModelProviderAdapter {
 			modelId: request.modelId,
 			rawResponse: data,
 		}
+	}
+}
+
+interface AnthropicResponse {
+	content?: Array<{ type?: string; text?: string }>
+	stop_reason?: string
+	usage?: { input_tokens?: number; output_tokens?: number }
+}
+
+interface GeminiResponse {
+	candidates?: Array<{
+		content?: { parts?: Array<{ text?: string }> }
+		finishReason?: string
+	}>
+	usageMetadata?: {
+		promptTokenCount?: number
+		candidatesTokenCount?: number
+		totalTokenCount?: number
 	}
 }

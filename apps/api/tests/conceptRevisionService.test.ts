@@ -129,18 +129,21 @@ describe('immutable concept revision service & content hashing (KNW-003)', () =>
 
 		// 2. Create revision 2
 		const rev2Res = await testApp.handle(
-			new Request(`http://localhost/knowledge/concepts/${conceptId}/revisions`, {
-				method: 'POST',
-				headers: { ...auth, 'content-type': 'application/json' },
-				body: JSON.stringify({
-					title: 'Hukum Mengusap Khuff - Edisi 2',
-					bodyMarkdown:
-						'Diperbolehkan bagi musafir selama 3 hari dan mukim 1 hari 1 malam...',
-					language: 'id',
-					madhhab: ['shafii'],
-					expectedBaseRevisionNumber: 1,
-				}),
-			}),
+			new Request(
+				`http://localhost/knowledge/concepts/${conceptId}/revisions`,
+				{
+					method: 'POST',
+					headers: { ...auth, 'content-type': 'application/json' },
+					body: JSON.stringify({
+						title: 'Hukum Mengusap Khuff - Edisi 2',
+						bodyMarkdown:
+							'Diperbolehkan bagi musafir selama 3 hari dan mukim 1 hari 1 malam...',
+						language: 'id',
+						madhhab: ['shafii'],
+						expectedBaseRevisionNumber: 1,
+					}),
+				},
+			),
 		)
 		expect(rev2Res.status).toBe(201)
 		const rev2Json = await rev2Res.json()
@@ -149,61 +152,76 @@ describe('immutable concept revision service & content hashing (KNW-003)', () =>
 
 		// 3. Duplicate content on the same concept is rejected
 		const dupRes = await testApp.handle(
-			new Request(`http://localhost/knowledge/concepts/${conceptId}/revisions`, {
-				method: 'POST',
-				headers: { ...auth, 'content-type': 'application/json' },
-				body: JSON.stringify({
-					title: 'Hukum Mengusap Khuff - Edisi 2',
-					bodyMarkdown:
-						'Diperbolehkan bagi musafir selama 3 hari dan mukim 1 hari 1 malam...',
-					language: 'id',
-					madhhab: ['shafii'],
-				}),
-			}),
+			new Request(
+				`http://localhost/knowledge/concepts/${conceptId}/revisions`,
+				{
+					method: 'POST',
+					headers: { ...auth, 'content-type': 'application/json' },
+					body: JSON.stringify({
+						title: 'Hukum Mengusap Khuff - Edisi 2',
+						bodyMarkdown:
+							'Diperbolehkan bagi musafir selama 3 hari dan mukim 1 hari 1 malam...',
+						language: 'id',
+						madhhab: ['shafii'],
+					}),
+				},
+			),
 		)
 		expect(dupRes.status).toBe(409)
 		expect((await dupRes.json()).error).toBe('duplicate')
 
 		// 4. Stale edit with wrong expectedBaseRevisionNumber is rejected (optimistic concurrency)
 		const staleRes = await testApp.handle(
-			new Request(`http://localhost/knowledge/concepts/${conceptId}/revisions`, {
-				method: 'POST',
-				headers: { ...auth, 'content-type': 'application/json' },
-				body: JSON.stringify({
-					title: 'Hukum Mengusap Khuff - Edisi 3 Stale',
-					bodyMarkdown: 'Konten versi lama diedit kembali...',
-					language: 'id',
-					madhhab: ['shafii'],
-					expectedBaseRevisionNumber: 1, // latest is 2!
-				}),
-			}),
+			new Request(
+				`http://localhost/knowledge/concepts/${conceptId}/revisions`,
+				{
+					method: 'POST',
+					headers: { ...auth, 'content-type': 'application/json' },
+					body: JSON.stringify({
+						title: 'Hukum Mengusap Khuff - Edisi 3 Stale',
+						bodyMarkdown: 'Konten versi lama diedit kembali...',
+						language: 'id',
+						madhhab: ['shafii'],
+						expectedBaseRevisionNumber: 1, // latest is 2!
+					}),
+				},
+			),
 		)
 		expect(staleRes.status).toBe(409)
 		expect((await staleRes.json()).error).toBe('conflict')
 
 		// 5. List revisions for concept
 		const listRes = await testApp.handle(
-			new Request(`http://localhost/knowledge/concepts/${conceptId}/revisions`, {
-				headers: auth,
-			}),
+			new Request(
+				`http://localhost/knowledge/concepts/${conceptId}/revisions`,
+				{
+					headers: auth,
+				},
+			),
 		)
 		expect(listRes.status).toBe(200)
-		const list = (await listRes.json()) as any[]
+		const list = (await listRes.json()) as Array<{ revisionNumber: number }>
 		expect(list.length).toBe(2)
-		expect(list[0].revision_number).toBe(2)
-		expect(list[1].revision_number).toBe(1)
+		expect(list[0].revisionNumber).toBe(2)
+		expect(list[1].revisionNumber).toBe(1)
 	})
 
 	test('submitted and published revisions reject direct in-place edits at database layer', async () => {
 		const { tenantId, scopeId, editorId } = await setupFixtures()
-		const [concept] = await scopedTransaction(sql, tenantId, (tx) =>
-			tx<{ id: string }[]>`
+		const [concept] = await scopedTransaction(
+			sql,
+			tenantId,
+			(tx) =>
+				tx<{ id: string }[]>`
 				insert into knowledge_concepts (tenant_id, type_key, access_scope_id)
 				values (${tenantId}::uuid, 'definition', ${scopeId}::uuid)
 				returning id`,
 		)
-		const [rev] = await scopedTransaction(sql, tenantId, (tx) =>
-			tx<{ id: string }[]>`
+		const [rev] = await scopedTransaction(
+			sql,
+			tenantId,
+			(tx) =>
+				tx<{ id: string }[]>`
 				insert into knowledge_concept_revisions (
 					concept_id, revision_number, title, body_markdown, language, content_hash, lifecycle_status
 				)
@@ -217,7 +235,7 @@ describe('immutable concept revision service & content hashing (KNW-003)', () =>
 		let rejected = false
 		try {
 			await sql`update knowledge_concept_revisions set body_markdown = 'Tampered content' where id = ${rev.id}::uuid`
-		} catch (err: any) {
+		} catch (err) {
 			rejected = true
 			expect(String(err)).toContain('append-only')
 		}

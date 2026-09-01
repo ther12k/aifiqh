@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
-	type GenerateRequest,
 	ModelGatewayError,
+	type GenerateRequest,
 	type StreamChunk,
 } from '@aifiqh/shared'
 import { FrontierModelAdapter } from '../src/llm/frontierAdapter'
@@ -117,19 +117,19 @@ describe('OpenAI-compatible adapter (LLM-002)', () => {
 				baseUrl: `http://localhost:${mockServer.port}`,
 			})
 
-			let err: any
+			let err: ModelGatewayError | undefined
 			try {
 				await adapter.generate({
 					modelId: 'test',
 					messages: [{ role: 'user', content: 'test' }],
 				})
 			} catch (e) {
-				err = e
+				err = e instanceof ModelGatewayError ? e : undefined
 			}
 
 			expect(err).toBeInstanceOf(ModelGatewayError)
-			expect(err.code).toBe('AUTHENTICATION_FAILED')
-			expect(err.statusCode).toBe(401)
+			expect(err?.code).toBe('AUTHENTICATION_FAILED')
+			expect(err?.statusCode).toBe(401)
 		} finally {
 			mockServer.stop()
 		}

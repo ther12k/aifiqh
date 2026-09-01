@@ -133,10 +133,15 @@ describe('model/provider configuration with secret references (CFG-001)', () => 
 		const list = await testApp.handle(
 			new Request('http://localhost/config/providers', { headers: auth }),
 		)
-		const listJson = (await list.json()) as any[]
+		const listJson = (await list.json()) as Array<{
+			key: string
+			secretRefMasked: string | null
+		}>
 		const mine = listJson.find((p) => p.key === key)
 		expect(mine).toBeDefined()
-		expect(mine.secretRefMasked).toBe('vault://••••#key'.replace('#key', secretRef.slice(-4)))
+		expect(mine?.secretRefMasked).toBe(
+			'vault://••••#key'.replace('#key', secretRef.slice(-4)),
+		)
 		// secret scan: the full ref must not appear anywhere in the payload
 		expect(JSON.stringify(listJson)).not.toContain(secretRef)
 
@@ -246,13 +251,15 @@ describe('model/provider configuration with secret references (CFG-001)', () => 
 			expect(testJson.statusCode).toBe(200)
 
 			// test result audited
-			const audits = await sql<{ action: string; after_ref: any }[]>`
+			const audits = await sql<
+				{ action: string; after_ref: { ok?: boolean } | null }[]
+			>`
 				select action, after_ref from audit_events
 				where entity_type = 'provider_config' and entity_id = ${providerId}
 				order by occurred_at`
 			const tested = audits.find((a) => a.action === 'config.provider_tested')
 			expect(tested).toBeDefined()
-			expect(tested.after_ref.ok).toBeTrue()
+			expect(tested?.after_ref?.ok).toBeTrue()
 		} finally {
 			mockServer.stop()
 		}
@@ -294,7 +301,9 @@ describe('model/provider configuration with secret references (CFG-001)', () => 
 			}),
 		)
 		let resolved = await testApp.handle(
-			new Request(`http://localhost/config/aliases/${alias}`, { headers: auth }),
+			new Request(`http://localhost/config/aliases/${alias}`, {
+				headers: auth,
+			}),
 		)
 		expect((await resolved.json()).targetId).toBe(providerA)
 
@@ -311,7 +320,9 @@ describe('model/provider configuration with secret references (CFG-001)', () => 
 			}),
 		)
 		resolved = await testApp.handle(
-			new Request(`http://localhost/config/aliases/${alias}`, { headers: auth }),
+			new Request(`http://localhost/config/aliases/${alias}`, {
+				headers: auth,
+			}),
 		)
 		expect((await resolved.json()).targetId).toBe(providerB)
 
@@ -325,7 +336,9 @@ describe('model/provider configuration with secret references (CFG-001)', () => 
 		expect(rollback.status).toBe(200)
 		expect((await rollback.json()).restoredTargetId).toBe(providerA)
 		resolved = await testApp.handle(
-			new Request(`http://localhost/config/aliases/${alias}`, { headers: auth }),
+			new Request(`http://localhost/config/aliases/${alias}`, {
+				headers: auth,
+			}),
 		)
 		expect((await resolved.json()).targetId).toBe(providerA)
 
@@ -354,7 +367,11 @@ describe('model/provider configuration with secret references (CFG-001)', () => 
 			new Request('http://localhost/config/providers', {
 				method: 'POST',
 				headers: { ...editorAuth, 'content-type': 'application/json' },
-				body: JSON.stringify({ key: 'x', provider: 'openai', baseUrl: 'https://x.dev' }),
+				body: JSON.stringify({
+					key: 'x',
+					provider: 'openai',
+					baseUrl: 'https://x.dev',
+				}),
 			}),
 		)
 		expect(deniedWrite.status).toBe(403)
@@ -364,7 +381,9 @@ describe('model/provider configuration with secret references (CFG-001)', () => 
 		const appUrl = DB_URL.replace(/:\/\/[^@]+@/, '://aifiqh_app:aifiqh_app@')
 		const appSql = postgres(appUrl, { max: 1 })
 		try {
-			const grants = await appSql<{ privilege_type: string; table_name: string }[]>`
+			const grants = await appSql<
+				{ privilege_type: string; table_name: string }[]
+			>`
 				select privilege_type, table_name from information_schema.role_table_grants
 				where grantee = 'aifiqh_app'
 					and table_name in ('provider_configs', 'provider_secret_refs', 'model_configs', 'configuration_aliases')

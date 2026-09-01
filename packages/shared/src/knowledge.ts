@@ -219,7 +219,8 @@ export const CONCEPT_PROFILES_CATALOG: Record<
 		optionalFields: ['sourceRefs', 'topicPath'],
 		example: {
 			title: 'Dalil Kewajiban Shalat Lima Waktu',
-			bodyMarkdown: 'Firman Allah Ta’ala: "Dan dirikanlah shalat..." (QS. Al-Baqarah: 43).',
+			bodyMarkdown:
+				'Firman Allah Ta’ala: "Dan dirikanlah shalat..." (QS. Al-Baqarah: 43).',
 			language: 'id',
 		},
 	},
@@ -320,9 +321,7 @@ export function computeConceptContentHash(input: {
 		authorityClass: input.authorityClass ?? null,
 		metadata: input.metadataJsonb ?? {},
 	}
-	return createHash('sha256')
-		.update(JSON.stringify(normalized))
-		.digest('hex')
+	return createHash('sha256').update(JSON.stringify(normalized)).digest('hex')
 }
 
 export const REQUIRED_FIELDS_BY_TYPE: Record<ConceptType, readonly string[]> = {

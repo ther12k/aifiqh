@@ -104,7 +104,12 @@ describe('canonical page, section and stable span model (ING-002)', () => {
 		const key1 = generateStableSpanKey(1, 2, 1, 'Bismillah ar-Rahman ar-Rahim')
 		const key2 = generateStableSpanKey(1, 2, 1, 'Bismillah ar-Rahman ar-Rahim')
 		const keyDiffText = generateStableSpanKey(1, 2, 1, 'Alhamdulillah')
-		const keyDiffPage = generateStableSpanKey(2, 2, 1, 'Bismillah ar-Rahman ar-Rahim')
+		const keyDiffPage = generateStableSpanKey(
+			2,
+			2,
+			1,
+			'Bismillah ar-Rahman ar-Rahim',
+		)
 
 		expect(key1).toBe(key2)
 		expect(key1).not.toBe(keyDiffText)
@@ -115,15 +120,21 @@ describe('canonical page, section and stable span model (ING-002)', () => {
 	test('materialize extraction creates pages, sections, spans, and footnotes with hierarchy', async () => {
 		const { tenantId, scopeId, userId } = await setupFixtures()
 
-		const [src] = await scopedTransaction(sql, tenantId, (tx) =>
-			tx<{ id: string }[]>`
+		const [src] = await scopedTransaction(
+			sql,
+			tenantId,
+			(tx) =>
+				tx<{ id: string }[]>`
 				insert into sources (tenant_id, title, author, source_type, language, rights_status, access_scope_id)
 				values (${tenantId}::uuid, 'Span Materializer Spec Book', 'Al-Shafii', 'book', 'ar', 'public_domain', ${scopeId}::uuid)
 				returning id`,
 		)
 
-		const [rev] = await scopedTransaction(sql, tenantId, (tx) =>
-			tx<{ id: string }[]>`
+		const [rev] = await scopedTransaction(
+			sql,
+			tenantId,
+			(tx) =>
+				tx<{ id: string }[]>`
 				insert into source_revisions (source_id, revision_number, status)
 				values (${src.id}::uuid, floor(random()*100000)::int, 'active')
 				returning id`,
@@ -192,15 +203,21 @@ describe('canonical page, section and stable span model (ING-002)', () => {
 		// 1. Resolve span directly via service
 		const resolved = await resolveSpan(sql, src.id, rev.id, 'p1-s2-span02')
 		expect(resolved).not.toBeNull()
-		expect(resolved?.span.originalText).toBe('Air mutlak terbagi menjadi tujuh macam.')
+		expect(resolved?.span.originalText).toBe(
+			'Air mutlak terbagi menjadi tujuh macam.',
+		)
 		expect(resolved?.page?.pageNumber).toBe(1)
 		expect(resolved?.section?.heading).toBe('Pasal 1.1: Macam-macam Air')
 		expect(resolved?.coordinates.length).toBe(1)
-		expect((resolved?.coordinates[0].box as any).x).toBe(100)
-		expect((resolved?.coordinates[0].box as any).pageWidth).toBe(1000)
+		expect((resolved?.coordinates[0].box as Record<string, number>).x).toBe(100)
+		expect(
+			(resolved?.coordinates[0].box as Record<string, number>).pageWidth,
+		).toBe(1000)
 		expect(resolved?.footnotes.length).toBe(1)
 		expect(resolved?.footnotes[0].marker).toBe('1')
-		expect(resolved?.footnotes[0].noteText).toBe('1. Lihat Al-Umm Juz 1 hal 12.')
+		expect(resolved?.footnotes[0].noteText).toBe(
+			'1. Lihat Al-Umm Juz 1 hal 12.',
+		)
 
 		// 2. Resolve via HTTP API routes
 		const auth = await authHeaders(userId, tenantId)
@@ -218,12 +235,15 @@ describe('canonical page, section and stable span model (ING-002)', () => {
 
 		// 3. List pages route
 		const pagesRes = await testApp.handle(
-			new Request(`http://localhost/sources/${src.id}/revisions/${rev.id}/pages`, {
-				headers: auth,
-			}),
+			new Request(
+				`http://localhost/sources/${src.id}/revisions/${rev.id}/pages`,
+				{
+					headers: auth,
+				},
+			),
 		)
 		expect(pagesRes.status).toBe(200)
-		const pagesJson = (await pagesRes.json()) as any[]
+		const pagesJson = (await pagesRes.json()) as Array<{ page_number: number }>
 		expect(pagesJson.length).toBe(2)
 		expect(pagesJson[0].page_number).toBe(1)
 
@@ -235,7 +255,7 @@ describe('canonical page, section and stable span model (ING-002)', () => {
 			),
 		)
 		expect(secRes.status).toBe(200)
-		const secJson = (await secRes.json()) as any[]
+		const secJson = (await secRes.json()) as Array<{ heading: string }>
 		expect(secJson.length).toBe(2)
 		expect(secJson[1].heading).toBe('Pasal 1.1: Macam-macam Air')
 
@@ -247,26 +267,35 @@ describe('canonical page, section and stable span model (ING-002)', () => {
 			),
 		)
 		expect(spansPage1.status).toBe(200)
-		const spansP1Json = (await spansPage1.json()) as any[]
+		const spansP1Json = (await spansPage1.json()) as unknown[]
 		expect(spansP1Json.length).toBe(2)
 	})
 
 	test('original_text on source_spans is immutable at database layer', async () => {
 		const { tenantId, scopeId } = await setupFixtures()
-		const [src] = await scopedTransaction(sql, tenantId, (tx) =>
-			tx<{ id: string }[]>`
+		const [src] = await scopedTransaction(
+			sql,
+			tenantId,
+			(tx) =>
+				tx<{ id: string }[]>`
 				insert into sources (tenant_id, title, author, source_type, language, rights_status, access_scope_id)
 				values (${tenantId}::uuid, 'Immutable Span Test', 'Author', 'book', 'ar', 'public_domain', ${scopeId}::uuid)
 				returning id`,
 		)
-		const [rev] = await scopedTransaction(sql, tenantId, (tx) =>
-			tx<{ id: string }[]>`
+		const [rev] = await scopedTransaction(
+			sql,
+			tenantId,
+			(tx) =>
+				tx<{ id: string }[]>`
 				insert into source_revisions (source_id, revision_number, status)
 				values (${src.id}::uuid, floor(random()*100000)::int, 'active')
 				returning id`,
 		)
-		const [span] = await scopedTransaction(sql, tenantId, (tx) =>
-			tx<{ id: string }[]>`
+		const [span] = await scopedTransaction(
+			sql,
+			tenantId,
+			(tx) =>
+				tx<{ id: string }[]>`
 				insert into source_spans (source_revision_id, span_key, original_text)
 				values (${rev.id}::uuid, 'immutable-key', 'Original sacred passage text')
 				returning id`,
@@ -276,7 +305,7 @@ describe('canonical page, section and stable span model (ING-002)', () => {
 		let rejected = false
 		try {
 			await sql`update source_spans set original_text = 'Tampered text' where id = ${span.id}::uuid`
-		} catch (err: any) {
+		} catch (err) {
 			rejected = true
 			expect(String(err)).toContain('append-only')
 		}

@@ -1,6 +1,7 @@
+import postgres from 'postgres'
 import {
-	type IngestionErrorPayload,
 	IngestionError,
+	type IngestionErrorPayload,
 	PROCESSING_MANIFEST_SCHEMA_V1,
 	type ProcessingManifest,
 	type ProcessingManifestItem,
@@ -86,10 +87,10 @@ export async function ensureProcessorDefinition(
 		values (
 			${processor.name},
 			${processor.version},
-			${sql.json(processor.capabilities as any)}
+			${sql.json(processor.capabilities as unknown as postgres.JSONValue)}
 		)
 		on conflict (name, version) do update
-			set capabilities = ${sql.json(processor.capabilities as any)}
+			set capabilities = ${sql.json(processor.capabilities as unknown as postgres.JSONValue)}
 		returning id`
 	return { id: row.id }
 }
@@ -193,7 +194,9 @@ export async function processIngestionJob(
 		}
 
 		const input = await fetchInput(jobId)
-		if (!processor.capabilities.supportedMimeTypes.includes(input.file.mimeType)) {
+		if (
+			!processor.capabilities.supportedMimeTypes.includes(input.file.mimeType)
+		) {
 			throw new IngestionError(
 				'UNSUPPORTED_FORMAT',
 				`Processor ${processor.name} cannot process mimeType ${input.file.mimeType}`,
@@ -215,7 +218,7 @@ export async function processIngestionJob(
 					${jobId}::uuid,
 					${PROCESSING_MANIFEST_SCHEMA_V1},
 					'produced',
-					${tx.json(output.warnings ?? [])}
+					${tx.json((output.warnings ?? []) as unknown as postgres.JSONValue)}
 				)
 				returning id`
 
@@ -228,7 +231,7 @@ export async function processIngestionJob(
 						${manifest.id}::uuid,
 						'page',
 						${`page-${page.pageNumber}`},
-						${tx.json(page as any)},
+						${tx.json(page as unknown as postgres.JSONValue)},
 						${ordinal}
 					)`
 			}
@@ -240,7 +243,7 @@ export async function processIngestionJob(
 						${manifest.id}::uuid,
 						'section',
 						${`section-${section.ordinal}`},
-						${tx.json(section as any)},
+						${tx.json(section as unknown as postgres.JSONValue)},
 						${ordinal}
 					)`
 			}
@@ -252,7 +255,7 @@ export async function processIngestionJob(
 						${manifest.id}::uuid,
 						'span',
 						${span.spanKey},
-						${tx.json(span as any)},
+						${tx.json(span as unknown as postgres.JSONValue)},
 						${ordinal}
 					)`
 			}
@@ -265,7 +268,7 @@ export async function processIngestionJob(
 							${manifest.id}::uuid,
 							'footnote',
 							${`footnote-${fn.marker}`},
-							${tx.json(fn as any)},
+							${tx.json(fn as unknown as postgres.JSONValue)},
 							${ordinal}
 						)`
 				}
@@ -285,25 +288,25 @@ export async function processIngestionJob(
 		})
 
 		return { manifestId: manifestResult }
-	} catch (err: any) {
+	} catch (err) {
 		const payload: IngestionErrorPayload =
 			err instanceof IngestionError
 				? err.toJSON()
 				: {
 						code: 'PROCESSOR_FAILURE',
-						message: err?.message ?? String(err),
+						message: err instanceof Error ? err.message : String(err),
 						retryable: !isDead,
 					}
 
 		await sql`
 			update job_attempts
-			set status = 'failed', error = ${sql.json(payload as any)}, finished_at = now()
+			set status = 'failed', error = ${sql.json(payload as unknown as postgres.JSONValue)}, finished_at = now()
 			where job_id = ${jobId}::uuid and attempt_no = ${attemptNo}`
 
 		await sql`
 			update ingestion_jobs
 			set status = ${isDead ? 'dead' : 'failed'},
-				last_error = ${sql.json(payload as any)},
+				last_error = ${sql.json(payload as unknown as postgres.JSONValue)},
 				finished_at = ${isDead ? sql`now()` : null}
 			where id = ${jobId}::uuid`
 

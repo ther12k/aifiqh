@@ -1,13 +1,13 @@
-import {
-	type CanonicalFootnote,
-	type CanonicalPage,
-	type CanonicalSection,
-	type CanonicalSpan,
-	type ProcessingWarning,
-	type ProcessorCapabilities,
-	type ProcessorInput,
-	type ProcessorOutput,
-	type ProcessorPlugin,
+import type {
+	CanonicalFootnote,
+	CanonicalPage,
+	CanonicalSection,
+	CanonicalSpan,
+	ProcessingWarning,
+	ProcessorCapabilities,
+	ProcessorInput,
+	ProcessorOutput,
+	ProcessorPlugin,
 } from '@aifiqh/shared'
 import { generateStableSpanKey } from '../../../api/src/sources/spanResolver'
 
@@ -38,14 +38,17 @@ export class TxtProcessor implements ProcessorPlugin {
 			})
 		}
 
-		const sections: CanonicalSection[] = [{ ordinal: 1, heading: 'Document Body' }]
+		const sections: CanonicalSection[] = [
+			{ ordinal: 1, heading: 'Document Body' },
+		]
 		const spans: CanonicalSpan[] = []
 		let offset = 0
 
 		paragraphs.forEach((p, idx) => {
 			const clean = p.trim()
 			const startOffset = text.indexOf(p, offset)
-			const endOffset = startOffset >= 0 ? startOffset + p.length : offset + p.length
+			const endOffset =
+				startOffset >= 0 ? startOffset + p.length : offset + p.length
 			offset = endOffset
 
 			const spanKey = generateStableSpanKey(null, 1, idx + 1, clean)
@@ -241,7 +244,8 @@ export class HtmlProcessor implements ProcessorPlugin {
 		if (/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi.test(rawHtml)) {
 			warnings.push({
 				code: 'SCRIPTS_STRIPPED',
-				message: 'Potentially dangerous <script> tags were removed during parsing',
+				message:
+					'Potentially dangerous <script> tags were removed during parsing',
 			})
 		}
 
@@ -266,7 +270,10 @@ export class HtmlProcessor implements ProcessorPlugin {
 
 		while ((match = tagRegex.exec(sanitized)) !== null) {
 			const tag = match[1].toLowerCase()
-			const innerText = match[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+			const innerText = match[2]
+				.replace(/<[^>]+>/g, ' ')
+				.replace(/\s+/g, ' ')
+				.trim()
 			if (!innerText) continue
 
 			if (tag.startsWith('h')) {
@@ -295,7 +302,10 @@ export class HtmlProcessor implements ProcessorPlugin {
 
 		// Fallback for flat body text if no paragraph tags found
 		if (spans.length === 0) {
-			const bodyText = sanitized.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+			const bodyText = sanitized
+				.replace(/<[^>]+>/g, ' ')
+				.replace(/\s+/g, ' ')
+				.trim()
 			if (bodyText) {
 				const spanKey = generateStableSpanKey(null, 1, 1, bodyText)
 				spans.push({

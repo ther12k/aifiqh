@@ -57,7 +57,10 @@ export async function linkConcepts(
 		)
 	}
 	if (!input.toConceptId && !input.toRevisionId) {
-		throw new LinkValidationError('LINK_TARGET_MISSING', 'A link target is required')
+		throw new LinkValidationError(
+			'LINK_TARGET_MISSING',
+			'A link target is required',
+		)
 	}
 
 	return await sql.begin(async (tx) => {
@@ -86,11 +89,14 @@ export async function linkConcepts(
 			from.access_scope_id,
 		)
 		if (!scopeDecision.allowed) {
-			throw new LinkValidationError('LINK_CROSS_SCOPE', `Scope denied: ${scopeDecision.reasonCode}`)
+			throw new LinkValidationError(
+				'LINK_CROSS_SCOPE',
+				`Scope denied: ${scopeDecision.reasonCode}`,
+			)
 		}
 
 		let toConceptId = input.toConceptId ?? null
-		let toRevisionId = input.toRevisionId ?? null
+		const toRevisionId = input.toRevisionId ?? null
 		if (toRevisionId) {
 			const [target] = await tx<
 				{ concept_id: string; tenant_id: string; access_scope_id: string }[]
@@ -99,11 +105,17 @@ export async function linkConcepts(
 				join knowledge_concepts c on c.id = r.concept_id
 				where r.id = ${toRevisionId}::uuid limit 1`
 			if (!target) {
-				throw new LinkValidationError('LINK_TARGET_MISSING', 'Target revision not found')
+				throw new LinkValidationError(
+					'LINK_TARGET_MISSING',
+					'Target revision not found',
+				)
 			}
 			if (target.tenant_id !== from.tenant_id) {
 				// the DB trigger would also reject this; fail early with a clear code
-				throw new LinkValidationError('LINK_TARGET_MISSING', 'Target revision is in another tenant')
+				throw new LinkValidationError(
+					'LINK_TARGET_MISSING',
+					'Target revision is in another tenant',
+				)
 			}
 			if (target.access_scope_id !== from.access_scope_id) {
 				throw new LinkValidationError(
@@ -111,8 +123,14 @@ export async function linkConcepts(
 					'Target revision lives under a different access scope',
 				)
 			}
-			if (target.concept_id === from.concept_id || toRevisionId === fromRevisionId) {
-				throw new LinkValidationError('LINK_SELF_REFERENCE', 'A concept cannot link to itself')
+			if (
+				target.concept_id === from.concept_id ||
+				toRevisionId === fromRevisionId
+			) {
+				throw new LinkValidationError(
+					'LINK_SELF_REFERENCE',
+					'A concept cannot link to itself',
+				)
 			}
 			toConceptId = target.concept_id
 		} else if (toConceptId) {
@@ -121,10 +139,16 @@ export async function linkConcepts(
 			>`select tenant_id, access_scope_id from knowledge_concepts
 				where id = ${toConceptId}::uuid limit 1`
 			if (!target) {
-				throw new LinkValidationError('LINK_TARGET_MISSING', 'Target concept not found')
+				throw new LinkValidationError(
+					'LINK_TARGET_MISSING',
+					'Target concept not found',
+				)
 			}
 			if (target.tenant_id !== from.tenant_id) {
-				throw new LinkValidationError('LINK_TARGET_MISSING', 'Target concept is in another tenant')
+				throw new LinkValidationError(
+					'LINK_TARGET_MISSING',
+					'Target concept is in another tenant',
+				)
 			}
 			if (target.access_scope_id !== from.access_scope_id) {
 				throw new LinkValidationError(
@@ -133,7 +157,10 @@ export async function linkConcepts(
 				)
 			}
 			if (toConceptId === from.concept_id) {
-				throw new LinkValidationError('LINK_SELF_REFERENCE', 'A concept cannot link to itself')
+				throw new LinkValidationError(
+					'LINK_SELF_REFERENCE',
+					'A concept cannot link to itself',
+				)
 			}
 		}
 
@@ -151,7 +178,10 @@ export async function linkConcepts(
 				)
 			limit 1`
 		if (dupe) {
-			throw new LinkValidationError('LINK_DUPLICATE', 'An active link with this target already exists')
+			throw new LinkValidationError(
+				'LINK_DUPLICATE',
+				'An active link with this target already exists',
+			)
 		}
 
 		const [created] = await tx<{ id: string }[]>`
@@ -240,9 +270,17 @@ export async function listConceptLinks(
 	if (!concept) {
 		throw new LinkValidationError('NOT_FOUND', 'Concept not found')
 	}
-	const decision = await checkAccess(sql, principal, 'knowledge:read', concept.access_scope_id)
+	const decision = await checkAccess(
+		sql,
+		principal,
+		'knowledge:read',
+		concept.access_scope_id,
+	)
 	if (!decision.allowed) {
-		throw new LinkValidationError('LINK_CROSS_SCOPE', `Scope denied: ${decision.reasonCode}`)
+		throw new LinkValidationError(
+			'LINK_CROSS_SCOPE',
+			`Scope denied: ${decision.reasonCode}`,
+		)
 	}
 
 	const rows = await sql<
@@ -323,20 +361,36 @@ export async function linkSourceSpan(
 		if (!rev) {
 			throw new LinkValidationError('NOT_FOUND', 'Concept revision not found')
 		}
-		const scopeDecision = await checkAccess(tx, principal, 'knowledge:draft', rev.access_scope_id)
+		const scopeDecision = await checkAccess(
+			tx,
+			principal,
+			'knowledge:draft',
+			rev.access_scope_id,
+		)
 		if (!scopeDecision.allowed) {
-			throw new LinkValidationError('LINK_CROSS_SCOPE', `Scope denied: ${scopeDecision.reasonCode}`)
+			throw new LinkValidationError(
+				'LINK_CROSS_SCOPE',
+				`Scope denied: ${scopeDecision.reasonCode}`,
+			)
 		}
 
 		const [span] = await tx<
-			{ id: string; source_revision_id: string; access_scope_id: string; title: string }[]
+			{
+				id: string
+				source_revision_id: string
+				access_scope_id: string
+				title: string
+			}[]
 		>`select ss.id, ss.source_revision_id, s.access_scope_id, s.title
 			from source_spans ss
 			join source_revisions sr on sr.id = ss.source_revision_id
 			join sources s on s.id = sr.source_id
 			where ss.id = ${input.sourceSpanId}::uuid limit 1`
 		if (!span) {
-			throw new LinkValidationError('LINK_TARGET_MISSING', 'Source span not found')
+			throw new LinkValidationError(
+				'LINK_TARGET_MISSING',
+				'Source span not found',
+			)
 		}
 		if (span.access_scope_id !== rev.access_scope_id) {
 			throw new LinkValidationError(
@@ -361,7 +415,10 @@ export async function linkSourceSpan(
 			on conflict (revision_id, source_span_id, relationship_type) do nothing
 			returning id`
 		if (!created) {
-			throw new LinkValidationError('LINK_DUPLICATE', 'This span is already linked to the revision')
+			throw new LinkValidationError(
+				'LINK_DUPLICATE',
+				'This span is already linked to the revision',
+			)
 		}
 
 		await recordAuditInTx(tx, {
@@ -402,9 +459,17 @@ export async function listSpanLinks(
 	if (!rev) {
 		throw new LinkValidationError('NOT_FOUND', 'Concept revision not found')
 	}
-	const decision = await checkAccess(sql, principal, 'knowledge:read', rev.access_scope_id)
+	const decision = await checkAccess(
+		sql,
+		principal,
+		'knowledge:read',
+		rev.access_scope_id,
+	)
 	if (!decision.allowed) {
-		throw new LinkValidationError('LINK_CROSS_SCOPE', `Scope denied: ${decision.reasonCode}`)
+		throw new LinkValidationError(
+			'LINK_CROSS_SCOPE',
+			`Scope denied: ${decision.reasonCode}`,
+		)
 	}
 
 	const rows = await sql<

@@ -13,7 +13,8 @@ import { getTracer, recordSpan } from '../observability/otel'
 export class FakeModelProvider implements ModelProviderAdapter {
 	readonly providerKey: string
 	readonly providerType = 'fake' as const
-	private mockResponse: string | ((req: GenerateRequest) => string) = 'Mock generated text'
+	private mockResponse: string | ((req: GenerateRequest) => string) =
+		'Mock generated text'
 	private failureMode: ModelGatewayError | null = null
 
 	constructor(providerKey = 'fake-provider') {
@@ -101,11 +102,15 @@ export class FakeModelProvider implements ModelProviderAdapter {
 		const words = fullText.split(' ')
 		for (let i = 0; i < words.length; i++) {
 			if (request.signal?.aborted) {
-				throw new ModelGatewayError('CANCELLED', 'Stream aborted during generation', {
-					providerId: this.providerKey,
-					modelId: request.modelId,
-					retryable: false,
-				})
+				throw new ModelGatewayError(
+					'CANCELLED',
+					'Stream aborted during generation',
+					{
+						providerId: this.providerKey,
+						modelId: request.modelId,
+						retryable: false,
+					},
+				)
 			}
 			const delta = (i === 0 ? '' : ' ') + words[i]
 			onChunk({
@@ -185,13 +190,13 @@ export class DefaultModelGateway implements ModelGateway {
 				durationMs,
 			})
 			return res
-		} catch (err: any) {
+		} catch (err) {
 			const normErr =
 				err instanceof ModelGatewayError
 					? err
 					: new ModelGatewayError(
 							'PROVIDER_UNAVAILABLE',
-							err?.message ?? 'Unknown provider error',
+							err instanceof Error ? err.message : 'Unknown provider error',
 							{
 								providerId: providerKey,
 								modelId: request.modelId,
@@ -251,13 +256,13 @@ export class DefaultModelGateway implements ModelGateway {
 				'llm.ok': true,
 			})
 			return res
-		} catch (err: any) {
+		} catch (err) {
 			const normErr =
 				err instanceof ModelGatewayError
 					? err
 					: new ModelGatewayError(
 							'PROVIDER_UNAVAILABLE',
-							err?.message ?? 'Unknown streaming error',
+							err instanceof Error ? err.message : 'Unknown streaming error',
 							{
 								providerId: providerKey,
 								modelId: request.modelId,

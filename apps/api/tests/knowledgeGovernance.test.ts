@@ -154,7 +154,12 @@ describe('required-field profiles for all 9 concept types (KNW-002)', () => {
 			}),
 		)
 		expect(res.status).toBe(200)
-		const profiles = (await res.json()) as any[]
+		const profiles = (await res.json()) as Array<{
+		typeKey: string
+		displayName?: string
+		description?: string
+		example?: Record<string, unknown>
+	}>
 		expect(profiles.length).toBe(9)
 		for (const p of profiles) {
 			expect(p.displayName).toBeDefined()
@@ -195,7 +200,9 @@ describe('provenance, verification, staleness and reviewer notes (KNW-004)', () 
 		expect(detailRes.status).toBe(200)
 		const detail = await detailRes.json()
 		expect(detail.currentDraft.provenance).toBeDefined()
-		expect(detail.currentDraft.provenance.generationMethod).toBe('model_assisted')
+		expect(detail.currentDraft.provenance.generationMethod).toBe(
+			'model_assisted',
+		)
 		expect(detail.currentDraft.provenance.modelRef.model).toBe('gpt-4o')
 	})
 
@@ -351,7 +358,7 @@ describe('provenance, verification, staleness and reviewer notes (KNW-004)', () 
 			}),
 		)
 		expect(staleRes.status).toBe(200)
-		const staleList = (await staleRes.json()) as any[]
+		const staleList = (await staleRes.json()) as Array<{ conceptId: string }>
 		expect(staleList.some((c) => c.conceptId === staleConceptId)).toBeTrue()
 	})
 })

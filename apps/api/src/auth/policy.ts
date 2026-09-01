@@ -1,3 +1,4 @@
+import postgres from 'postgres'
 /**
  * Tenant RBAC + access-scope authorization (SEC-002 / HARD-004).
  *
@@ -48,7 +49,7 @@ export function checkPermission(
  * one of its ancestors. Reads the scope hierarchy from access_scopes.
  */
 export async function checkScope(
-	sql: Sql,
+	sql: Sql | postgres.TransactionSql,
 	principal: Principal,
 	scopeId: string,
 ): Promise<AccessDecision> {
@@ -70,7 +71,7 @@ export async function checkScope(
 }
 
 export async function checkAccess(
-	sql: Sql,
+	sql: Sql | postgres.TransactionSql,
 	principal: Principal,
 	permission: Permission,
 	scopeId?: string,

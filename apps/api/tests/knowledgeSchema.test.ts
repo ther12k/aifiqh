@@ -153,7 +153,7 @@ describe('canonical database knowledge schema (KNW-001)', () => {
 			}),
 		)
 		expect(res.status).toBe(200)
-		const profiles = (await res.json()) as any[]
+		const profiles = (await res.json()) as Array<{ typeKey: string }>
 		expect(profiles.length).toBeGreaterThanOrEqual(9)
 		for (const type of CONCEPT_TYPES) {
 			expect(profiles.some((p) => p.typeKey === type)).toBeTrue()

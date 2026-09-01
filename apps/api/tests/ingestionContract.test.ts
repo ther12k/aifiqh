@@ -6,7 +6,6 @@ import {
 	type ProcessorPlugin,
 } from '@aifiqh/shared'
 import postgres from 'postgres'
-import { scopedTransaction } from '../src/db/client'
 import {
 	IngestionRegistry,
 	NoOpProcessor,
@@ -14,6 +13,7 @@ import {
 	ensureProcessorDefinition,
 	processIngestionJob,
 } from '../../worker/src/ingestionEngine'
+import { scopedTransaction } from '../src/db/client'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'

@@ -113,14 +113,20 @@ async function makeConcept(
 	scopeId: string,
 ): Promise<{ conceptId: string; revisionId: string }> {
 	const { tenantId } = await setupFixtures()
-	const [concept] = await scopedTransaction(sql, tenantId, (tx) =>
-		tx<{ id: string }[]>`
+	const [concept] = await scopedTransaction(
+		sql,
+		tenantId,
+		(tx) =>
+			tx<{ id: string }[]>`
 			insert into knowledge_concepts (tenant_id, type_key, access_scope_id)
 			values (${tenantId}::uuid, ${typeKey}, ${scopeId}::uuid)
 			returning id`,
 	)
-	const [rev] = await scopedTransaction(sql, tenantId, (tx) =>
-		tx<{ id: string }[]>`
+	const [rev] = await scopedTransaction(
+		sql,
+		tenantId,
+		(tx) =>
+			tx<{ id: string }[]>`
 			insert into knowledge_concept_revisions (
 				concept_id, revision_number, title, body_markdown, language,
 				madhhab, content_hash, lifecycle_status
@@ -135,22 +141,33 @@ async function makeConcept(
 	return { conceptId: concept.id, revisionId: rev.id }
 }
 
-async function makeSourceSpan(scopeId: string): Promise<{ spanId: string; revisionId: string }> {
+async function makeSourceSpan(
+	scopeId: string,
+): Promise<{ spanId: string; revisionId: string }> {
 	const { tenantId } = await setupFixtures()
-	const [src] = await scopedTransaction(sql, tenantId, (tx) =>
-		tx<{ id: string }[]>`
+	const [src] = await scopedTransaction(
+		sql,
+		tenantId,
+		(tx) =>
+			tx<{ id: string }[]>`
 			insert into sources (tenant_id, title, author, source_type, language, rights_status, access_scope_id)
 			values (${tenantId}::uuid, 'Link Source', 'Author', 'book', 'ar', 'public_domain', ${scopeId}::uuid)
 			returning id`,
 	)
-	const [rev] = await scopedTransaction(sql, tenantId, (tx) =>
-		tx<{ id: string }[]>`
+	const [rev] = await scopedTransaction(
+		sql,
+		tenantId,
+		(tx) =>
+			tx<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
 			values (${src.id}::uuid, 1, 'active')
 			returning id`,
 	)
-	const [span] = await scopedTransaction(sql, tenantId, (tx) =>
-		tx<{ id: string }[]>`
+	const [span] = await scopedTransaction(
+		sql,
+		tenantId,
+		(tx) =>
+			tx<{ id: string }[]>`
 			insert into source_spans (source_revision_id, span_key, original_text)
 			values (${rev.id}::uuid, ${`lnk-${crypto.randomUUID().slice(0, 8)}`}, 'Nash shahr untuk dalil')
 			returning id`,
@@ -163,71 +180,94 @@ describe('typed concept and source-span links (KNW-005)', () => {
 		const { tenantId, rootScopeId, editorId } = await setupFixtures()
 		const auth = await authHeaders(editorId, tenantId, true)
 
-		const rule = await makeConcept('rule', 'Kaidah Yaqin la Yazulu', rootScopeId)
-		const exception = await makeConcept('exception', 'Pengecualian bagi Musafir', rootScopeId)
+		const rule = await makeConcept(
+			'rule',
+			'Kaidah Yaqin la Yazulu',
+			rootScopeId,
+		)
+		const exception = await makeConcept(
+			'exception',
+			'Pengecualian bagi Musafir',
+			rootScopeId,
+		)
 
 		// unknown relationship type rejected
 		const badType = await testApp.handle(
-			new Request(`http://localhost/knowledge/revisions/${rule.revisionId}/links`, {
-				method: 'POST',
-				headers: { ...auth, 'content-type': 'application/json' },
-				body: JSON.stringify({
-					toConceptId: exception.conceptId,
-					relationshipType: 'best_friends_forever',
-				}),
-			}),
+			new Request(
+				`http://localhost/knowledge/revisions/${rule.revisionId}/links`,
+				{
+					method: 'POST',
+					headers: { ...auth, 'content-type': 'application/json' },
+					body: JSON.stringify({
+						toConceptId: exception.conceptId,
+						relationshipType: 'best_friends_forever',
+					}),
+				},
+			),
 		)
 		expect(badType.status).toBe(400)
 		expect((await badType.json()).error).toBe('RELATIONSHIP_TYPE_UNKNOWN')
 
 		// self-reference rejected
 		const self = await testApp.handle(
-			new Request(`http://localhost/knowledge/revisions/${rule.revisionId}/links`, {
-				method: 'POST',
-				headers: { ...auth, 'content-type': 'application/json' },
-				body: JSON.stringify({
-					toConceptId: rule.conceptId,
-					relationshipType: 'relates_to',
-				}),
-			}),
+			new Request(
+				`http://localhost/knowledge/revisions/${rule.revisionId}/links`,
+				{
+					method: 'POST',
+					headers: { ...auth, 'content-type': 'application/json' },
+					body: JSON.stringify({
+						toConceptId: rule.conceptId,
+						relationshipType: 'relates_to',
+					}),
+				},
+			),
 		)
 		expect(self.status).toBe(400)
 		expect((await self.json()).error).toBe('LINK_SELF_REFERENCE')
 
 		// valid link
 		const created = await testApp.handle(
-			new Request(`http://localhost/knowledge/revisions/${rule.revisionId}/links`, {
-				method: 'POST',
-				headers: { ...auth, 'content-type': 'application/json' },
-				body: JSON.stringify({
-					toConceptId: exception.conceptId,
-					relationshipType: 'exception_to',
-					notes: 'musafir mengecualikan kaidah ini',
-				}),
-			}),
+			new Request(
+				`http://localhost/knowledge/revisions/${rule.revisionId}/links`,
+				{
+					method: 'POST',
+					headers: { ...auth, 'content-type': 'application/json' },
+					body: JSON.stringify({
+						toConceptId: exception.conceptId,
+						relationshipType: 'exception_to',
+						notes: 'musafir mengecualikan kaidah ini',
+					}),
+				},
+			),
 		)
 		expect(created.status).toBe(200)
 		const { id: linkId } = await created.json()
 
 		// duplicate active link rejected
 		const dupe = await testApp.handle(
-			new Request(`http://localhost/knowledge/revisions/${rule.revisionId}/links`, {
-				method: 'POST',
-				headers: { ...auth, 'content-type': 'application/json' },
-				body: JSON.stringify({
-					toConceptId: exception.conceptId,
-					relationshipType: 'exception_to',
-				}),
-			}),
+			new Request(
+				`http://localhost/knowledge/revisions/${rule.revisionId}/links`,
+				{
+					method: 'POST',
+					headers: { ...auth, 'content-type': 'application/json' },
+					body: JSON.stringify({
+						toConceptId: exception.conceptId,
+						relationshipType: 'exception_to',
+					}),
+				},
+			),
 		)
 		expect(dupe.status).toBe(400)
 		expect((await dupe.json()).error).toBe('LINK_DUPLICATE')
 
 		// outgoing from rule, incoming to exception
 		const out = await testApp.handle(
-			new Request(`http://localhost/knowledge/concepts/${rule.conceptId}/links`, {
-				headers: auth,
-			}),
+			new Request(
+				`http://localhost/knowledge/concepts/${rule.conceptId}/links`,
+				{
+					headers: auth,
+				},
+			),
 		)
 		const outJson = await out.json()
 		expect(outJson.outgoing.length).toBe(1)
@@ -235,9 +275,12 @@ describe('typed concept and source-span links (KNW-005)', () => {
 		expect(outJson.outgoing[0].toConceptId).toBe(exception.conceptId)
 
 		const inc = await testApp.handle(
-			new Request(`http://localhost/knowledge/concepts/${exception.conceptId}/links`, {
-				headers: auth,
-			}),
+			new Request(
+				`http://localhost/knowledge/concepts/${exception.conceptId}/links`,
+				{
+					headers: auth,
+				},
+			),
 		)
 		const incJson = await inc.json()
 		expect(incJson.incoming.length).toBe(1)
@@ -252,9 +295,12 @@ describe('typed concept and source-span links (KNW-005)', () => {
 		)
 		expect(deact.status).toBe(200)
 		const afterDeact = await testApp.handle(
-			new Request(`http://localhost/knowledge/concepts/${rule.conceptId}/links`, {
-				headers: auth,
-			}),
+			new Request(
+				`http://localhost/knowledge/concepts/${rule.conceptId}/links`,
+				{
+					headers: auth,
+				},
+			),
 		)
 		expect((await afterDeact.json()).outgoing.length).toBe(0)
 		const [row] = await sql<{ active: boolean }[]>`
@@ -272,21 +318,29 @@ describe('typed concept and source-span links (KNW-005)', () => {
 	})
 
 	test('cross-scope targets are rejected for both concepts and spans', async () => {
-		const { tenantId, rootScopeId, otherScopeId, editorId } = await setupFixtures()
+		const { tenantId, rootScopeId, otherScopeId, editorId } =
+			await setupFixtures()
 		const auth = await authHeaders(editorId, tenantId, true)
 
 		const inRoot = await makeConcept('rule', 'Kaidah dalam root', rootScopeId)
-		const inOther = await makeConcept('exception', 'Pengecualian di scope lain', otherScopeId)
+		const inOther = await makeConcept(
+			'exception',
+			'Pengecualian di scope lain',
+			otherScopeId,
+		)
 
 		const cross = await testApp.handle(
-			new Request(`http://localhost/knowledge/revisions/${inRoot.revisionId}/links`, {
-				method: 'POST',
-				headers: { ...auth, 'content-type': 'application/json' },
-				body: JSON.stringify({
-					toConceptId: inOther.conceptId,
-					relationshipType: 'relates_to',
-				}),
-			}),
+			new Request(
+				`http://localhost/knowledge/revisions/${inRoot.revisionId}/links`,
+				{
+					method: 'POST',
+					headers: { ...auth, 'content-type': 'application/json' },
+					body: JSON.stringify({
+						toConceptId: inOther.conceptId,
+						relationshipType: 'relates_to',
+					}),
+				},
+			),
 		)
 		expect(cross.status).toBe(400)
 		expect((await cross.json()).error).toBe('LINK_CROSS_SCOPE')
@@ -311,19 +365,27 @@ describe('typed concept and source-span links (KNW-005)', () => {
 		const { tenantId, rootScopeId, editorId } = await setupFixtures()
 		const auth = await authHeaders(editorId, tenantId, true)
 
-		const concept = await makeConcept('evidence', 'Dalil safar qasr', rootScopeId)
-		const { spanId, revisionId: sourceRevId } = await makeSourceSpan(rootScopeId)
+		const concept = await makeConcept(
+			'evidence',
+			'Dalil safar qasr',
+			rootScopeId,
+		)
+		const { spanId, revisionId: sourceRevId } =
+			await makeSourceSpan(rootScopeId)
 
 		const linked = await testApp.handle(
-			new Request(`http://localhost/knowledge/revisions/${concept.revisionId}/span-links`, {
-				method: 'POST',
-				headers: { ...auth, 'content-type': 'application/json' },
-				body: JSON.stringify({
-					sourceSpanId: spanId,
-					relationshipType: 'evidence',
-					quotationText: 'Nash shahr untuk dalil',
-				}),
-			}),
+			new Request(
+				`http://localhost/knowledge/revisions/${concept.revisionId}/span-links`,
+				{
+					method: 'POST',
+					headers: { ...auth, 'content-type': 'application/json' },
+					body: JSON.stringify({
+						sourceSpanId: spanId,
+						relationshipType: 'evidence',
+						quotationText: 'Nash shahr untuk dalil',
+					}),
+				},
+			),
 		)
 		expect(linked.status).toBe(200)
 		const linkedJson = await linked.json()
@@ -331,20 +393,26 @@ describe('typed concept and source-span links (KNW-005)', () => {
 
 		// duplicate span link on same relationship rejected
 		const dupe = await testApp.handle(
-			new Request(`http://localhost/knowledge/revisions/${concept.revisionId}/span-links`, {
-				method: 'POST',
-				headers: { ...auth, 'content-type': 'application/json' },
-				body: JSON.stringify({ sourceSpanId: spanId }),
-			}),
+			new Request(
+				`http://localhost/knowledge/revisions/${concept.revisionId}/span-links`,
+				{
+					method: 'POST',
+					headers: { ...auth, 'content-type': 'application/json' },
+					body: JSON.stringify({ sourceSpanId: spanId }),
+				},
+			),
 		)
 		expect(dupe.status).toBe(400)
 		expect((await dupe.json()).error).toBe('LINK_DUPLICATE')
 
 		// listing returns span key + source title lineage
 		const list = await testApp.handle(
-			new Request(`http://localhost/knowledge/revisions/${concept.revisionId}/span-links`, {
-				headers: auth,
-			}),
+			new Request(
+				`http://localhost/knowledge/revisions/${concept.revisionId}/span-links`,
+				{
+					headers: auth,
+				},
+			),
 		)
 		const listJson = await list.json()
 		expect(listJson.length).toBe(1)

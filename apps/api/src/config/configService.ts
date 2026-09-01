@@ -1,3 +1,4 @@
+import postgres from 'postgres'
 import type { Principal } from '@aifiqh/shared'
 import { recordAuditInTx } from '../audit/audit'
 import type { Sql } from '../db/client'
@@ -6,7 +7,13 @@ import type { Sql } from '../db/client'
  * Allowed external secret-manager schemes. A raw API key has no scheme and is
  * rejected here — only references may be stored (CFG-001: raw secret absent).
  */
-const SECRET_REF_SCHEMES = ['vault://', 'aws-sm://', 'gcp-sm://', 'env://', 'file://']
+const SECRET_REF_SCHEMES = [
+	'vault://',
+	'aws-sm://',
+	'gcp-sm://',
+	'env://',
+	'file://',
+]
 
 const PROVIDER_TYPES = [
 	'openai',
@@ -51,13 +58,24 @@ export function maskSecretRef(ref: string | null): string | null {
 
 export async function listProviders(sql: Sql): Promise<ProviderConfigView[]> {
 	const providers = await sql<
-		{ id: string; key: string; provider: string; base_url: string; enabled: boolean }[]
+		{
+			id: string
+			key: string
+			provider: string
+			base_url: string
+			enabled: boolean
+		}[]
 	>`select id, key, provider, base_url, enabled from provider_configs order by key`
 	const secretRefs = await sql<
 		{ provider_config_id: string; secret_ref: string }[]
 	>`select provider_config_id, secret_ref from provider_secret_refs`
 	const models = await sql<
-		{ id: string; provider_config_id: string; model_id: string; context_window: number }[]
+		{
+			id: string
+			provider_config_id: string
+			model_id: string
+			context_window: number
+		}[]
 	>`select id, provider_config_id, model_id, context_window from model_configs`
 
 	return providers.map((p) => ({
@@ -71,7 +89,11 @@ export async function listProviders(sql: Sql): Promise<ProviderConfigView[]> {
 		),
 		models: models
 			.filter((m) => m.provider_config_id === p.id)
-			.map((m) => ({ id: m.id, modelId: m.model_id, contextWindow: m.context_window })),
+			.map((m) => ({
+				id: m.id,
+				modelId: m.model_id,
+				contextWindow: m.context_window,
+			})),
 	}))
 }
 
@@ -88,9 +110,14 @@ export async function createProvider(
 ): Promise<{ id: string }> {
 	const key = input.key?.trim()
 	if (!key || !/^[a-z0-9][a-z0-9-_.]{1,63}$/.test(key)) {
-		throw new ConfigValidationError('VALIDATION_FAILED', 'Provider key must be a slug of 2-64 chars')
+		throw new ConfigValidationError(
+			'VALIDATION_FAILED',
+			'Provider key must be a slug of 2-64 chars',
+		)
 	}
-	if (!PROVIDER_TYPES.includes(input.provider as (typeof PROVIDER_TYPES)[number])) {
+	if (
+		!PROVIDER_TYPES.includes(input.provider as (typeof PROVIDER_TYPES)[number])
+	) {
 		throw new ConfigValidationError(
 			'VALIDATION_FAILED',
 			`Provider type '${input.provider}' is not supported`,
@@ -100,12 +127,21 @@ export async function createProvider(
 	try {
 		baseUrl = new URL(input.baseUrl)
 	} catch {
-		throw new ConfigValidationError('VALIDATION_FAILED', 'baseUrl must be a valid URL')
+		throw new ConfigValidationError(
+			'VALIDATION_FAILED',
+			'baseUrl must be a valid URL',
+		)
 	}
 	if (baseUrl.protocol !== 'http:' && baseUrl.protocol !== 'https:') {
-		throw new ConfigValidationError('VALIDATION_FAILED', 'baseUrl must be http(s)')
+		throw new ConfigValidationError(
+			'VALIDATION_FAILED',
+			'baseUrl must be http(s)',
+		)
 	}
-	if (input.secretRef && !SECRET_REF_SCHEMES.some((s) => input.secretRef!.startsWith(s))) {
+	if (
+		input.secretRef &&
+		!SECRET_REF_SCHEMES.some((s) => input.secretRef!.startsWith(s))
+	) {
 		throw new ConfigValidationError(
 			'SECRET_REF_REJECTED',
 			`secretRef must use an external scheme (${SECRET_REF_SCHEMES.join(', ')}); raw secrets are never stored`,
@@ -165,7 +201,11 @@ export async function addModel(
 	sql: Sql,
 	principal: Principal,
 	providerId: string,
-	input: { modelId: string; contextWindow?: number; capabilities?: Record<string, unknown> },
+	input: {
+		modelId: string
+		contextWindow?: number
+		capabilities?: Record<string, unknown>
+	},
 	traceId?: string,
 ): Promise<{ id: string }> {
 	if (!input.modelId?.trim()) {
@@ -182,7 +222,7 @@ export async function addModel(
 			values (
 				${providerId}::uuid,
 				${input.modelId.trim()},
-				${tx.json(input.capabilities ?? {})},
+				${tx.json((input.capabilities ?? {}) as unknown as postgres.JSONValue)},
 				${input.contextWindow ?? 0}
 			)
 			returning id`
@@ -230,8 +270,11 @@ export async function testProviderConnection(
 					statusCode: res.status,
 					detail: `endpoint returned ${res.status}`,
 				}
-	} catch (err: any) {
-		result = { ok: false, detail: `endpoint unreachable: ${err?.message ?? err}` }
+	} catch (err) {
+		result = {
+			ok: false,
+			detail: `endpoint unreachable: ${err instanceof Error ? err.message : String(err)}`,
+		}
 	} finally {
 		clearTimeout(timer)
 	}
@@ -257,11 +300,18 @@ export async function setAlias(
 	sql: Sql,
 	principal: Principal,
 	alias: string,
-	input: { targetType: 'provider' | 'model' | 'prompt'; targetId: string; changeReason: string },
+	input: {
+		targetType: 'provider' | 'model' | 'prompt'
+		targetId: string
+		changeReason: string
+	},
 	traceId?: string,
 ): Promise<{ alias: string; previousTargetId: string | null }> {
 	if (!input.changeReason?.trim()) {
-		throw new ConfigValidationError('VALIDATION_FAILED', 'changeReason is required')
+		throw new ConfigValidationError(
+			'VALIDATION_FAILED',
+			'changeReason is required',
+		)
 	}
 
 	const [existing] = await sql<{ target_id: string }[]>`
@@ -272,7 +322,10 @@ export async function setAlias(
 		const [target] = await sql<{ enabled: boolean }[]>`
 			select enabled from provider_configs where id = ${input.targetId}::uuid limit 1`
 		if (!target) {
-			throw new ConfigValidationError('ALIAS_TARGET_INVALID', 'Alias target provider not found')
+			throw new ConfigValidationError(
+				'ALIAS_TARGET_INVALID',
+				'Alias target provider not found',
+			)
 		}
 		if (!target.enabled) {
 			throw new ConfigValidationError(
@@ -284,7 +337,10 @@ export async function setAlias(
 		const [target] = await sql<{ id: string }[]>`
 			select id from model_configs where id = ${input.targetId}::uuid limit 1`
 		if (!target) {
-			throw new ConfigValidationError('ALIAS_TARGET_INVALID', 'Alias target model not found')
+			throw new ConfigValidationError(
+				'ALIAS_TARGET_INVALID',
+				'Alias target model not found',
+			)
 		}
 	}
 
@@ -345,7 +401,10 @@ export async function rollbackAlias(
 	const previousTargetId = history[0]?.before_ref?.targetId ?? null
 
 	if (!previousTargetId) {
-		throw new ConfigValidationError('ALIAS_HISTORY_MISSING', 'No previous target recorded for rollback')
+		throw new ConfigValidationError(
+			'ALIAS_HISTORY_MISSING',
+			'No previous target recorded for rollback',
+		)
 	}
 
 	await sql.begin(async (tx) => {

@@ -3,6 +3,7 @@ import {
 	type GenerateResponse,
 	type ModelCapabilities,
 	ModelGatewayError,
+	type ModelGatewayErrorCode,
 	type ModelProviderAdapter,
 	type StreamChunk,
 } from '@aifiqh/shared'
@@ -78,7 +79,7 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 				body: JSON.stringify(body),
 				signal: controller.signal,
 			})
-		} catch (err: any) {
+		} catch (err) {
 			clearTimeout(timer)
 			if (controller.signal.aborted) {
 				throw new ModelGatewayError(
@@ -86,13 +87,21 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 					request.signal?.aborted
 						? 'Request was cancelled'
 						: `Request timed out after ${this.timeoutMs}ms`,
-					{ providerId: this.providerKey, modelId: request.modelId, retryable: true },
+					{
+						providerId: this.providerKey,
+						modelId: request.modelId,
+						retryable: true,
+					},
 				)
 			}
 			throw new ModelGatewayError(
 				'PROVIDER_UNAVAILABLE',
-				`Failed to connect to provider: ${err?.message ?? err}`,
-				{ providerId: this.providerKey, modelId: request.modelId, retryable: true },
+				`Failed to connect to provider: ${err instanceof Error ? err.message : String(err)}`,
+				{
+					providerId: this.providerKey,
+					modelId: request.modelId,
+					retryable: true,
+				},
 			)
 		} finally {
 			clearTimeout(timer)
@@ -101,7 +110,7 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 		if (!res.ok) {
 			const status = res.status
 			const errText = await res.text().catch(() => '')
-			let code: any = 'PROVIDER_UNAVAILABLE'
+			let code: ModelGatewayErrorCode = 'PROVIDER_UNAVAILABLE'
 			let retryable = false
 
 			if (status === 401 || status === 403) {
@@ -115,15 +124,19 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 				retryable = true
 			}
 
-			throw new ModelGatewayError(code, `Provider returned ${status}: ${errText}`, {
-				providerId: this.providerKey,
-				modelId: request.modelId,
-				retryable,
-				statusCode: status,
-			})
+			throw new ModelGatewayError(
+				code,
+				`Provider returned ${status}: ${errText}`,
+				{
+					providerId: this.providerKey,
+					modelId: request.modelId,
+					retryable,
+					statusCode: status,
+				},
+			)
 		}
 
-		const data = (await res.json()) as any
+		const data = (await res.json()) as OpenAIChatResponse
 		const choice = data.choices?.[0]
 		const text = choice?.message?.content ?? ''
 		const finishReason =
@@ -183,18 +196,26 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 				body: JSON.stringify(body),
 				signal: controller.signal,
 			})
-		} catch (err: any) {
+		} catch (err) {
 			if (controller.signal.aborted) {
-				throw new ModelGatewayError('CANCELLED', 'Streaming request was cancelled', {
-					providerId: this.providerKey,
-					modelId: request.modelId,
-					retryable: false,
-				})
+				throw new ModelGatewayError(
+					'CANCELLED',
+					'Streaming request was cancelled',
+					{
+						providerId: this.providerKey,
+						modelId: request.modelId,
+						retryable: false,
+					},
+				)
 			}
 			throw new ModelGatewayError(
 				'PROVIDER_UNAVAILABLE',
-				`Failed to connect to streaming provider: ${err?.message ?? err}`,
-				{ providerId: this.providerKey, modelId: request.modelId, retryable: true },
+				`Failed to connect to streaming provider: ${err instanceof Error ? err.message : String(err)}`,
+				{
+					providerId: this.providerKey,
+					modelId: request.modelId,
+					retryable: true,
+				},
 			)
 		}
 
@@ -202,7 +223,11 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 			throw new ModelGatewayError(
 				'PROVIDER_UNAVAILABLE',
 				`Streaming request failed with status ${res.status}`,
-				{ providerId: this.providerKey, modelId: request.modelId, retryable: true },
+				{
+					providerId: this.providerKey,
+					modelId: request.modelId,
+					retryable: true,
+				},
 			)
 		}
 
@@ -210,14 +235,18 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 			throw new ModelGatewayError(
 				'PROVIDER_UNAVAILABLE',
 				'No response body received for stream',
-				{ providerId: this.providerKey, modelId: request.modelId, retryable: false },
+				{
+					providerId: this.providerKey,
+					modelId: request.modelId,
+					retryable: false,
+				},
 			)
 		}
 
 		const reader = res.body.getReader()
 		const decoder = new TextDecoder('utf-8')
 		let accumulatedText = ''
-		let finishReason: any = 'stop'
+		let finishReason: GenerateResponse['finishReason'] = 'stop'
 		let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
 		let buffer = ''
 
@@ -271,5 +300,18 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 			providerId: this.providerKey,
 			modelId: request.modelId,
 		}
+	}
+}
+
+interface OpenAIChatResponse {
+	choices?: Array<{
+		message?: { content?: string }
+		delta?: { content?: string }
+		finish_reason?: string | null
+	}>
+	usage?: {
+		prompt_tokens?: number
+		completion_tokens?: number
+		total_tokens?: number
 	}
 }

@@ -119,8 +119,12 @@ describe('PDF and scanned-PDF processor (ING-003)', () => {
 
 		const output = await proc.process(input)
 		expect(output.pages.length).toBe(1)
-		expect(output.warnings?.some((w) => w.code === 'SCANNED_PDF_DETECTED')).toBeTrue()
-		expect((output.metadata as any)?.isScanned).toBeTrue()
+		expect(
+			output.warnings?.some((w) => w.code === 'SCANNED_PDF_DETECTED'),
+		).toBeTrue()
+		expect(
+			(output.metadata as Record<string, unknown> | undefined)?.isScanned,
+		).toBeTrue()
 		expect(output.spans.length).toBe(1)
 		expect(output.spans[0].originalText).toContain('Pending OCR')
 	})

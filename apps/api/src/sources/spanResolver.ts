@@ -114,9 +114,11 @@ export async function materializeExtraction(
 		let spanOrdinal = 0
 		for (const span of output.spans) {
 			spanOrdinal++
-			const pageId = span.pageNumber ? pageMap.get(span.pageNumber) ?? null : null
+			const pageId = span.pageNumber
+				? (pageMap.get(span.pageNumber) ?? null)
+				: null
 			const sectionId = span.sectionOrdinal
-				? sectionMap.get(span.sectionOrdinal) ?? null
+				? (sectionMap.get(span.sectionOrdinal) ?? null)
 				: null
 			const spanKey =
 				span.spanKey ||

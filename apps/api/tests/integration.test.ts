@@ -2125,187 +2125,232 @@ describe('pooled-session RLS isolation stress (REL-HARD-002)', () => {
 				expect(seen).toEqual([tid])
 			}
 		}
-			await pool.end({ timeout: 1 })
-		}, 60_000)
-	})
+		await pool.end({ timeout: 1 })
+	}, 60_000)
+})
 
-	describe('source immutability and historical-reference invariants (SRC-005)', () => {
-		test('source_files rows are strictly append-only (UPDATE and DELETE rejected)', async () => {
-			const [src] = await scopedTransaction(sql, ids.tenantA, (tx) =>
+describe('source immutability and historical-reference invariants (SRC-005)', () => {
+	test('source_files rows are strictly append-only (UPDATE and DELETE rejected)', async () => {
+		const [src] = await scopedTransaction(
+			sql,
+			ids.tenantA,
+			(tx) =>
 				tx<{ id: string }[]>`
 					insert into sources (tenant_id, title, author, source_type, language, rights_status, access_scope_id)
 					values (${ids.tenantA}::uuid, 'Immutable Source Spec', 'Al-Shafii', 'book', 'ar', 'public_domain', ${ids.scopeRootA}::uuid)
 					returning id`,
-			)
-			const [rev] = await scopedTransaction(sql, ids.tenantA, (tx) =>
+		)
+		const [rev] = await scopedTransaction(
+			sql,
+			ids.tenantA,
+			(tx) =>
 				tx<{ id: string }[]>`
 					insert into source_revisions (source_id, revision_number, status)
 					values (${src.id}::uuid, 1, 'active')
 					returning id`,
-			)
-			const sha = crypto.randomUUID().replaceAll('-', '').repeat(2).slice(0, 64)
-			const [file] = await scopedTransaction(sql, ids.tenantA, (tx) =>
+		)
+		const sha = crypto.randomUUID().replaceAll('-', '').repeat(2).slice(0, 64)
+		const [file] = await scopedTransaction(
+			sql,
+			ids.tenantA,
+			(tx) =>
 				tx<{ id: string }[]>`
 					insert into source_files (source_revision_id, sha256, storage_key, mime_type, size_bytes)
 					values (${rev.id}::uuid, ${sha}, 'originals/test-key-1', 'text/plain', 123)
 					returning id`,
-			)
+		)
 
-			// 1. UPDATE sha256 is rejected
-			await expectReject(
-				scopedTransaction(sql, ids.tenantA, (tx) =>
+		// 1. UPDATE sha256 is rejected
+		await expectReject(
+			scopedTransaction(
+				sql,
+				ids.tenantA,
+				(tx) =>
 					tx`update source_files set sha256 = ${'a'.repeat(64)} where id = ${file.id}::uuid`,
-				),
-				'append-only',
-			)
+			),
+			'append-only',
+		)
 
-			// 2. UPDATE storage_key is rejected
-			await expectReject(
-				scopedTransaction(sql, ids.tenantA, (tx) =>
+		// 2. UPDATE storage_key is rejected
+		await expectReject(
+			scopedTransaction(
+				sql,
+				ids.tenantA,
+				(tx) =>
 					tx`update source_files set storage_key = 'originals/tampered' where id = ${file.id}::uuid`,
-				),
-				'append-only',
-			)
+			),
+			'append-only',
+		)
 
-			// 3. DELETE from source_files is rejected
-			await expectReject(
-				scopedTransaction(sql, ids.tenantA, (tx) =>
-					tx`delete from source_files where id = ${file.id}::uuid`,
-				),
-				'append-only',
-			)
+		// 3. DELETE from source_files is rejected
+		await expectReject(
+			scopedTransaction(
+				sql,
+				ids.tenantA,
+				(tx) => tx`delete from source_files where id = ${file.id}::uuid`,
+			),
+			'append-only',
+		)
 
-			// 4. TRUNCATE is rejected by statement-level trigger
-			await expectReject(sql`truncate table source_files`, 'append-only')
-		})
+		// 4. TRUNCATE is rejected by statement-level trigger
+		await expectReject(sql`truncate table source_files`, 'append-only')
+	})
 
-		test('referenced source_revisions cannot be deleted (FK invariant preservation)', async () => {
-			const [src] = await scopedTransaction(sql, ids.tenantA, (tx) =>
+	test('referenced source_revisions cannot be deleted (FK invariant preservation)', async () => {
+		const [src] = await scopedTransaction(
+			sql,
+			ids.tenantA,
+			(tx) =>
 				tx<{ id: string }[]>`
 					insert into sources (tenant_id, title, author, source_type, language, rights_status, access_scope_id)
 					values (${ids.tenantA}::uuid, 'Referenced Invariant Source', 'Ibn Qudamah', 'book', 'ar', 'public_domain', ${ids.scopeRootA}::uuid)
 					returning id`,
-			)
-			const [rev] = await scopedTransaction(sql, ids.tenantA, (tx) =>
+		)
+		const [rev] = await scopedTransaction(
+			sql,
+			ids.tenantA,
+			(tx) =>
 				tx<{ id: string }[]>`
 					insert into source_revisions (source_id, revision_number, status)
 					values (${src.id}::uuid, 1, 'active')
 					returning id`,
-			)
+		)
 
-			// Create child relations: page, section, span
-			const [page] = await scopedTransaction(sql, ids.tenantA, (tx) =>
+		// Create child relations: page, section, span
+		const [page] = await scopedTransaction(
+			sql,
+			ids.tenantA,
+			(tx) =>
 				tx<{ id: string }[]>`
 					insert into source_pages (source_revision_id, page_number)
 					values (${rev.id}::uuid, 1)
 					returning id`,
-			)
-			const [section] = await scopedTransaction(sql, ids.tenantA, (tx) =>
+		)
+		const [section] = await scopedTransaction(
+			sql,
+			ids.tenantA,
+			(tx) =>
 				tx<{ id: string }[]>`
 					insert into source_sections (source_revision_id, ordinal, heading)
 					values (${rev.id}::uuid, 1, 'Kitab at-Taharah')
 					returning id`,
-			)
-			await scopedTransaction(sql, ids.tenantA, (tx) =>
+		)
+		await scopedTransaction(
+			sql,
+			ids.tenantA,
+			(tx) =>
 				tx`
 					insert into source_spans (source_revision_id, section_id, page_id, span_key, original_text, start_offset, end_offset)
 					values (${rev.id}::uuid, ${section.id}::uuid, ${page.id}::uuid, 'span-001', 'Text content for test', 0, 50)`,
-			)
+		)
 
-			// Deleting source_revisions must fail with foreign key violation
-			await expectReject(
-				scopedTransaction(sql, ids.tenantA, (tx) =>
-					tx`delete from source_revisions where id = ${rev.id}::uuid`,
-				),
-				'foreign key constraint',
-			)
+		// Deleting source_revisions must fail with foreign key violation
+		await expectReject(
+			scopedTransaction(
+				sql,
+				ids.tenantA,
+				(tx) => tx`delete from source_revisions where id = ${rev.id}::uuid`,
+			),
+			'foreign key constraint',
+		)
 
-			// Deleting source must also fail because revisions exist
-			await expectReject(
-				scopedTransaction(sql, ids.tenantA, (tx) =>
-					tx`delete from sources where id = ${src.id}::uuid`,
-				),
-				'foreign key constraint',
-			)
-		})
+		// Deleting source must also fail because revisions exist
+		await expectReject(
+			scopedTransaction(
+				sql,
+				ids.tenantA,
+				(tx) => tx`delete from sources where id = ${src.id}::uuid`,
+			),
+			'foreign key constraint',
+		)
+	})
 
-		test('historical resolver guarantees: deprecated revision and its lineage remain resolvable', async () => {
-			const auth = await authFor(ids.editorA, ids.tenantA, true)
-			const adminAuth = await authFor(ids.adminA, ids.tenantA, true)
+	test('historical resolver guarantees: deprecated revision and its lineage remain resolvable', async () => {
+		const auth = await authFor(ids.editorA, ids.tenantA, true)
+		const adminAuth = await authFor(ids.adminA, ids.tenantA, true)
 
-			// 1. Create source
-			const srcRes = await app.handle(
-				new Request('http://localhost/sources', {
-					method: 'POST',
-					headers: { ...auth, 'content-type': 'application/json' },
-					body: JSON.stringify({
-						title: 'Resolver Historical Source',
-						author: 'Al-Nawawi',
-						sourceType: 'book',
-						language: 'ar',
-						rightsStatus: 'public_domain',
-						accessScopeId: ids.scopeRootA,
-					}),
+		// 1. Create source
+		const srcRes = await app.handle(
+			new Request('http://localhost/sources', {
+				method: 'POST',
+				headers: { ...auth, 'content-type': 'application/json' },
+				body: JSON.stringify({
+					title: 'Resolver Historical Source',
+					author: 'Al-Nawawi',
+					sourceType: 'book',
+					language: 'ar',
+					rightsStatus: 'public_domain',
+					accessScopeId: ids.scopeRootA,
 				}),
-			)
-			expect(srcRes.status).toBe(201)
-			const { id: sourceId } = await srcRes.json()
+			}),
+		)
+		expect(srcRes.status).toBe(201)
+		const { id: sourceId } = await srcRes.json()
 
-			// 2. Upload revision 1
-			const rev1Res = await app.handle(
-				new Request(`http://localhost/sources/${sourceId}/revisions`, {
-					method: 'POST',
-					headers: { ...auth, 'content-type': 'text/plain' },
-					body: new Uint8Array(Buffer.from('Historical Rev 1 Content')),
-				}),
-			)
-			expect(rev1Res.status).toBe(201)
-			const { revisionId: rev1Id } = await rev1Res.json()
+		// 2. Upload revision 1
+		const rev1Res = await app.handle(
+			new Request(`http://localhost/sources/${sourceId}/revisions`, {
+				method: 'POST',
+				headers: { ...auth, 'content-type': 'text/plain' },
+				body: new Uint8Array(Buffer.from('Historical Rev 1 Content')),
+			}),
+		)
+		expect(rev1Res.status).toBe(201)
+		const { revisionId: rev1Id } = await rev1Res.json()
 
-			// 3. Upload revision 2
-			const rev2Res = await app.handle(
-				new Request(`http://localhost/sources/${sourceId}/revisions`, {
-					method: 'POST',
-					headers: { ...auth, 'content-type': 'text/plain' },
-					body: new Uint8Array(Buffer.from('Historical Rev 2 Content')),
-				}),
-			)
-			expect(rev2Res.status).toBe(201)
-			const { revisionId: rev2Id } = await rev2Res.json()
+		// 3. Upload revision 2
+		const rev2Res = await app.handle(
+			new Request(`http://localhost/sources/${sourceId}/revisions`, {
+				method: 'POST',
+				headers: { ...auth, 'content-type': 'text/plain' },
+				body: new Uint8Array(Buffer.from('Historical Rev 2 Content')),
+			}),
+		)
+		expect(rev2Res.status).toBe(201)
+		const { revisionId: rev2Id } = await rev2Res.json()
 
-			// 4. Deprecate revision 1 pointing to revision 2
-			const depRes = await app.handle(
-				new Request(`http://localhost/sources/${sourceId}/revisions/${rev1Id}/deprecate`, {
+		// 4. Deprecate revision 1 pointing to revision 2
+		const depRes = await app.handle(
+			new Request(
+				`http://localhost/sources/${sourceId}/revisions/${rev1Id}/deprecate`,
+				{
 					method: 'POST',
 					headers: { ...adminAuth, 'content-type': 'application/json' },
 					body: JSON.stringify({
 						reason: 'superseded by revision 2',
 						replacementRevisionId: rev2Id,
 					}),
-				}),
-			)
-			expect(depRes.status).toBe(200)
+				},
+			),
+		)
+		expect(depRes.status).toBe(200)
 
-			// 5. Historical revision 1 is STILL retrievable and downloadable
-			const dlRes = await app.handle(
-				new Request(`http://localhost/sources/${sourceId}/revisions/${rev1Id}/file`, {
-					headers: auth,
-				}),
-			)
-			expect(dlRes.status).toBe(200)
-			const dlText = await dlRes.text()
-			expect(dlText).toBe('Historical Rev 1 Content')
+		// 5. Historical revision 1 is STILL retrievable and downloadable
+		const dlRes = await app.handle(
+			new Request(
+				`http://localhost/sources/${sourceId}/revisions/${rev1Id}/file`,
+				{
+					headers: auth as unknown as HeadersInit,
+				},
+			),
+		)
+		expect(dlRes.status).toBe(200)
+		const dlText = await dlRes.text()
+		expect(dlText).toBe('Historical Rev 1 Content')
 
-				// 6. Source revisions listing includes both active and deprecated revisions with lineage
-				const listRes = await app.handle(
-					new Request(`http://localhost/sources/${sourceId}/revisions`, {
-						headers: auth,
-					}),
-				)
-				expect(listRes.status).toBe(200)
-				const listBody = (await listRes.json()) as any[]
-				expect(listBody.length).toBe(2)
-				const r1 = listBody.find((r: any) => r.id === rev1Id)
-				expect(r1.status).toBe('deprecated')
-			})
-		})
+		// 6. Source revisions listing includes both active and deprecated revisions with lineage
+		const listRes = await app.handle(
+			new Request(`http://localhost/sources/${sourceId}/revisions`, {
+				headers: auth as unknown as HeadersInit,
+			}),
+		)
+		expect(listRes.status).toBe(200)
+		const listBody = (await listRes.json()) as Array<{
+			id: string
+			status: string
+		}>
+		expect(listBody.length).toBe(2)
+		const r1 = listBody.find((r) => r.id === rev1Id)
+		expect(r1?.status).toBe('deprecated')
+	})
+})

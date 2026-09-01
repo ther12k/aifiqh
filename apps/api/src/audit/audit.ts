@@ -1,3 +1,4 @@
+import postgres from 'postgres'
 /**
  * Append-only audit event service (AUD-001 / DB-003).
  * Writes actor, tenant, action, entity, before/after reference, reason,
@@ -47,7 +48,7 @@ export async function recordAudit(
 
 /** Audit within the same transaction as the business change (consistency). */
 export async function recordAuditInTx(
-	tx: Sql,
+	tx: Sql | postgres.TransactionSql,
 	input: AuditEventInput,
 ): Promise<void> {
 	const traceId = input.traceId ?? currentTraceId() ?? null

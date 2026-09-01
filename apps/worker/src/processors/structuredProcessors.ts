@@ -30,10 +30,10 @@ export class JsonProcessor implements ProcessorPlugin {
 		let parsed: unknown
 		try {
 			parsed = JSON.parse(raw)
-		} catch (err: any) {
+		} catch (err) {
 			throw new IngestionError(
 				'CORRUPTED_FILE',
-				`Failed to parse JSON file: ${err?.message ?? err}`,
+				`Failed to parse JSON file: ${err instanceof Error ? err.message : String(err)}`,
 			)
 		}
 
