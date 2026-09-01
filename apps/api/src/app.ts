@@ -1261,7 +1261,10 @@ function sourceRoutes(deps: AppDeps) {
 							toConceptId: bodyStr(body.toConceptId),
 							toRevisionId: bodyStr(body.toRevisionId),
 							relationshipType: bodyStr(body.relationshipType) ?? '',
-							direction: body.direction as 'directed' | 'undirected' | undefined,
+							direction: body.direction as
+								| 'directed'
+								| 'undirected'
+								| undefined,
 							notes: bodyStr(body.notes),
 						},
 						ctx.traceId,

@@ -155,11 +155,11 @@ describe('required-field profiles for all 9 concept types (KNW-002)', () => {
 		)
 		expect(res.status).toBe(200)
 		const profiles = (await res.json()) as Array<{
-		typeKey: string
-		displayName?: string
-		description?: string
-		example?: Record<string, unknown>
-	}>
+			typeKey: string
+			displayName?: string
+			description?: string
+			example?: Record<string, unknown>
+		}>
 		expect(profiles.length).toBe(9)
 		for (const p of profiles) {
 			expect(p.displayName).toBeDefined()

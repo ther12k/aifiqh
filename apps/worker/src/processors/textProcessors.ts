@@ -266,9 +266,7 @@ export class HtmlProcessor implements ProcessorPlugin {
 
 		// Tokenize elements by basic tags
 		const tagRegex = /<(h[1-6]|p|div|li|blockquote)[^>]*>([\s\S]*?)<\/\1>/gi
-		let match: RegExpExecArray | null
-
-		while ((match = tagRegex.exec(sanitized)) !== null) {
+		for (const match of sanitized.matchAll(tagRegex)) {
 			const tag = match[1].toLowerCase()
 			const innerText = match[2]
 				.replace(/<[^>]+>/g, ' ')

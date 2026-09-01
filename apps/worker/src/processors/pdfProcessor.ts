@@ -72,8 +72,7 @@ export class PdfProcessor implements ProcessorPlugin {
 		// Extract text inside BT (Begin Text) ... ET (End Text) blocks or fallback TJ strings
 		const textBlocks: string[] = []
 		const btRegex = /BT[\s\S]*?ET/g
-		let btMatch: RegExpExecArray | null
-		while ((btMatch = btRegex.exec(pdfText)) !== null) {
+		for (const btMatch of pdfText.matchAll(btRegex)) {
 			const block = btMatch[0]
 			// extract text in parens: (Some text) Tj or [(Some) 10 (text)] TJ
 			const strMatches = block.match(/\(([^)]+)\)/g)

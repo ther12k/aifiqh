@@ -1,5 +1,5 @@
-import postgres from 'postgres'
 import type { Principal } from '@aifiqh/shared'
+import type postgres from 'postgres'
 import { recordAuditInTx } from '../audit/audit'
 import type { Sql } from '../db/client'
 

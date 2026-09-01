@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
-	ModelGatewayError,
 	type GenerateRequest,
+	ModelGatewayError,
 	type StreamChunk,
 } from '@aifiqh/shared'
 import { FrontierModelAdapter } from '../src/llm/frontierAdapter'

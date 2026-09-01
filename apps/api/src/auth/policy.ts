@@ -1,4 +1,3 @@
-import postgres from 'postgres'
 /**
  * Tenant RBAC + access-scope authorization (SEC-002 / HARD-004).
  *
@@ -17,6 +16,7 @@ import type {
 	Principal,
 	RoleKey,
 } from '@aifiqh/shared'
+import type postgres from 'postgres'
 import type { Sql } from '../db/client'
 import { scopedTransaction } from '../db/client'
 

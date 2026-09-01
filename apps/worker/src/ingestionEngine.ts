@@ -1,4 +1,3 @@
-import postgres from 'postgres'
 import {
 	IngestionError,
 	type IngestionErrorPayload,
@@ -9,6 +8,7 @@ import {
 	type ProcessorOutput,
 	type ProcessorPlugin,
 } from '@aifiqh/shared'
+import type postgres from 'postgres'
 import type { Sql } from '../../api/src/db/client'
 
 export class IngestionRegistry {

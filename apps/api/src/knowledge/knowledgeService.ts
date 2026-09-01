@@ -1,4 +1,3 @@
-import postgres from 'postgres'
 import {
 	CONCEPT_PROFILES_CATALOG,
 	type ConceptType,
@@ -13,6 +12,7 @@ import {
 	computeConceptContentHash,
 	validateConceptFields,
 } from '@aifiqh/shared'
+import type postgres from 'postgres'
 import { recordAuditInTx } from '../audit/audit'
 import { checkAccess } from '../auth/policy'
 import type { Sql } from '../db/client'
@@ -137,9 +137,11 @@ export async function createConcept(
 			values (
 				${rev.id}::uuid,
 				${generationMethod},
-				${input.modelRef
-					? tx.json(input.modelRef as unknown as postgres.JSONValue)
-					: null}
+				${
+					input.modelRef
+						? tx.json(input.modelRef as unknown as postgres.JSONValue)
+						: null
+				}
 			)`
 
 		// Update draft pointer on concept
@@ -315,9 +317,11 @@ export async function createRevision(
 				values (
 					${rev.id}::uuid,
 					${generationMethod},
-					${input.modelRef
-					? tx.json(input.modelRef as unknown as postgres.JSONValue)
-					: null}
+					${
+						input.modelRef
+							? tx.json(input.modelRef as unknown as postgres.JSONValue)
+							: null
+					}
 				)`
 
 		// Update draft pointer on concept

@@ -1,4 +1,3 @@
-import postgres from 'postgres'
 /**
  * Append-only audit event service (AUD-001 / DB-003).
  * Writes actor, tenant, action, entity, before/after reference, reason,
@@ -7,6 +6,7 @@ import postgres from 'postgres'
  * The sql client is injected (HARD-005) — no module-scope connections.
  */
 import type { AuditEventInput } from '@aifiqh/shared'
+import type postgres from 'postgres'
 import type { Sql } from '../db/client'
 import { currentTraceId } from '../observability/trace'
 
