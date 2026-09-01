@@ -103,6 +103,12 @@ import {
 } from './retrieval/abstentionPolicy'
 import { AccessPolicyError, ScopedResultCache } from './retrieval/accessPolicy'
 import {
+	CONTEXT_PROFILES,
+	type ContextProfileKind,
+	buildContext,
+	storeContextManifest,
+} from './retrieval/contextBuilder'
+import {
 	type AssessmentOutcome,
 	assessEvidenceFromPipeline,
 	storeEvidenceAssessment,
@@ -1838,10 +1844,11 @@ function sourceRoutes(deps: AppDeps) {
 					// footnotes, pinned evidence spans and linked concepts for
 					// the selected fragments — scope-checked, cycle-bounded,
 					// every item carrying relation/reason/token estimate
+					const contextProfile = bodyStr(body.contextProfile)
 					let expansion: Awaited<
 						ReturnType<typeof expandEvidenceContext>
 					> | null = null
-					if (body.expandEvidence === true) {
+					if (body.expandEvidence === true || contextProfile) {
 						const seedSource =
 							outcome.evidence?.selected ?? outcome.fused.candidates
 						expansion = await expandEvidenceContext(
@@ -1852,6 +1859,25 @@ function sourceRoutes(deps: AppDeps) {
 								unitId: c.unitId,
 								logicalUnitId: c.logicalUnitId,
 							})),
+						)
+					}
+
+					// adaptive context (CTX-001): profile budgeted, protected
+					// relations survive truncation, manifest immutable per
+					// trace with items/order/token estimates stored
+					let context: Awaited<ReturnType<typeof buildContext>> | null = null
+					let contextManifest: Awaited<
+						ReturnType<typeof storeContextManifest>
+					> | null = null
+					if (contextProfile && outcome.evidence) {
+						const profileDef =
+							CONTEXT_PROFILES[contextProfile as ContextProfileKind] ??
+							CONTEXT_PROFILES.standard
+						context = buildContext(profileDef, outcome.evidence, expansion)
+						contextManifest = await storeContextManifest(
+							sql,
+							planResult.traceId,
+							context,
 						)
 					}
 
@@ -1870,6 +1896,8 @@ function sourceRoutes(deps: AppDeps) {
 						expansion,
 						assessment,
 						decision,
+						context,
+						contextManifest,
 					}
 				} catch (err) {
 					if (err instanceof LaneError) {
