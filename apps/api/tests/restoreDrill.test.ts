@@ -37,6 +37,82 @@ let setVersionId: string
 let originReport: Record<string, unknown>
 const RESTORE_DB = `aifiqh_restore_drill_${crypto.randomUUID().slice(0, 8)}`
 const RESTORE_URL = DB_URL.replace(/\/aifiqh(\?|$)/, `/${RESTORE_DB}$1`)
+// CI's runner container has no postgres client tools on PATH; the database
+// lives in this disposable docker container (see ci.yml)
+const PG_CONTAINER = process.env.PG_DOCKER_CONTAINER ?? 'aifiqh-ci-pg'
+const HAS_LOCAL_CLIENT = (() => {
+	try {
+		execSync('command -v pg_dump', { stdio: 'ignore' })
+		return true
+	} catch {
+		return false
+	}
+})()
+
+function dumpDatabase(file: string): void {
+	const hasLocal = (() => {
+		try {
+			execSync('command -v pg_dump', { stdio: 'ignore' })
+			return true
+		} catch {
+			return false
+		}
+	})()
+	if (hasLocal) {
+		execSync(`pg_dump "${DB_URL}" -Fc -f ${file}`, { stdio: 'pipe' })
+		return
+	}
+	// dump INSIDE the container (localhost there is the db itself), then
+	// copy the archive out to the runner workspace
+	execSync(
+		`docker exec ${PG_CONTAINER} pg_dump "postgres://aifiqh:aifiqh@127.0.0.1:5432/aifiqh" -Fc -f /tmp/restore_drill.dump`,
+		{ stdio: 'pipe' },
+	)
+	execSync(`docker cp ${PG_CONTAINER}:/tmp/restore_drill.dump ${file}`, {
+		stdio: 'pipe',
+	})
+}
+
+function restoreDatabase(file: string): void {
+	const hasLocal = (() => {
+		try {
+			execSync('command -v pg_restore', { stdio: 'ignore' })
+			return true
+		} catch {
+			return false
+		}
+	})()
+	if (hasLocal) {
+		execSync(`pg_restore -d "${RESTORE_URL}" ${file}`, { stdio: 'pipe' })
+		return
+	}
+	execSync(`docker cp ${file} ${PG_CONTAINER}:/tmp/restore_drill.dump`, {
+		stdio: 'pipe',
+	})
+	execSync(
+		`docker exec ${PG_CONTAINER} pg_restore "postgres://aifiqh:aifiqh@127.0.0.1:5432/${RESTORE_DB}" /tmp/restore_drill.dump`,
+		{ stdio: 'pipe' },
+	)
+}
+
+function psqlAdmin(query: string): void {
+	const hasLocal = (() => {
+		try {
+			execSync('command -v psql', { stdio: 'ignore' })
+			return true
+		} catch {
+			return false
+		}
+	})()
+	if (hasLocal) {
+		execSync(`psql "${DB_URL}" -c "${query}"`, { stdio: 'pipe' })
+		return
+	}
+	execSync(
+		`docker exec ${PG_CONTAINER} psql "postgres://aifiqh:aifiqh@127.0.0.1:5432/aifiqh" -c "${query}"`,
+		{ stdio: 'pipe' },
+	)
+}
 
 beforeAll(async () => {
 	await ensureMigrations()
@@ -199,15 +275,9 @@ function deterministicMetrics(
 describe('REL-HARD-004: database restore and answer replay drill', () => {
 	test('restore reproduces canonical stores and every replay proof', async () => {
 		// --- dump + restore to an isolated database -----------------------
-		execSync(`pg_dump "${DB_URL}" -Fc -f /tmp/restore_drill.dump`, {
-			stdio: 'pipe',
-		})
-		execSync(`psql "${DB_URL}" -c "create database ${RESTORE_DB}"`, {
-			stdio: 'pipe',
-		})
-		execSync(`pg_restore -d "${RESTORE_URL}" /tmp/restore_drill.dump`, {
-			stdio: 'pipe',
-		})
+		dumpDatabase('/tmp/restore_drill.dump')
+		psqlAdmin(`create database ${RESTORE_DB}`)
+		restoreDatabase('/tmp/restore_drill.dump')
 		const restored = postgres(RESTORE_URL, { max: 5 })
 
 		try {
