@@ -72,6 +72,7 @@ import {
 import { type Sql as ScopedSql, scopedTransaction } from './db/client'
 import type { Sql } from './db/client'
 import { dbOk } from './db/client'
+import { EvalE2EError, runE2EEvaluation } from './eval/evalE2ERunner'
 import {
 	type ExportedCase,
 	diffSetVersions,
@@ -2313,6 +2314,31 @@ function sourceRoutes(deps: AppDeps) {
 					})
 				} catch (err) {
 					if (err instanceof EvalRunError) {
+						ctx.set.status = err.code === 'EMPTY_VERSION' ? 422 : 404
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/eval/set-versions/:id/run-e2e', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					return await runE2EEvaluation(sql, principal, {
+						setVersionId: ctx.params.id,
+						indexReleaseId: bodyStr(body.indexReleaseId) ?? '',
+						madhhab: Array.isArray(body.madhhab)
+							? (body.madhhab as string[])
+							: undefined,
+						mode:
+							body.mode === 'allow_general_knowledge'
+								? 'allow_general_knowledge'
+								: 'grounded_only',
+					})
+				} catch (err) {
+					if (err instanceof EvalE2EError) {
 						ctx.set.status = err.code === 'EMPTY_VERSION' ? 422 : 404
 						return { error: err.code, message: err.message }
 					}
