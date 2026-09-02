@@ -72,6 +72,11 @@ import {
 import { type Sql as ScopedSql, scopedTransaction } from './db/client'
 import type { Sql } from './db/client'
 import { dbOk } from './db/client'
+import {
+	EvalCompareError,
+	compareRuns,
+	getComparison,
+} from './eval/evalComparisonService'
 import { EvalE2EError, runE2EEvaluation } from './eval/evalE2ERunner'
 import {
 	type ExportedCase,
@@ -2378,6 +2383,40 @@ function sourceRoutes(deps: AppDeps) {
 					report: run.report,
 					startedAt: run.started_at,
 					finishedAt: run.finished_at,
+				}
+			})
+			.post('/eval/compare', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					return await compareRuns(sql, principal, {
+						baselineRunId: bodyStr(body.baselineRunId) ?? '',
+						candidateRunId: bodyStr(body.candidateRunId) ?? '',
+						caseMap: (body.caseMap ?? undefined) as
+							| Record<string, string>
+							| undefined,
+					})
+				} catch (err) {
+					if (err instanceof EvalCompareError) {
+						ctx.set.status = err.code === 'RUN_NOT_FOUND' ? 404 : 422
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/eval/comparisons/:id', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				try {
+					return await getComparison(sql, principal, ctx.params.id)
+				} catch (err) {
+					if (err instanceof EvalCompareError) {
+						ctx.set.status = 404
+						return { error: err.code, message: err.message }
+					}
+					throw err
 				}
 			})
 			.get('/ops/failures', async (rawCtx) => {
