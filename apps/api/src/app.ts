@@ -139,6 +139,14 @@ import {
 	saveCorrection,
 } from './ocr/ocrCorrectionService'
 import {
+	OpsError,
+	getOpsStatus,
+	listFailureCodes,
+	listOperationFailures,
+	recordHealthEvent,
+	recordOperationFailure,
+} from './ops/opsStatusService'
+import {
 	decideResponse,
 	storeResponseDecision,
 } from './retrieval/abstentionPolicy'
@@ -2048,6 +2056,80 @@ function sourceRoutes(deps: AppDeps) {
 				} catch (err) {
 					if (err instanceof FlagError) {
 						ctx.set.status = err.code === 'FORBIDDEN' ? 403 : 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/ops/status', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('ops:read')
+				return getOpsStatus(sql, principal)
+			})
+			.get('/ops/failures', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('ops:read')
+				const url = new URL(ctx.request.url)
+				try {
+					return await listOperationFailures(sql, principal, {
+						subsystem: url.searchParams.get('subsystem') ?? undefined,
+						severity: url.searchParams.get('severity') ?? undefined,
+						component: url.searchParams.get('component') ?? undefined,
+						limit: Number(url.searchParams.get('limit') ?? '') || undefined,
+						offset: Number(url.searchParams.get('offset') ?? '') || undefined,
+					})
+				} catch (err) {
+					if (err instanceof OpsError) {
+						ctx.set.status = 422
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/ops/failure-codes', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				await ctx.requirePermission('ops:read')
+				return { codes: await listFailureCodes(sql) }
+			})
+			.post('/ops/health-events', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('ops:read')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					return await recordHealthEvent(sql, {
+						componentKey: bodyStr(body.componentKey) ?? '',
+						status: bodyStr(body.status) ?? '',
+						detail: body.detail,
+					})
+				} catch (err) {
+					if (err instanceof OpsError) {
+						ctx.set.status = err.code === 'STATUS_INVALID' ? 422 : 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/ops/failures', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('ops:read')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					return await recordOperationFailure(sql, {
+						componentKey: bodyStr(body.componentKey) ?? '',
+						failureCode: bodyStr(body.failureCode) ?? '',
+						severity: bodyStr(body.severity) ?? '',
+						message: bodyStr(body.message) ?? '',
+						traceId: bodyStr(body.traceId),
+						entityRef: (body.entityRef ?? null) as Record<
+							string,
+							unknown
+						> | null,
+					})
+				} catch (err) {
+					if (err instanceof OpsError) {
+						ctx.set.status = err.code === 'SEVERITY_INVALID' ? 422 : 400
 						return { error: err.code, message: err.message }
 					}
 					throw err
