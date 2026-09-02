@@ -5,6 +5,11 @@ import type { HealthReport, Permission, Principal } from '@aifiqh/shared'
  * the source registry routes (RBAC-guarded, audit-logged).
  */
 import { Elysia } from 'elysia'
+import {
+	AnswerTraceError,
+	getAnswerGraph,
+	publishAnswerWithPins,
+} from './answers/answerTraceService'
 import { listAudit, recordAuditInTx } from './audit/audit'
 import type { OidcClient } from './auth/oidc'
 import { checkAccess, loadPrincipal } from './auth/policy'
@@ -1730,6 +1735,38 @@ function sourceRoutes(deps: AppDeps) {
 					},
 					ctx.traceId,
 				)
+			})
+			.get('/answers/:id/graph', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				try {
+					return await getAnswerGraph(sql, principal, ctx.params.id)
+				} catch (err) {
+					if (err instanceof AnswerTraceError) {
+						ctx.set.status = err.code === 'ANSWER_NOT_FOUND' ? 404 : 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/answers/:id/publish', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('review:publish')
+				ctx.requireCsrf()
+				try {
+					return await publishAnswerWithPins(sql, principal, ctx.params.id)
+				} catch (err) {
+					if (err instanceof AnswerTraceError) {
+						ctx.set.status =
+							err.code === 'ANSWER_NOT_FOUND' || err.code === 'MISSING_PIN'
+								? err.code === 'ANSWER_NOT_FOUND'
+									? 404
+									: 409
+								: 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
 			})
 			.post('/retrieval/search', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
