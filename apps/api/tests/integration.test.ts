@@ -2354,3 +2354,103 @@ describe('source immutability and historical-reference invariants (SRC-005)', ()
 		expect(r1?.status).toBe('deprecated')
 	})
 })
+
+describe('per-table direct-SQL matrix as aifiqh_app (REL-HARD-003 tail)', () => {
+	// Tenant tables whose reads must precede tenant resolution or which are
+	// platform-shared BY DESIGN (documented decision — see the issue):
+	//   auth_sessions / tenant_memberships: login resolves the session and
+	//     the user's membership BEFORE any tenant context exists; RLS keyed
+	//     on app.tenant_id would break authentication itself.
+	//   roles / rollout_rules: global (tenant_id NULL) catalogs shared with
+	//     every tenant; per-tenant rows are app-layer scoped.
+	// The regression lock below fails if ANY OTHER tenant table ships
+	// without RLS, so this allowlist cannot silently grow.
+	const SHARED_TENANT_TABLES = new Set([
+		'auth_sessions',
+		'tenant_memberships',
+		'roles',
+		'rollout_rules',
+	])
+
+	async function tenantTables(): Promise<
+		Array<{ table: string; rls: boolean; hasTenant: boolean }>
+	> {
+		const rows = await sql<
+			{ table: string; rls: boolean; has_tenant: boolean }[]
+		>`select c.relname as table, c.relrowsecurity as rls,
+				exists (
+					select 1 from information_schema.columns col
+					where col.table_schema = 'public' and col.table_name = c.relname
+						and col.column_name = 'tenant_id'
+				) as has_tenant
+			from pg_class c
+			join pg_namespace n on n.oid = c.relnamespace
+			where n.nspname = 'public' and c.relkind = 'r'
+				and c.relname not in ('schema_migrations')
+			order by c.relname`
+		return rows.map((r) => ({
+			table: r.table,
+			rls: r.rls,
+			hasTenant: r.has_tenant,
+		}))
+	}
+
+	test('regression lock: no new tenant table ships without RLS', async () => {
+		const tables = await tenantTables()
+		const tenantScoped = tables.filter((t) => t.hasTenant)
+		const unprotected = tenantScoped.filter((t) => !t.rls).map((t) => t.table)
+		expect(unprotected.sort()).toEqual([...SHARED_TENANT_TABLES].sort())
+		// the shared set itself must genuinely be tenant-shaped
+		expect(SHARED_TENANT_TABLES.size).toBe(4)
+	})
+
+	test('every RLS tenant table fails closed bare and isolates scoped', async () => {
+		const tables = await tenantTables()
+		// direct-tenant tables (the answers-family isolates via parent-join
+		// policies and is covered by its own visibility test above)
+		const scoped = tables.filter((t) => t.hasTenant && t.rls)
+		expect(scoped.length).toBeGreaterThanOrEqual(10)
+
+		const failures: string[] = []
+		for (const t of scoped) {
+			// bare (no GUC): the policy predicate tenant_id = nullif(...) makes
+			// the table read empty — fail closed
+			const bare = await appSql<{ n: string }[]>`
+				select count(*) as n from ${sql(t.table)}`
+			if (Number(bare[0].n) !== 0) {
+				failures.push(`${t.table}: bare count ${bare[0].n} (expected 0)`)
+			}
+			// scoped to tenant A: no foreign row may be visible
+			const foreign = await scopedTransaction(
+				appSql,
+				ids.tenantA,
+				(tx) =>
+					tx<{ n: string }[]>`
+					select count(*) as n from ${sql(t.table)}
+					where tenant_id <> ${ids.tenantA}::uuid`,
+			)
+			if (Number(foreign[0].n) !== 0) {
+				failures.push(
+					`${t.table}: ${foreign[0].n} foreign rows visible under tenant A GUC`,
+				)
+			}
+			// scoped count reconciles with the owner's per-tenant count
+			const owner = await sql<{ n: string }[]>`
+				select count(*) as n from ${sql(t.table)}
+				where tenant_id = ${ids.tenantA}::uuid`
+			const scopedCount = await scopedTransaction(
+				appSql,
+				ids.tenantA,
+				(tx) =>
+					tx<{ n: string }[]>`
+					select count(*) as n from ${sql(t.table)}`,
+			)
+			if (Number(scopedCount[0].n) !== Number(owner[0].n)) {
+				failures.push(
+					`${t.table}: app-scoped ${scopedCount[0].n} != owner ${owner[0].n}`,
+				)
+			}
+		}
+		expect(failures).toEqual([])
+	})
+})
