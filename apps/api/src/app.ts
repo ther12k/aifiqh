@@ -140,6 +140,7 @@ import {
 	storeEvidenceAssessment,
 } from './retrieval/evidenceAssessment'
 import { expandEvidenceContext } from './retrieval/evidenceExpansion'
+import { InspectorError, getInspectorTrace } from './retrieval/inspectorService'
 import {
 	type LaneExecutionOutcome,
 	executeLanePlan,
@@ -1893,6 +1894,25 @@ function sourceRoutes(deps: AppDeps) {
 				} catch (err) {
 					if (err instanceof AnswerTraceError) {
 						ctx.set.status = err.code === 'ANSWER_NOT_FOUND' ? 404 : 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/retrieval/traces/:id/inspector', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				const url = new URL(ctx.request.url)
+				const limitParam = Number(url.searchParams.get('limit') ?? '')
+				const offsetParam = Number(url.searchParams.get('offset') ?? '')
+				try {
+					return await getInspectorTrace(sql, principal, ctx.params.id, {
+						limit: Number.isFinite(limitParam) ? limitParam : undefined,
+						offset: Number.isFinite(offsetParam) ? offsetParam : undefined,
+					})
+				} catch (err) {
+					if (err instanceof InspectorError) {
+						ctx.set.status = err.code === 'TRACE_NOT_FOUND' ? 404 : 409
 						return { error: err.code, message: err.message }
 					}
 					throw err
