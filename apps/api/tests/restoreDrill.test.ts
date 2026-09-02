@@ -90,7 +90,7 @@ function restoreDatabase(file: string): void {
 		stdio: 'pipe',
 	})
 	execSync(
-		`docker exec ${PG_CONTAINER} pg_restore "postgres://aifiqh:aifiqh@127.0.0.1:5432/${RESTORE_DB}" /tmp/restore_drill.dump`,
+		`docker exec ${PG_CONTAINER} pg_restore -d "postgres://aifiqh:aifiqh@127.0.0.1:5432/${RESTORE_DB}" /tmp/restore_drill.dump`,
 		{ stdio: 'pipe' },
 	)
 }
