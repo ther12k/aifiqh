@@ -82,6 +82,10 @@ import {
 	seedSetVersion,
 } from './eval/evalImportExport'
 import {
+	EvalRunError,
+	runRetrievalEvaluation,
+} from './eval/evalRetrievalRunner'
+import {
 	EvalSetError,
 	addEvaluationCase,
 	createEvaluationSet,
@@ -2293,6 +2297,61 @@ function sourceRoutes(deps: AppDeps) {
 						return { error: err.code, message: err.message }
 					}
 					throw err
+				}
+			})
+			.post('/eval/set-versions/:id/run-retrieval', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					return await runRetrievalEvaluation(sql, principal, {
+						setVersionId: ctx.params.id,
+						indexReleaseId: bodyStr(body.indexReleaseId) ?? '',
+						knowledgeReleaseId: bodyStr(body.knowledgeReleaseId),
+						k: Number(body.k ?? '') || undefined,
+					})
+				} catch (err) {
+					if (err instanceof EvalRunError) {
+						ctx.set.status = err.code === 'EMPTY_VERSION' ? 422 : 404
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/eval/runs/:id', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				const [run] = await sql<
+					{
+						id: string
+						set_version_id: string
+						mode: string
+						pins: Record<string, unknown>
+						status: string
+						report: Record<string, unknown>
+						started_at: string
+						finished_at: string | null
+					}[]
+				>`select r.id, r.set_version_id::text, r.mode, r.pins, r.status,
+						r.report, r.started_at, r.finished_at
+					from evaluation_runs r
+					join evaluation_set_versions v on v.id = r.set_version_id
+					join evaluation_sets s on s.id = v.set_id
+					where r.id = ${ctx.params.id}::uuid and s.tenant_id = ${principal.tenantId}::uuid`
+				if (!run) {
+					ctx.set.status = 404
+					return { error: 'RUN_NOT_FOUND' }
+				}
+				return {
+					id: run.id,
+					setVersionId: run.set_version_id,
+					mode: run.mode,
+					pins: run.pins,
+					status: run.status,
+					report: run.report,
+					startedAt: run.started_at,
+					finishedAt: run.finished_at,
 				}
 			})
 			.get('/ops/failures', async (rawCtx) => {
