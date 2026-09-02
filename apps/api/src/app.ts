@@ -54,6 +54,21 @@ import {
 	setProviderEnabled,
 	testProviderConnection,
 } from './config/configService'
+import {
+	FlagError,
+	createRolloutRule,
+	evaluateFlags,
+	killSwitch,
+	upsertFlag,
+} from './config/flagService'
+import {
+	PromptConfigError,
+	createPromptVersion,
+	listPromptVersions,
+	promotePromptVersion,
+	resolvePromptForGeneration,
+	rollbackPromptVersion,
+} from './config/promptService'
 import { type Sql as ScopedSql, scopedTransaction } from './db/client'
 import type { Sql } from './db/client'
 import { dbOk } from './db/client'
@@ -1894,6 +1909,145 @@ function sourceRoutes(deps: AppDeps) {
 				} catch (err) {
 					if (err instanceof AnswerTraceError) {
 						ctx.set.status = err.code === 'ANSWER_NOT_FOUND' ? 404 : 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/config/prompts/:templateKey/versions', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('config:manage')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					return await createPromptVersion(sql, principal, {
+						templateKey: ctx.params.templateKey,
+						body: bodyStr(body.body) ?? '',
+						variables: (body.variables ?? []) as Array<{
+							name: string
+							required: boolean
+						}>,
+						description: bodyStr(body.description),
+					})
+				} catch (err) {
+					if (err instanceof PromptConfigError) {
+						ctx.set.status = err.code === 'VARIABLES_INVALID' ? 422 : 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/config/prompts/:templateKey/versions', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				return listPromptVersions(sql, ctx.params.templateKey)
+			})
+			.post('/config/prompts/versions/:id/promote', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('config:manage')
+				ctx.requireCsrf()
+				try {
+					return await promotePromptVersion(sql, principal, ctx.params.id)
+				} catch (err) {
+					if (err instanceof PromptConfigError) {
+						ctx.set.status = 409
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/config/prompts/versions/:id/rollback', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('config:manage')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					return await rollbackPromptVersion(
+						sql,
+						principal,
+						ctx.params.id,
+						bodyStr(body.reason) ?? '',
+					)
+				} catch (err) {
+					if (err instanceof PromptConfigError) {
+						ctx.set.status = err.code === 'REASON_REQUIRED' ? 422 : 409
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/config/prompts/:templateKey/effective', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				const resolved = await resolvePromptForGeneration(
+					sql,
+					ctx.params.templateKey,
+				)
+				if (!resolved) {
+					ctx.set.status = 404
+					return { error: 'NO_PROMOTED_VERSION' }
+				}
+				return resolved
+			})
+			.put('/config/flags/:key', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('config:manage')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					return await upsertFlag(
+						sql,
+						principal,
+						ctx.params.key,
+						bodyStr(body.description) ?? '',
+						body.enabledByDefault === true,
+					)
+				} catch (err) {
+					if (err instanceof FlagError) {
+						ctx.set.status = 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/config/flags/:key/rules', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('config:manage')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				const segment = (body.segment ?? {}) as {
+					kill_switch?: boolean
+					roles?: string[]
+				}
+				try {
+					return await createRolloutRule(sql, principal, {
+						flagKey: ctx.params.key,
+						percentage: Number(body.percentage ?? 0),
+						tenantId: bodyStr(body.tenantId),
+						segment,
+						priority: Number(body.priority ?? 0),
+					})
+				} catch (err) {
+					if (err instanceof FlagError) {
+						ctx.set.status =
+							err.code === 'PERCENTAGE_INVALID' ||
+							err.code === 'SEGMENT_INVALID'
+								? 422
+								: 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/config/flags/:key/kill', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('config:manage')
+				ctx.requireCsrf()
+				try {
+					return await killSwitch(sql, principal, ctx.params.key)
+				} catch (err) {
+					if (err instanceof FlagError) {
+						ctx.set.status = err.code === 'FORBIDDEN' ? 403 : 400
 						return { error: err.code, message: err.message }
 					}
 					throw err
