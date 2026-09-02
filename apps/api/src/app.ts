@@ -208,6 +208,11 @@ import { HashRerankerProvider } from './retrieval/reranker'
 import { LaneError, type LexicalFilters } from './retrieval/retrievalLanes'
 import { resolveSpan } from './sources/spanResolver'
 import { contentKey, getObject, headObject, putObject } from './storage/s3'
+import {
+	getStudioDashboard,
+	listBrokenLinks,
+	listFailedJobs,
+} from './studio/dashboardService'
 
 function errMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err)
@@ -2123,6 +2128,29 @@ function sourceRoutes(deps: AppDeps) {
 					}
 					throw err
 				}
+			})
+			.get('/studio/dashboard', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				return getStudioDashboard(sql, principal)
+			})
+			.get('/studio/failed-jobs', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				const url = new URL(ctx.request.url)
+				return listFailedJobs(sql, principal, {
+					limit: Number(url.searchParams.get('limit') ?? '') || undefined,
+					offset: Number(url.searchParams.get('offset') ?? '') || undefined,
+				})
+			})
+			.get('/studio/broken-links', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				const url = new URL(ctx.request.url)
+				return listBrokenLinks(sql, principal, {
+					limit: Number(url.searchParams.get('limit') ?? '') || undefined,
+					offset: Number(url.searchParams.get('offset') ?? '') || undefined,
+				})
 			})
 			.get('/ops/status', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
