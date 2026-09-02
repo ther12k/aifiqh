@@ -10,6 +10,13 @@ import {
 	getAnswerGraph,
 	publishAnswerWithPins,
 } from './answers/answerTraceService'
+import {
+	EVIDENCE_PACK_VERSION,
+	type EvidencePack,
+	EvidencePackError,
+	captureEvidencePack,
+	verifyEvidencePackReplay,
+} from './answers/evidencePackService'
 import { listAudit, recordAuditInTx } from './audit/audit'
 import type { OidcClient } from './auth/oidc'
 import { checkAccess, loadPrincipal } from './auth/policy'
@@ -1744,6 +1751,47 @@ function sourceRoutes(deps: AppDeps) {
 				} catch (err) {
 					if (err instanceof AnswerTraceError) {
 						ctx.set.status = err.code === 'ANSWER_NOT_FOUND' ? 404 : 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/answers/:id/evidence-pack', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				try {
+					return await captureEvidencePack(sql, principal, ctx.params.id)
+				} catch (err) {
+					if (err instanceof EvidencePackError) {
+						ctx.set.status = err.code === 'ANSWER_NOT_FOUND' ? 404 : 409
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/answers/:id/evidence-pack/verify', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				const pack = body.pack as EvidencePack | undefined
+				if (!pack || pack.version !== EVIDENCE_PACK_VERSION) {
+					ctx.set.status = 400
+					return {
+						error: 'PACK_REQUIRED',
+						message: `body.pack must be a captured ${EVIDENCE_PACK_VERSION} evidence pack`,
+					}
+				}
+				try {
+					return await verifyEvidencePackReplay(
+						sql,
+						principal,
+						ctx.params.id,
+						pack,
+					)
+				} catch (err) {
+					if (err instanceof EvidencePackError) {
+						ctx.set.status = err.code === 'ANSWER_NOT_FOUND' ? 404 : 409
 						return { error: err.code, message: err.message }
 					}
 					throw err
