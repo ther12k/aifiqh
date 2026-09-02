@@ -27,10 +27,8 @@ export function ContextReplayView({ replay }: { replay: ReplayView }) {
 
 			{replay.flags.length > 0 ? (
 				<ul className="context-replay-flags" role="alert">
-					{replay.flags.map((f, i) => (
-						// list position is the flag identity; flags are derived
-						// data recomputed wholesale on every render
-						<li key={i} data-code={f.code}>
+					{replay.flags.map((f) => (
+						<li key={`${f.code}:${f.ordinal ?? 'all'}`} data-code={f.code}>
 							{f.code}: {f.detail}
 						</li>
 					))}
