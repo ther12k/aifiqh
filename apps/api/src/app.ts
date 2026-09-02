@@ -73,6 +73,15 @@ import { type Sql as ScopedSql, scopedTransaction } from './db/client'
 import type { Sql } from './db/client'
 import { dbOk } from './db/client'
 import {
+	EvalSetError,
+	addEvaluationCase,
+	createEvaluationSet,
+	createSetVersion,
+	getSetVersion,
+	listSetVersions,
+	publishSetVersion,
+} from './eval/evalSetService'
+import {
 	EmbeddingError,
 	HashEmbeddingProvider,
 	embedIndexRelease,
@@ -2065,6 +2074,136 @@ function sourceRoutes(deps: AppDeps) {
 				const ctx = rawCtx as unknown as HandlerCtx
 				const principal = await ctx.requirePermission('ops:read')
 				return getOpsStatus(sql, principal)
+			})
+			.post('/eval/sets', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:draft')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					return await createEvaluationSet(sql, principal, {
+						key: bodyStr(body.key) ?? '',
+						description: bodyStr(body.description),
+						ownerUserId: bodyStr(body.ownerUserId),
+					})
+				} catch (err) {
+					if (err instanceof EvalSetError) {
+						ctx.set.status = 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/eval/sets/:id/versions', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:draft')
+				ctx.requireCsrf()
+				try {
+					return await createSetVersion(sql, principal, ctx.params.id)
+				} catch (err) {
+					if (err instanceof EvalSetError) {
+						ctx.set.status = err.code === 'SET_NOT_FOUND' ? 404 : 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/eval/sets/:id/versions', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				try {
+					return {
+						versions: await listSetVersions(sql, principal, ctx.params.id),
+					}
+				} catch (err) {
+					if (err instanceof EvalSetError) {
+						ctx.set.status = 404
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/eval/set-versions/:id/cases', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:draft')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					return await addEvaluationCase(sql, principal, ctx.params.id, {
+						caseKey: bodyStr(body.caseKey) ?? '',
+						category: bodyStr(body.category) ?? '',
+						queryText: bodyStr(body.queryText) ?? '',
+						language: bodyStr(body.language),
+						riskLevel: bodyStr(body.riskLevel),
+						conversation: (body.conversation ?? null) as Record<
+							string,
+							unknown
+						> | null,
+						expectedBehavior: (body.expectedBehavior ?? {}) as Record<
+							string,
+							unknown
+						>,
+						expectedEvidence: (body.expectedEvidence ?? []) as Array<{
+							sourceRevisionId?: string | null
+							spanId?: string | null
+							knowledgeRevisionId?: string | null
+							mustInclude?: boolean
+						}>,
+						ownerUserId: bodyStr(body.ownerUserId) ?? principal.userId,
+						reviewerUserId: bodyStr(body.reviewerUserId),
+					})
+				} catch (err) {
+					if (err instanceof EvalSetError) {
+						const unprocessable = [
+							'CATEGORY_INVALID',
+							'RISK_INVALID',
+							'EXPECTATION_REQUIRED',
+							'SOURCE_REVISION_NOT_FOUND',
+							'SPAN_REVISION_MISMATCH',
+							'SPAN_WITHOUT_REVISION',
+							'KNOWLEDGE_REVISION_NOT_FOUND',
+						]
+						ctx.set.status = unprocessable.includes(err.code)
+							? 422
+							: err.code === 'VERSION_NOT_FOUND'
+								? 404
+								: 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/eval/set-versions/:id', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				try {
+					return await getSetVersion(sql, principal, ctx.params.id)
+				} catch (err) {
+					if (err instanceof EvalSetError) {
+						ctx.set.status = 404
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/eval/set-versions/:id/publish', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('review:publish')
+				ctx.requireCsrf()
+				try {
+					return await publishSetVersion(sql, principal, ctx.params.id)
+				} catch (err) {
+					if (err instanceof EvalSetError) {
+						ctx.set.status =
+							err.code === 'VERSION_NOT_FOUND'
+								? 404
+								: err.code === 'EMPTY_VERSION'
+									? 422
+									: 409
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
 			})
 			.get('/ops/failures', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
