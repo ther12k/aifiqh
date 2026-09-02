@@ -372,9 +372,11 @@ describe('CFG-003: feature flags + safe rollout controls', () => {
 			insert into retrieval_traces (tenant_id, user_id, query_original, status)
 			values (${tenant}::uuid, ${adminUser}::uuid, 'flag', 'running') returning id`
 		await storeEffectiveFlags(sql, trace.id, eff)
-		const [row] = await sql<{
-			effective_flags: { flags: Record<string, boolean> }
-		}[]>`select effective_flags from retrieval_traces where id = ${trace.id}::uuid`
+		const [row] = await sql<
+			{
+				effective_flags: { flags: Record<string, boolean> }
+			}[]
+		>`select effective_flags from retrieval_traces where id = ${trace.id}::uuid`
 		expect(row.effective_flags.flags[flagKey]).toBeTrue()
 
 		// rule creation audited
