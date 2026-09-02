@@ -73,6 +73,15 @@ import { type Sql as ScopedSql, scopedTransaction } from './db/client'
 import type { Sql } from './db/client'
 import { dbOk } from './db/client'
 import {
+	type ExportedCase,
+	diffSetVersions,
+	exportSetVersion,
+	exportSetVersionCsv,
+	importCases,
+	parseExportedCasesCsv,
+	seedSetVersion,
+} from './eval/evalImportExport'
+import {
 	EvalSetError,
 	addEvaluationCase,
 	createEvaluationSet,
@@ -2200,6 +2209,87 @@ function sourceRoutes(deps: AppDeps) {
 								: err.code === 'EMPTY_VERSION'
 									? 422
 									: 409
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/eval/set-versions/:id/export', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				const url = new URL(ctx.request.url)
+				try {
+					const detail = await getSetVersion(sql, principal, ctx.params.id)
+					if (url.searchParams.get('format') === 'csv') {
+						return new Response(exportSetVersionCsv(detail), {
+							headers: { 'content-type': 'text/csv; charset=utf-8' },
+						})
+					}
+					return exportSetVersion(detail)
+				} catch (err) {
+					if (err instanceof EvalSetError) {
+						ctx.set.status = 404
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/eval/sets/:id/import', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:draft')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					let cases: ExportedCase[]
+					if (typeof body.csv === 'string') {
+						cases = parseExportedCasesCsv(body.csv)
+					} else if (Array.isArray(body.cases)) {
+						cases = body.cases
+					} else {
+						ctx.set.status = 400
+						return { error: 'IMPORT_EMPTY', message: 'provide cases[] or csv' }
+					}
+					return await importCases(sql, principal, ctx.params.id, cases, {
+						ownerUserId: bodyStr(body.ownerUserId) ?? principal.userId,
+						reviewerUserId: bodyStr(body.reviewerUserId),
+					})
+				} catch (err) {
+					if (err instanceof EvalSetError) {
+						ctx.set.status =
+							err.code === 'SET_NOT_FOUND' || err.code === 'VERSION_NOT_FOUND'
+								? 404
+								: 422
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/eval/sets/:id/seed', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:draft')
+				ctx.requireCsrf()
+				try {
+					return await seedSetVersion(sql, principal, ctx.params.id, {
+						ownerUserId: principal.userId,
+					})
+				} catch (err) {
+					if (err instanceof EvalSetError) {
+						ctx.set.status = err.code === 'SET_NOT_FOUND' ? 404 : 422
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/eval/set-versions/:id/diff/:otherId', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				try {
+					const from = await getSetVersion(sql, principal, ctx.params.id)
+					const to = await getSetVersion(sql, principal, ctx.params.otherId)
+					return diffSetVersions(from, to)
+				} catch (err) {
+					if (err instanceof EvalSetError) {
+						ctx.set.status = 404
 						return { error: err.code, message: err.message }
 					}
 					throw err

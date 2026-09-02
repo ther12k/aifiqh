@@ -306,6 +306,7 @@ export interface SetVersionDetail {
 		language: string
 		riskLevel: string
 		queryText: string
+		conversation: Record<string, unknown> | null
 		ownerUserId: string
 		reviewerUserId: string | null
 		expectedBehavior: Record<string, unknown>
@@ -351,12 +352,13 @@ export async function getSetVersion(
 			language: string
 			risk_level: string
 			query_text: string
+			conversation: Record<string, unknown> | null
 			owner_user_id: string
 			reviewer_user_id: string | null
 			expected_behavior: Record<string, unknown>
 		}[]
 	>`select id, case_key, category, language, risk_level, query_text,
-			owner_user_id::text, reviewer_user_id::text, expected_behavior
+			conversation, owner_user_id::text, reviewer_user_id::text, expected_behavior
 		from evaluation_cases
 		where set_version_id = ${versionId}::uuid
 		order by case_key`
@@ -402,6 +404,7 @@ export async function getSetVersion(
 			language: c.language,
 			riskLevel: c.risk_level,
 			queryText: c.query_text,
+			conversation: c.conversation,
 			ownerUserId: c.owner_user_id,
 			reviewerUserId: c.reviewer_user_id,
 			expectedBehavior: c.expected_behavior,
