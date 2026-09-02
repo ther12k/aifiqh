@@ -1,6 +1,12 @@
 import type { Principal } from '@aifiqh/shared'
 import { recordAuditInTx } from '../audit/audit'
 import type { Sql } from '../db/client'
+import {
+	assertPromotionGate,
+	failedGateExists,
+	isGateEnforced,
+	pinGateResult,
+} from '../eval/gateService'
 
 /**
  * Index release states (DB-012): building → ready → promoted → retired.
@@ -42,6 +48,8 @@ export async function promoteIndexRelease(
 	releaseId: string
 	previousReleaseId: string | null
 }> {
+	// gate posture resolved BEFORE the promotion transaction (EVAL-007)
+	const gateEnforced = await isGateEnforced(sql, principal)
 	return await sql.begin(async (tx) => {
 		const [release] = await tx<
 			{
@@ -80,6 +88,24 @@ export async function promoteIndexRelease(
 			throw new IndexAliasError(
 				'ALREADY_CURRENT',
 				`Alias '${alias}' already points at this release`,
+			)
+		}
+
+		// critical release gate (EVAL-007): an evaluated failure ALWAYS
+		// blocks; a missing gate blocks while enforcement is enabled
+		if (
+			gateEnforced ||
+			(await failedGateExists(tx, 'index_release', indexReleaseId))
+		) {
+			const clearance = await assertPromotionGate(tx, principal, {
+				subjectType: 'index_release',
+				subjectId: indexReleaseId,
+			})
+			await pinGateResult(
+				tx,
+				'index_release',
+				indexReleaseId,
+				clearance.gateResultId,
 			)
 		}
 

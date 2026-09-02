@@ -2,6 +2,12 @@ import type { Principal } from '@aifiqh/shared'
 import type postgres from 'postgres'
 import { recordAuditInTx } from '../audit/audit'
 import type { Sql } from '../db/client'
+import {
+	assertPromotionGate,
+	failedGateExists,
+	isGateEnforced,
+	pinGateResult,
+} from '../eval/gateService'
 
 /**
  * Allowed external secret-manager schemes. A raw API key has no scheme and is
@@ -314,6 +320,9 @@ export async function setAlias(
 		)
 	}
 
+	// gate posture resolved BEFORE the promotion transaction (EVAL-007)
+	const gateEnforced = await isGateEnforced(sql, principal)
+
 	const [existing] = await sql<{ target_id: string }[]>`
 		select target_id from configuration_aliases where alias = ${alias} limit 1`
 	const previousTargetId = existing?.target_id ?? null
@@ -345,6 +354,19 @@ export async function setAlias(
 	}
 
 	await sql.begin(async (tx) => {
+		// critical release gate (EVAL-007): an evaluated failure ALWAYS
+		// blocks; a missing gate blocks while enforcement is enabled
+		if (
+			gateEnforced ||
+			(await failedGateExists(tx, 'config', input.targetId))
+		) {
+			const clearance = await assertPromotionGate(tx, principal, {
+				subjectType: 'config',
+				subjectId: input.targetId,
+			})
+			await pinGateResult(tx, 'config', input.targetId, clearance.gateResultId)
+		}
+
 		await tx`
 			insert into configuration_aliases (alias, target_type, target_id, change_reason, updated_by)
 			values (

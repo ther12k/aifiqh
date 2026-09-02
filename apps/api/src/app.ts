@@ -102,6 +102,7 @@ import {
 } from './eval/evalSetService'
 import {
 	GateError,
+	PromotionBlockedError,
 	evaluateLaunchGate,
 	gateClearance,
 	overrideGateFailure,
@@ -1540,14 +1541,32 @@ function sourceRoutes(deps: AppDeps) {
 					}
 				}
 				try {
+					const gate = (body.gate ?? {}) as Record<string, unknown>
 					return await publishChangeset(
 						sql,
 						principal,
 						ctx.params.id,
-						{ alias },
+						{
+							alias,
+							gate: {
+								retrievalRunId: bodyStr(gate.retrievalRunId) ?? null,
+								e2eRunId: bodyStr(gate.e2eRunId) ?? null,
+								comparisonId: bodyStr(gate.comparisonId) ?? null,
+							},
+						},
 						ctx.traceId,
 					)
 				} catch (err) {
+					if (err instanceof PromotionBlockedError) {
+						ctx.set.status = 422
+						return {
+							error: 'PROMOTION_BLOCKED',
+							message: err.message,
+							reasonCode: err.reasonCode,
+							reasons: err.reasons,
+							gateResultId: err.gateResultId,
+						}
+					}
 					if (err instanceof ReleaseError) {
 						ctx.set.status = err.code === 'NOT_FOUND' ? 404 : 409
 						return { error: err.code, message: err.message }
@@ -1732,6 +1751,16 @@ function sourceRoutes(deps: AppDeps) {
 						ctx.traceId,
 					)
 				} catch (err) {
+					if (err instanceof PromotionBlockedError) {
+						ctx.set.status = 422
+						return {
+							error: 'PROMOTION_BLOCKED',
+							message: err.message,
+							reasonCode: err.reasonCode,
+							reasons: err.reasons,
+							gateResultId: err.gateResultId,
+						}
+					}
 					if (err instanceof IndexAliasError) {
 						ctx.set.status =
 							err.code === 'RELEASE_NOT_FOUND'
@@ -3238,6 +3267,16 @@ function sourceRoutes(deps: AppDeps) {
 						ctx.traceId,
 					)
 				} catch (err) {
+					if (err instanceof PromotionBlockedError) {
+						ctx.set.status = 422
+						return {
+							error: 'PROMOTION_BLOCKED',
+							message: err.message,
+							reasonCode: err.reasonCode,
+							reasons: err.reasons,
+							gateResultId: err.gateResultId,
+						}
+					}
 					if (err instanceof ConfigValidationError) {
 						ctx.set.status = 400
 						return { error: err.code, message: errMessage(err) }

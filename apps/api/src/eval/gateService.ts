@@ -1,6 +1,8 @@
 import { sha256Hex } from '@aifiqh/shared'
 import type { Principal } from '@aifiqh/shared'
-import { recordAudit } from '../audit/audit'
+import type postgres from 'postgres'
+import { recordAuditInTx } from '../audit/audit'
+import { evaluateFlags } from '../config/flagService'
 import type { Sql } from '../db/client'
 
 /**
@@ -155,7 +157,7 @@ export interface GateEvaluationResult {
 }
 
 export async function evaluateLaunchGate(
-	sql: Sql,
+	sql: Sql | postgres.TransactionSql,
 	principal: Principal,
 	input: GateEvaluationInput,
 ): Promise<GateEvaluationResult> {
@@ -267,9 +269,9 @@ export async function evaluateLaunchGate(
 			${principal.userId}::uuid)
 		returning id`
 
-	await recordAudit(sql, {
+	await recordAuditInTx(sql, {
 		tenantId: principal.tenantId,
-		actorType: 'user',
+		actorType: principal.actorType,
 		actorId: principal.userId,
 		action: 'gate.evaluated',
 		entityType: 'gate_result',
@@ -333,9 +335,9 @@ export async function overrideGateFailure(
 			'this policy does not allow overrides',
 		)
 	}
-	await recordAudit(sql, {
+	await recordAuditInTx(sql, {
 		tenantId: principal.tenantId,
-		actorType: 'user',
+		actorType: principal.actorType,
 		actorId: principal.userId,
 		action: 'gate.override',
 		entityType: 'gate_result',
@@ -348,7 +350,7 @@ export async function overrideGateFailure(
 
 /** Has a subject cleared its critical gate? (used by promotion paths) */
 export async function gateClearance(
-	sql: Sql,
+	sql: Sql | postgres.TransactionSql,
 	principal: Principal,
 	input: { policyKey?: string; subjectType: string; subjectId: string },
 ): Promise<{
@@ -402,4 +404,122 @@ export async function gateClearance(
 		gateResultId: row.id,
 		result: row.result,
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Promotion gating (EVAL-007): knowledge/index/config alias promotion
+// consults the stored gate results before moving production traffic.
+//
+// Enforcement posture:
+//  - an EVALUATED FAILED gate (without an audited override) ALWAYS blocks
+//    promotion, regardless of any flag — a recorded failure cannot be
+//    sneaked past;
+//  - full fail-closed enforcement (a MISSING gate also blocks) is rolled
+//    out through the `eval_gate_enforced_promotion` feature flag so the
+//    existing promotion flows keep working until the flag is enabled.
+// ---------------------------------------------------------------------------
+
+export const PROMOTION_GATE_FLAG = 'eval_gate_enforced_promotion'
+
+export type PromotionSubjectType =
+	| 'knowledge_release'
+	| 'index_release'
+	| 'config'
+
+export class PromotionBlockedError extends Error {
+	readonly reasonCode: string
+	readonly gateResultId: string | null
+	readonly reasons: ThresholdCheck[]
+
+	constructor(
+		reasonCode: string,
+		reasons: ThresholdCheck[],
+		gateResultId: string | null,
+	) {
+		super(`promotion blocked by critical release gate: ${reasonCode}`)
+		this.name = 'PromotionBlockedError'
+		this.reasonCode = reasonCode
+		this.reasons = reasons
+		this.gateResultId = gateResultId
+	}
+}
+
+/** Is full fail-closed gate enforcement enabled for this principal? */
+export async function isGateEnforced(
+	sql: Sql,
+	principal: Principal,
+): Promise<boolean> {
+	const effective = await evaluateFlags(sql, principal)
+	return effective.flags[PROMOTION_GATE_FLAG] === true
+}
+
+/** An evaluated-and-failed (un-overridden) gate exists for the subject? */
+export async function failedGateExists(
+	sql: Sql | postgres.TransactionSql,
+	subjectType: PromotionSubjectType,
+	subjectId: string,
+): Promise<boolean> {
+	const rows = await sql<{ id: string }[]>`
+		select g.id from gate_results g
+		where g.subject_type = ${subjectType}
+			and g.subject_id = ${subjectId}::uuid
+			and g.result = 'failed'
+			and not exists (
+				select 1 from audit_events a
+				where a.action = 'gate.override' and a.entity_id = g.id::text
+			)
+		limit 1`
+	return rows.length > 0
+}
+
+/**
+ * Assert the subject's critical gate is cleared before promotion.
+ * Returns the gate result id on success; throws PromotionBlockedError
+ * (with the failed threshold checks as reasons) otherwise.
+ */
+export async function assertPromotionGate(
+	sql: Sql | postgres.TransactionSql,
+	principal: Principal,
+	input: {
+		policyKey?: string
+		subjectType: PromotionSubjectType
+		subjectId: string
+	},
+): Promise<{ gateResultId: string; result: string }> {
+	const clearance = await gateClearance(sql, principal, input)
+	if (clearance.cleared && clearance.gateResultId) {
+		return {
+			gateResultId: clearance.gateResultId,
+			result: clearance.result ?? 'passed',
+		}
+	}
+	let reasons: ThresholdCheck[] = []
+	if (clearance.gateResultId) {
+		const [row] = await sql<{ details: { checks?: ThresholdCheck[] } }[]>`
+			select details from gate_results where id = ${clearance.gateResultId}::uuid`
+		reasons = row?.details?.checks ?? []
+	}
+	throw new PromotionBlockedError(
+		clearance.reasonCode,
+		reasons,
+		clearance.gateResultId,
+	)
+}
+
+/** Pin the clearing gate result onto the promoted release (artifact). */
+export async function pinGateResult(
+	sql: Sql | postgres.TransactionSql,
+	subjectType: PromotionSubjectType,
+	subjectId: string,
+	gateResultId: string,
+): Promise<void> {
+	if (subjectType === 'knowledge_release') {
+		await sql`update knowledge_releases set gate_result_id = ${gateResultId}::uuid
+			where id = ${subjectId}::uuid`
+	} else if (subjectType === 'index_release') {
+		await sql`update index_releases set gate_result_id = ${gateResultId}::uuid
+			where id = ${subjectId}::uuid`
+	}
+	// config subjects carry no artifact column; the gate_results row itself
+	// is the audited artifact
 }

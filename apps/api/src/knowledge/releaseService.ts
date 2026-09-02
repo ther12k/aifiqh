@@ -2,6 +2,15 @@ import type { Principal } from '@aifiqh/shared'
 import { sha256Hex } from '@aifiqh/shared'
 import { recordAuditInTx } from '../audit/audit'
 import type { Sql } from '../db/client'
+import {
+	PromotionBlockedError,
+	type ThresholdCheck,
+	assertPromotionGate,
+	evaluateLaunchGate,
+	failedGateExists,
+	isGateEnforced,
+	pinGateResult,
+} from '../eval/gateService'
 
 export class ReleaseError extends Error {
 	constructor(
@@ -59,7 +68,17 @@ export async function publishChangeset(
 	sql: Sql,
 	principal: Principal,
 	changesetId: string,
-	input: { alias: 'staging' | 'production' },
+	input: {
+		alias: 'staging' | 'production'
+		/** gate evidence evaluated WITH this publication (EVAL-007): the
+		 * release subject is created inside the transaction, so the run ids
+		 * travel with the request; a failed gate rolls the whole thing back */
+		gate?: {
+			retrievalRunId?: string | null
+			e2eRunId?: string | null
+			comparisonId?: string | null
+		}
+	},
 	traceId?: string,
 ): Promise<{
 	releaseId: string
@@ -67,6 +86,8 @@ export async function publishChangeset(
 	manifestHash: string
 	alias: string
 }> {
+	// gate posture resolved BEFORE the publication transaction (EVAL-007)
+	const gateEnforced = await isGateEnforced(sql, principal)
 	return await sql.begin(async (tx) => {
 		// lock the changeset row: publication and item freeze must be atomic
 		const [changeset] = await tx<
@@ -109,6 +130,55 @@ export async function publishChangeset(
 			await tx`
 				insert into knowledge_release_items (release_id, concept_id, concept_revision_id)
 				values (${release.id}::uuid, ${item.concept_id}::uuid, ${item.proposed_revision_id}::uuid)`
+		}
+
+		// critical release gate (EVAL-007): an evaluated failure ALWAYS
+		// blocks; a missing gate blocks while enforcement is enabled. The
+		// release subject is created here, so gate evidence travels with
+		// the request and is evaluated in-transaction — a failure aborts
+		// the publication entirely.
+		const gateEvidence = input.gate
+		const hasEvidence = Boolean(
+			gateEvidence?.retrievalRunId ||
+				gateEvidence?.e2eRunId ||
+				gateEvidence?.comparisonId,
+		)
+		if (
+			gateEnforced ||
+			(await failedGateExists(tx, 'knowledge_release', release.id))
+		) {
+			let clearance: {
+				gateResultId: string
+				result: string
+				checks?: unknown
+			}
+			if (hasEvidence) {
+				clearance = await evaluateLaunchGate(tx, principal, {
+					subjectType: 'knowledge_release',
+					subjectId: release.id,
+					retrievalRunId: gateEvidence?.retrievalRunId ?? null,
+					e2eRunId: gateEvidence?.e2eRunId ?? null,
+					comparisonId: gateEvidence?.comparisonId ?? null,
+				})
+				if (clearance.result !== 'passed') {
+					throw new PromotionBlockedError(
+						'GATE_FAILED',
+						(clearance.checks ?? []) as ThresholdCheck[],
+						clearance.gateResultId,
+					)
+				}
+			} else {
+				clearance = await assertPromotionGate(tx, principal, {
+					subjectType: 'knowledge_release',
+					subjectId: release.id,
+				})
+			}
+			await pinGateResult(
+				tx,
+				'knowledge_release',
+				release.id,
+				clearance.gateResultId,
+			)
 		}
 
 		// supersede the previous published release pointed at by this alias
