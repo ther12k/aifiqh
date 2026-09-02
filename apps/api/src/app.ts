@@ -24,6 +24,13 @@ import {
 	captureEvidencePack,
 	verifyEvidencePackReplay,
 } from './answers/evidencePackService'
+import {
+	type FeedbackCategory,
+	FeedbackError,
+	feedbackCategoryCounts,
+	listAnswerFeedback,
+	submitFeedback,
+} from './answers/feedbackService'
 import { listAudit, recordAuditInTx } from './audit/audit'
 import type { OidcClient } from './auth/oidc'
 import { checkAccess, loadPrincipal } from './auth/policy'
@@ -1757,6 +1764,46 @@ function sourceRoutes(deps: AppDeps) {
 				const body = (ctx.body ?? {}) as Record<string, unknown>
 				ctx.set.status = 201
 				return startConversation(sql, principal, bodyStr(body.title) ?? null)
+			})
+			.post('/messages/:id/feedback', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				const category = bodyStr(body.category) as FeedbackCategory | undefined
+				if (!category) {
+					ctx.set.status = 400
+					return { error: 'CATEGORY_REQUIRED', message: 'category is required' }
+				}
+				try {
+					return await submitFeedback(sql, principal, {
+						messageId: ctx.params.id,
+						category,
+						details: bodyStr(body.details),
+						citationRef: bodyStr(body.citationRef),
+					})
+				} catch (err) {
+					if (err instanceof FeedbackError) {
+						ctx.set.status =
+							err.code === 'MESSAGE_NOT_FOUND'
+								? 404
+								: err.code === 'RATE_LIMITED'
+									? 429
+									: 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/answers/:id/feedback', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				return listAnswerFeedback(sql, principal, ctx.params.id)
+			})
+			.get('/feedback/summary', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				return feedbackCategoryCounts(sql, principal)
 			})
 			.get('/conversations/:id', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
