@@ -59,6 +59,8 @@ export interface E2ECaseMetric {
 	citationsResolved: number
 	criticalIssues: number
 	attributionErrors: number
+	/** critical *_MISMATCH validation issues (non-verbatim quotes etc.) */
+	quoteMismatches: number
 	traceability: boolean
 	answerId: string | null
 	traceId: string
@@ -72,6 +74,7 @@ export interface E2ERunReport {
 	caseCount: number
 	policyComplianceRate: number
 	citationResolutionRate: number
+	exactQuoteMatchRate: number
 	unsupportedClaimsRate: number
 	attributionErrorRate: number
 	sensitiveComplianceRate: number
@@ -173,6 +176,13 @@ export function aggregateE2EReport(metrics: E2ECaseMetric[]): E2ERunReport {
 						answered.filter(
 							(m) => m.criticalIssues === 0 && m.citationsResolved > 0,
 						).length / answered.length,
+					),
+		exactQuoteMatchRate:
+			answered.length === 0
+				? 1
+				: round(
+						answered.filter((m) => m.quoteMismatches === 0).length /
+							answered.length,
 					),
 		unsupportedClaimsRate:
 			answered.length === 0
@@ -284,15 +294,24 @@ export async function runE2EEvaluation(
 
 			let criticalIssues = 0
 			let attributionErrors = 0
+			let quoteMismatches = 0
 			let citationsResolved = 0
 			let retrievalStatus: string | null = null
 			if (turn?.answerId) {
 				const [issueRows] = await Promise.all([
-					sql<{ critical: string; attribution: string }[]>`
+					sql<
+						{
+							critical: string
+							attribution: string
+							quotes: string
+						}[]
+					>`
 						select
 							count(*) filter (where vi.severity = 'critical' and not vi.resolved) as critical,
 							count(*) filter (where vi.severity = 'critical'
-								and vi.code like 'MADHHAB%' and not vi.resolved) as attribution
+								and vi.code like 'MADHHAB%' and not vi.resolved) as attribution,
+							count(*) filter (where vi.severity = 'critical'
+								and vi.code like '%MISMATCH%' and not vi.resolved) as quotes
 						from validation_issues vi
 						join validation_runs vr on vr.id = vi.run_id
 						where vr.answer_id = ${turn.answerId}::uuid`,
@@ -301,6 +320,7 @@ export async function runE2EEvaluation(
 				])
 				criticalIssues = Number(issueRows[0]?.critical ?? 0)
 				attributionErrors = Number(issueRows[0]?.attribution ?? 0)
+				quoteMismatches = Number(issueRows[0]?.quotes ?? 0)
 				citationsResolved = Number(
 					(
 						await sql<{ n: string }[]>`
@@ -333,6 +353,7 @@ export async function runE2EEvaluation(
 				citationsResolved,
 				criticalIssues,
 				attributionErrors,
+				quoteMismatches,
 				traceability:
 					Boolean(turn?.traceId) && Boolean(turn?.answerId ?? turn?.status),
 				answerId: turn?.answerId ?? null,

@@ -101,6 +101,12 @@ import {
 	publishSetVersion,
 } from './eval/evalSetService'
 import {
+	GateError,
+	evaluateLaunchGate,
+	gateClearance,
+	overrideGateFailure,
+} from './eval/gateService'
+import {
 	EmbeddingError,
 	HashEmbeddingProvider,
 	embedIndexRelease,
@@ -2414,6 +2420,63 @@ function sourceRoutes(deps: AppDeps) {
 				} catch (err) {
 					if (err instanceof EvalCompareError) {
 						ctx.set.status = 404
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/eval/gates/evaluate', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					return await evaluateLaunchGate(sql, principal, {
+						policyKey: bodyStr(body.policyKey) ?? undefined,
+						subjectType: (bodyStr(body.subjectType) ?? 'knowledge_release') as
+							| 'knowledge_release'
+							| 'index_release'
+							| 'config',
+						subjectId: bodyStr(body.subjectId) ?? '',
+						retrievalRunId: bodyStr(body.retrievalRunId) ?? null,
+						e2eRunId: bodyStr(body.e2eRunId) ?? null,
+						comparisonId: bodyStr(body.comparisonId) ?? null,
+					})
+				} catch (err) {
+					if (err instanceof GateError) {
+						ctx.set.status =
+							err.code === 'POLICY_NOT_FOUND' || err.code === 'RUN_NOT_FOUND'
+								? 404
+								: 422
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.get('/eval/gates/clearance', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				const url = new URL(ctx.request.url)
+				return gateClearance(sql, principal, {
+					policyKey: url.searchParams.get('policyKey') ?? undefined,
+					subjectType:
+						url.searchParams.get('subjectType') ?? 'knowledge_release',
+					subjectId: url.searchParams.get('subjectId') ?? '',
+				})
+			})
+			.post('/eval/gates/:id/override', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('review:publish')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					return await overrideGateFailure(sql, principal, {
+						gateResultId: ctx.params.id,
+						reason: bodyStr(body.reason) ?? '',
+					})
+				} catch (err) {
+					if (err instanceof GateError) {
+						ctx.set.status = err.code === 'FORBIDDEN' ? 403 : 422
 						return { error: err.code, message: err.message }
 					}
 					throw err
