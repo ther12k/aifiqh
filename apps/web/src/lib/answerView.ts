@@ -12,7 +12,7 @@
 import {
 	type AnswerSectionKind,
 	type ClaimEvidenceLink,
-	type ClaimEvidenceRelation,
+	type EvidenceRelation,
 	type SchemaIssue,
 	type StructuredAnswer,
 	validateStructuredAnswer,
@@ -32,7 +32,7 @@ export interface SafeClaim {
 	madhhab?: string
 	evidence: Array<{
 		evidenceId: string
-		relation: ClaimEvidenceRelation
+		relation: EvidenceRelation
 		quote?: string
 	}>
 }
