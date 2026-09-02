@@ -11,6 +11,13 @@ import {
 	publishAnswerWithPins,
 } from './answers/answerTraceService'
 import {
+	ChatError,
+	getConversation,
+	postUserTurn,
+	retryLastTurn,
+	startConversation,
+} from './answers/chatService'
+import {
 	EVIDENCE_PACK_VERSION,
 	type EvidencePack,
 	EvidencePackError,
@@ -1742,6 +1749,94 @@ function sourceRoutes(deps: AppDeps) {
 					},
 					ctx.traceId,
 				)
+			})
+			.post('/conversations', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				ctx.set.status = 201
+				return startConversation(sql, principal, bodyStr(body.title) ?? null)
+			})
+			.get('/conversations/:id', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				try {
+					return await getConversation(sql, principal, ctx.params.id)
+				} catch (err) {
+					if (err instanceof ChatError) {
+						ctx.set.status = 404
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/conversations/:id/messages', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				const content = bodyStr(body.content) ?? ''
+				if (!content.trim()) {
+					ctx.set.status = 400
+					return { error: 'CONTENT_REQUIRED', message: 'content is required' }
+				}
+				try {
+					return await postUserTurn(sql, principal, {
+						conversationId: ctx.params.id,
+						content,
+						indexReleaseId: bodyStr(body.indexReleaseId),
+						madhhab: bodyStrArray(body.madhhab),
+						ensureMadhhab: bodyStrArray(body.ensureMadhhab),
+						contextProfile: bodyStr(body.contextProfile) as
+							| 'exact'
+							| 'standard'
+							| 'comparative'
+							| 'research'
+							| 'document_audit'
+							| undefined,
+						mode: body.mode as
+							| 'grounded_only'
+							| 'allow_general_knowledge'
+							| undefined,
+					})
+				} catch (err) {
+					if (err instanceof ChatError) {
+						ctx.set.status = err.code === 'CONVERSATION_NOT_FOUND' ? 404 : 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.post('/conversations/:id/retry', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					return await retryLastTurn(sql, principal, ctx.params.id, {
+						indexReleaseId: bodyStr(body.indexReleaseId),
+						madhhab: bodyStrArray(body.madhhab),
+						ensureMadhhab: bodyStrArray(body.ensureMadhhab),
+						contextProfile: bodyStr(body.contextProfile) as
+							| 'exact'
+							| 'standard'
+							| 'comparative'
+							| 'research'
+							| 'document_audit'
+							| undefined,
+						mode: body.mode as
+							| 'grounded_only'
+							| 'allow_general_knowledge'
+							| undefined,
+					})
+				} catch (err) {
+					if (err instanceof ChatError) {
+						ctx.set.status = err.code === 'CONVERSATION_NOT_FOUND' ? 404 : 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
 			})
 			.get('/answers/:id/graph', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
