@@ -1,0 +1,66 @@
+name: drills
+
+# DR fitness decays silently: run the three release drills weekly even
+# when no code changes, so environment drift (docker images, runner
+# limits, MinIO/planner behavior) is caught before a real disaster.
+on:
+  schedule:
+    - cron: '0 3 * * 1' # Mondays 03:00 UTC
+  workflow_dispatch:
+
+jobs:
+  drills:
+    runs-on: self-hosted
+    env:
+      DATABASE_URL: postgres://aifiqh:aifiqh@127.0.0.1:15432/aifiqh
+      STORAGE_ENDPOINT: http://127.0.0.1:19000
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start disposable containers (pgvector + MinIO)
+        run: |
+          docker rm -f aifiqh-ci-pg aifiqh-ci-minio 2>/dev/null || true
+          docker run -d --name aifiqh-ci-minio \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            -p 127.0.0.1:19000:9000 minio/minio:RELEASE.2024-06-13T22-53-53Z server /data
+          docker run -d --name aifiqh-ci-pg \
+            -e POSTGRES_USER=aifiqh -e POSTGRES_PASSWORD=aifiqh -e POSTGRES_DB=aifiqh \
+            -p 127.0.0.1:15432:5432 pgvector/pgvector:0.8.0-pg16
+          ready=0
+          for i in $(seq 1 60); do
+            if docker exec aifiqh-ci-pg pg_isready -U aifiqh -d aifiqh >/dev/null 2>&1; then
+              ready=$((ready+1))
+              [ "$ready" -ge 3 ] && break
+            else
+              ready=0
+            fi
+            sleep 1
+          done
+          [ "$ready" -ge 3 ] || { docker logs aifiqh-ci-pg | tail -30; exit 1; }
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:19000/minio/health/live && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:19000/minio/health/live
+          docker run --rm --network host --entrypoint /bin/sh minio/mc:RELEASE.2024-11-21T17-21-54Z \
+            -c "mc alias set ci http://127.0.0.1:19000 minioadmin minioadmin && mc mb --ignore-existing ci/aifiqh-originals"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Drill — database restore and answer replay (REL-HARD-004)
+        run: bun test apps/api/tests/restoreDrill.test.ts
+
+      - name: Drill — object-storage full-bucket restore (REL-HARD-004 storage leg)
+        run: bun test apps/api/tests/storageRestoreDrill.test.ts
+
+      - name: Drill — hot-path query plans (REL-HARD-006)
+        run: bun test apps/api/tests/queryPlanDrill.test.ts
+
+      - name: Stop disposable containers
+        if: always()
+        run: docker rm -f aifiqh-ci-pg aifiqh-ci-minio
