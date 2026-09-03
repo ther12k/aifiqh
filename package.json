@@ -19,12 +19,14 @@
 		"stack:down": "docker compose down",
 		"db:migrate": "bun scripts/migrate.ts",
 		"db:seed": "bun scripts/seed.ts",
-		"db:reset": "docker compose down -v && docker compose up -d db && bun scripts/migrate.ts && bun scripts/seed.ts"
+		"db:reset": "docker compose down -v && docker compose up -d db && bun scripts/migrate.ts && bun scripts/seed.ts",
+		"test:e2e": "playwright test"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.4",
 		"@types/bun": "^1.2.0",
-		"typescript": "^5.7.0"
+		"typescript": "^5.7.0",
+		"@playwright/test": "^1.49.0"
 	},
 	"dependencies": {
 		"postgres": "^3.4.9"

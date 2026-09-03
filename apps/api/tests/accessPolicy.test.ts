@@ -351,3 +351,59 @@ describe('RAG-008: access-scope enforcement', () => {
 		).toBeTrue()
 	})
 })
+
+describe('/auth/me contract (#103)', () => {
+	test('an active member gets their tenant and DB-resolved permissions', async () => {
+		const f = await setupFixture()
+		const headers = await authHeaders(f.userId, f.tenantId)
+		const res = await testApp.handle(
+			new Request('http://localhost/auth/me', { headers }),
+		)
+		expect(res.status).toBe(200)
+		const me = (await res.json()) as {
+			userId: string
+			tenantId?: string
+			permissions?: string[]
+		}
+		expect(me.userId).toBe(f.userId)
+		expect(me.tenantId).toBe(f.tenantId)
+		// permissions come from membership_roles ⋈ role_permissions, not a JWT
+		expect(me.permissions).toContain('knowledge:read')
+		expect(me.permissions).toContain('ops:read')
+	})
+
+	test('a session without a tenant hint stays tenant-less', async () => {
+		const f = await setupFixture()
+		const sessionId = crypto.randomUUID()
+		await issueSession(sql, {
+			sessionId,
+			userId: f.userId,
+			tenantId: '',
+			issuer: 'http://localhost:4011',
+			subject: `sub-notenant-${f.userId}`,
+			expiresAt: new Date(Date.now() + 600_000),
+		})
+		const token = signSession(
+			{
+				sessionId,
+				userId: f.userId,
+				issuer: 'http://localhost:4011',
+				subject: `sub-notenant-${f.userId}`,
+				expiresAt: new Date(Date.now() + 600_000).toISOString(),
+			},
+			cfg.sessionSecret,
+		)
+		const res = await testApp.handle(
+			new Request('http://localhost/auth/me', {
+				headers: { cookie: `aifiqh_session=${token}` },
+			}),
+		)
+		expect(res.status).toBe(200)
+		const me = (await res.json()) as {
+			tenantId?: string
+			permissions?: string[]
+		}
+		expect(me.tenantId).toBeUndefined()
+		expect(me.permissions).toBeUndefined()
+	})
+})

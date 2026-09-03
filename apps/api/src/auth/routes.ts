@@ -9,6 +9,7 @@ import type { Config } from '../config'
 import { type Sql, db } from '../db/client'
 import type { Logger } from '../logger'
 import { type OidcClient, upsertIdentity } from './oidc'
+import { loadPrincipal } from './policy'
 import {
 	clearCsrfCookieHeader,
 	clearSessionCookieHeader,
@@ -163,10 +164,22 @@ export function authPlugin(deps: AuthDeps) {
 				set.status = 401
 				return { error: 'unauthorized' }
 			}
-			return {
+			// tenant + permissions resolve from the database at request time
+			// (same trust path as requirePermission); the shell uses them as
+			// UI permission hints only — the server stays authoritative
+			const me: Record<string, unknown> = {
 				userId: session.userId,
 				issuer: session.issuer,
 				expiresAt: session.expiresAt,
 			}
+			const tenantId = session.tenantId
+			if (tenantId) {
+				const principal = await loadPrincipal(sql, session.userId, tenantId)
+				if (principal) {
+					me.tenantId = principal.tenantId
+					me.permissions = principal.permissions
+				}
+			}
+			return me
 		})
 }

@@ -22,6 +22,12 @@
 		}
 	},
 	"files": {
-		"ignore": ["node_modules", "dist", "docs"]
+		"ignore": [
+			"node_modules",
+			"dist",
+			"docs",
+			"test-results",
+			"playwright-report"
+		]
 	}
 }

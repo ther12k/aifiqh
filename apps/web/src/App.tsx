@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { ConceptEditor } from './knowledge/ConceptEditor'
+import { OpsStatusContainer } from './ops/OpsStatusContainer'
 import { SourceRegistry } from './sources/SourceRegistry'
+import { StudioDashboardContainer } from './studio/StudioDashboardContainer'
 
 interface Health {
 	status: string
@@ -61,6 +63,10 @@ export default function App() {
 				{' | '}
 				<a href="#/studio">Knowledge Studio</a>
 				{' | '}
+				<a href="#/studio-dashboard">Dasbor Studio</a>
+				{' | '}
+				<a href="#/ops">Status Operasional</a>
+				{' | '}
 				<a href="#/">Health</a>
 			</nav>
 
@@ -76,6 +82,25 @@ export default function App() {
 				) : (
 					<p>
 						<a href="/auth/login">Masuk</a> untuk menyusun konsep.
+					</p>
+				))}
+
+			{route === '/studio-dashboard' &&
+				(permissions.includes('knowledge:read') ? (
+					<StudioDashboardContainer />
+				) : (
+					<p>
+						<a href="/auth/login">Masuk</a> untuk melihat dasbor studio.
+					</p>
+				))}
+
+			{route === '/ops' &&
+				(permissions.includes('ops:read') ? (
+					<OpsStatusContainer />
+				) : (
+					<p>
+						<a href="/auth/login">Masuk</a> sebagai operator untuk melihat
+						status operasional.
 					</p>
 				))}
 
