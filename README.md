@@ -10,6 +10,7 @@ Private repository for **RZ-Fiqh**, a citation-first Islamic jurisprudence (fiqh
 
 ```text
 ├── docs/           # authoritative sources: PRD v2.0, Engineering Backlog v2.0 (.md + .json)
+│   ├── runbooks/   # operator runbooks: one page per failure subsystem + DR procedure
 │   └── archive/okf-prototype/  # ARCHIVED design artifact — not runtime (see its README)
 ├── db/migrations/  # 0001..0019 ordered SQL migrations (DB-001..DB-019)
 ├── scripts/        # migrate.ts, seed.ts, OKF generator, GitHub issue registration
