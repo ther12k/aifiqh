@@ -177,6 +177,44 @@ export async function deleteObject(cfg: Config, key: string): Promise<void> {
 		throw new Error(`object DELETE failed: ${res.status}`)
 }
 
+/** Create a bucket (idempotent — MinIO answers 409 when it already exists). */
+export async function createBucket(cfg: Config, bucket: string): Promise<void> {
+	const url = new URL(`${cfg.storageEndpoint}/${bucket}`)
+	const headers = signedHeaders(cfg, {
+		method: 'PUT',
+		url,
+		payloadSha: EMPTY_SHA,
+	})
+	const res = await fetch(url, {
+		method: 'PUT',
+		headers,
+		signal: AbortSignal.timeout(30_000),
+	})
+	if (!res.ok && res.status !== 409)
+		throw new Error(
+			`bucket CREATE failed: ${res.status} ${await res.text().catch(() => '')}`,
+		)
+}
+
+/** Remove a bucket; must be empty. Absent (404) counts as removed. */
+export async function removeBucket(cfg: Config, bucket: string): Promise<void> {
+	const url = new URL(`${cfg.storageEndpoint}/${bucket}`)
+	const headers = signedHeaders(cfg, {
+		method: 'DELETE',
+		url,
+		payloadSha: EMPTY_SHA,
+	})
+	const res = await fetch(url, {
+		method: 'DELETE',
+		headers,
+		signal: AbortSignal.timeout(30_000),
+	})
+	if (!res.ok && res.status !== 404)
+		throw new Error(
+			`bucket REMOVE failed: ${res.status} ${await res.text().catch(() => '')}`,
+		)
+}
+
 function xmlDecode(s: string): string {
 	return s
 		.replaceAll('&lt;', '<')

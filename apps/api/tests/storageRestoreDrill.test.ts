@@ -4,11 +4,13 @@ import postgres from 'postgres'
 import { type Config, loadConfig } from '../src/config'
 import {
 	contentKey,
+	createBucket,
 	deleteObject,
 	getObject,
 	headObject,
 	listObjects,
 	putObject,
+	removeBucket,
 } from '../src/storage/s3'
 import { ensureMigrations } from './dbBootstrap'
 
@@ -31,8 +33,27 @@ const PAYLOADS: Array<{
 	fileId: string
 }> = []
 
+// padding objects on a second prefix: push the full-bucket listing past
+// the 1000-key page so the restore drill exercises listObjects pagination
+const PAD_COUNT = 1200
+const padKey = (i: number) => `pads/pad-${String(i).padStart(5, '0')}`
+const padPayload = (i: number) =>
+	Buffer.from(`drill pad ${i} ${crypto.randomUUID()}\n`)
+
 let tenantId: string
 let cfg: Config
+let cfgDrill: Config
+let drillBucket: string
+
+/** run an async op over items in bounded-parallel batches */
+async function batched<T>(
+	items: T[],
+	size: number,
+	op: (item: T) => Promise<void>,
+): Promise<void> {
+	for (let i = 0; i < items.length; i += size)
+		await Promise.all(items.slice(i, i + size).map(op))
+}
 
 beforeAll(async () => {
 	await ensureMigrations()
@@ -53,6 +74,12 @@ beforeAll(async () => {
 		insert into source_revisions (source_id, revision_number, status)
 		values (${src.id}::uuid, 1, 'processing') returning id`
 
+	// the drill owns its bucket, so a FULL-bucket disaster is safe on the
+	// shared dev MinIO as well as in CI's fresh container
+	drillBucket = `aifiqh-drill-${suffix}`
+	cfgDrill = { ...cfg, storageBucket: drillBucket }
+	await createBucket(cfg, drillBucket)
+
 	for (const payload of [
 		{ payload: PAYLOAD_A, mime: 'application/pdf' },
 		{ payload: PAYLOAD_B, mime: 'text/plain' },
@@ -61,7 +88,7 @@ beforeAll(async () => {
 		const storageKey = contentKey(sha256)
 		// the object is fully written BEFORE any revision row exists (upload
 		// route invariant) — the drill reproduces that order
-		await putObject(cfg, storageKey, payload.payload, payload.mime)
+		await putObject(cfgDrill, storageKey, payload.payload, payload.mime)
 		const [file] = await sql<{ id: string }[]>`
 			insert into source_files (source_revision_id, sha256, storage_key, mime_type, size_bytes)
 			values (${rev.id}::uuid, ${sha256}, ${storageKey}, ${payload.mime}, ${payload.payload.length})
@@ -73,40 +100,70 @@ beforeAll(async () => {
 			fileId: file.id,
 		})
 	}
+	await batched(
+		Array.from({ length: PAD_COUNT }, (_, i) => i),
+		25,
+		(i) => putObject(cfgDrill, padKey(i), padPayload(i), 'text/plain'),
+	)
 })
 
 afterAll(async () => {
+	// best-effort: leave no 1200-object bucket behind on the dev MinIO
+	try {
+		const keys = await listObjects(cfgDrill, '')
+		await batched(keys, 25, (k) => deleteObject(cfgDrill, k))
+		await removeBucket(cfg, drillBucket)
+	} catch {
+		// the drill may have failed before the bucket existed
+	}
 	await sql.end()
 })
 
-describe('REL-HARD-004 storage leg: object-store backup, loss, restore, reconcile', () => {
-	test('drill proves loss is detectable and restore is byte-exact against source_files', async () => {
-		// --- backup: enumerate the originals prefix and snapshot bytes -----
-		const listed = await listObjects(cfg, 'originals/')
+describe('REL-HARD-004 storage leg: full-bucket backup, loss, restore, reconcile', () => {
+	test('whole-bucket loss is detectable and restore is complete and byte-exact', async () => {
+		// --- backup: enumerate EVERY key (pagination included) -------------
+		const listed = await listObjects(cfgDrill, '')
+		expect(listed.length).toBe(PAYLOADS.length + PAD_COUNT)
 		for (const p of PAYLOADS) expect(listed).toContain(p.storageKey)
 		const snapshot = new Map<string, { body: Buffer; mime: string }>()
-		for (const p of PAYLOADS) {
-			const res = await getObject(cfg, p.storageKey)
+		await batched(listed, 25, async (key) => {
+			const res = await getObject(cfgDrill, key)
 			expect(res.ok).toBeTrue()
-			snapshot.set(p.storageKey, {
+			snapshot.set(key, {
 				body: Buffer.from(await res.arrayBuffer()),
-				mime: p.mime,
+				mime: 'application/octet-stream',
 			})
-		}
+		})
+		expect(snapshot.size).toBe(listed.length)
 
-		// --- disaster: the drill's objects vanish --------------------------
-		// scoped to objects this drill created: a persistent dev bucket is
-		// shared with every other test run; CI's bucket is fresh per run
-		for (const p of PAYLOADS) await deleteObject(cfg, p.storageKey)
+		// --- disaster: the ENTIRE bucket is emptied ------------------------
+		// safe because the bucket belongs to this drill run alone
+		await batched(listed, 25, (k) => deleteObject(cfgDrill, k))
+		expect(await listObjects(cfgDrill, '')).toEqual([])
 		for (const p of PAYLOADS) {
-			expect(await headObject(cfg, p.storageKey)).toEqual({ exists: false })
-			const gone = await getObject(cfg, p.storageKey)
+			expect(await headObject(cfgDrill, p.storageKey)).toEqual({
+				exists: false,
+			})
+			const gone = await getObject(cfgDrill, p.storageKey)
 			expect(gone.ok).toBeFalse()
 		}
 
 		// --- restore from the backup snapshot ------------------------------
-		for (const [key, entry] of snapshot)
-			await putObject(cfg, key, entry.body, entry.mime)
+		await batched([...snapshot], 25, ([key, entry]) =>
+			putObject(cfgDrill, key, entry.body, entry.mime),
+		)
+
+		// --- reconcile the key set: nothing lost, nothing extra ------------
+		const restored = await listObjects(cfgDrill, '')
+		expect([...restored].sort()).toEqual([...listed].sort())
+
+		// --- reconcile every object byte-exact against the snapshot --------
+		await batched(restored, 25, async (key) => {
+			const res = await getObject(cfgDrill, key)
+			expect(res.ok).toBeTrue()
+			const bytes = Buffer.from(await res.arrayBuffer())
+			expect(bytes.equals(snapshot.get(key)!.body)).toBeTrue()
+		})
 
 		// --- reconcile against the immutable source_files rows -------------
 		const rows = await sql<
@@ -127,15 +184,15 @@ describe('REL-HARD-004 storage leg: object-store backup, loss, restore, reconcil
 			// content addressing survived the round trip: the row's key is
 			// exactly where the hash says the bytes must live
 			expect(row.storage_key).toBe(contentKey(row.sha256))
-			const stat = await headObject(cfg, row.storage_key)
+			const stat = await headObject(cfgDrill, row.storage_key)
 			expect(stat.exists).toBeTrue()
 			expect(stat.size).toBe(Number(row.size_bytes))
-			const res = await getObject(cfg, row.storage_key)
+			const res = await getObject(cfgDrill, row.storage_key)
 			expect(res.ok).toBeTrue()
 			const bytes = Buffer.from(await res.arrayBuffer())
 			// byte-exact: hash of served bytes == the hash the DB pinned
 			expect(createHash('sha256').update(bytes).digest('hex')).toBe(row.sha256)
 			expect(bytes.equals(byKey.get(row.storage_key)!.payload)).toBeTrue()
 		}
-	}, 120_000)
+	}, 300_000)
 })
