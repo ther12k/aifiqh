@@ -1,7 +1,7 @@
 /**
  * Minimal S3-compatible object storage client (SRC-002).
  *
- * Hand-rolled AWS SigV4 (PUT/GET/HEAD, path-style) against the configured
+ * Hand-rolled AWS SigV4 (PUT/GET/HEAD/DELETE/LIST, path-style) against the configured
  * S3-compatible endpoint (MinIO in dev) — no SDK dependency to pin, and the
  * surface is exactly what the upload pipeline needs. Objects are
  * content-addressed: key = originals/<sha256>, so identical bytes always
@@ -158,4 +158,75 @@ export async function getObject(cfg: Config, key: string): Promise<Response> {
 		headers,
 		signal: AbortSignal.timeout(30_000),
 	})
+}
+
+/** Delete an object; S3 DELETE is a no-op (204) when the key is absent. */
+export async function deleteObject(cfg: Config, key: string): Promise<void> {
+	const url = new URL(`${cfg.storageEndpoint}/${cfg.storageBucket}/${key}`)
+	const headers = signedHeaders(cfg, {
+		method: 'DELETE',
+		url,
+		payloadSha: EMPTY_SHA,
+	})
+	const res = await fetch(url, {
+		method: 'DELETE',
+		headers,
+		signal: AbortSignal.timeout(30_000),
+	})
+	if (!res.ok && res.status !== 404)
+		throw new Error(`object DELETE failed: ${res.status}`)
+}
+
+function xmlDecode(s: string): string {
+	return s
+		.replaceAll('&lt;', '<')
+		.replaceAll('&gt;', '>')
+		.replaceAll('&quot;', '"')
+		.replaceAll('&#39;', "'")
+		.replaceAll('&amp;', '&')
+}
+
+/**
+ * Enumerate object keys under a prefix (list-objects-v2, following
+ * continuation tokens — a long-lived dev bucket holds thousands of
+ * content-addressed originals).
+ */
+export async function listObjects(
+	cfg: Config,
+	prefix: string,
+): Promise<string[]> {
+	const keys: string[] = []
+	let continuationToken: string | null = null
+	for (;;) {
+		const url = new URL(`${cfg.storageEndpoint}/${cfg.storageBucket}`)
+		url.searchParams.set('list-type', '2')
+		url.searchParams.set('prefix', prefix)
+		if (continuationToken)
+			url.searchParams.set('continuation-token', continuationToken)
+		// SigV4 requires the canonical query string sorted by parameter name
+		url.searchParams.sort()
+		const headers = signedHeaders(cfg, {
+			method: 'GET',
+			url,
+			payloadSha: EMPTY_SHA,
+		})
+		const res = await fetch(url, {
+			method: 'GET',
+			headers,
+			signal: AbortSignal.timeout(30_000),
+		})
+		if (!res.ok)
+			throw new Error(
+				`object LIST failed: ${res.status} ${await res.text().catch(() => '')}`,
+			)
+		const xml = await res.text()
+		for (const m of xml.matchAll(/<Key>(.*?)<\/Key>/g))
+			keys.push(xmlDecode(m[1]))
+		if (!/<IsTruncated>true<\/IsTruncated>/.test(xml)) return keys
+		continuationToken =
+			xml.match(/<NextContinuationToken>(.*?)<\/NextContinuationToken>/)?.[1] ??
+			null
+		if (!continuationToken) return keys
+		continuationToken = xmlDecode(continuationToken)
+	}
 }
