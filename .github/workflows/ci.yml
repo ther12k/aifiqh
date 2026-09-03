@@ -150,6 +150,15 @@ jobs:
       - name: E2E dashboards (Playwright)
         run: bunx playwright test
 
+      - name: Upload E2E failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
       - name: Stop disposable containers
         if: always()
         run: docker rm -f aifiqh-ci-pg aifiqh-ci-minio
