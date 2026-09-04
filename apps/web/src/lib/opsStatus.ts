@@ -140,6 +140,8 @@ export interface ComponentView {
 	line: string
 	category: string
 	stale: boolean
+	/** last health event — surfaced so "healthy" is never trust-on-sight */
+	lastEventAt: string | null
 	primaryFailure: OpsPrimaryFailureLike | null
 }
 
@@ -165,6 +167,7 @@ export function buildComponentViews(
 			line,
 			category: c.category,
 			stale: c.health.stale,
+			lastEventAt: c.health.lastEventAt,
 			primaryFailure: c.primaryFailure,
 		}
 	})

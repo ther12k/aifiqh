@@ -4,8 +4,10 @@
    ========================================================================== */
 
 :root {
-	--font-sans: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto,
-		sans-serif;
+	/* Amiri sits early in the stack so Arabic runs inside Latin paragraphs
+	   still render in it — font stacks resolve per glyph */
+	--font-sans: "Plus Jakarta Sans", "Amiri", system-ui, -apple-system,
+		"Segoe UI", Roboto, sans-serif;
 	--font-arabic: "Amiri", "Traditional Arabic", "Scheherazade New", serif;
 
 	/* emerald scale */
@@ -207,6 +209,8 @@ body {
 	padding: 7px 12px;
 	border-radius: 10px;
 	text-decoration: none;
+	white-space: nowrap;
+	width: fit-content;
 	transition: background 0.15s ease;
 }
 
@@ -475,6 +479,9 @@ body {
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
+	/* the shell owns the viewport height so the composer stays pinned at
+	   its bottom — only the message list scrolls */
+	height: calc(100vh - 200px);
 	min-height: 540px;
 }
 
@@ -499,7 +506,6 @@ body {
 	gap: 16px;
 	flex: 1;
 	overflow-y: auto;
-	max-height: 62vh;
 }
 
 .chat-messages li {
@@ -867,11 +873,23 @@ body {
 .studio-card-counts li {
 	display: flex;
 	justify-content: space-between;
+	align-items: baseline;
 	background: var(--bg);
 	border-radius: 8px;
 	padding: 6px 10px;
 	font-size: 13px;
 	color: var(--text-muted);
+}
+
+.studio-card-counts .count-label {
+	color: var(--text-muted);
+}
+
+.studio-card-counts .count-value {
+	font-size: 16px;
+	font-weight: 800;
+	color: var(--text);
+	font-variant-numeric: tabular-nums;
 }
 
 .studio-card-links {
@@ -940,6 +958,12 @@ body {
 	gap: 12px;
 }
 
+.ops-generated {
+	margin: -6px 0 0;
+	font-size: 12.5px;
+	color: var(--text-faint);
+}
+
 .ops-component {
 	background: var(--surface);
 	border: 1px solid var(--border);
@@ -948,7 +972,14 @@ body {
 	box-shadow: var(--shadow-sm);
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
+	gap: 6px;
+}
+
+.ops-component-top {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
 }
 
 .ops-component-name {
@@ -956,9 +987,38 @@ body {
 	font-size: 14px;
 }
 
-.ops-component-line {
-	font-size: 12.5px;
+/* health state pill — colored by the component's data-category */
+.ops-state {
+	flex: none;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.02em;
+	padding: 3px 9px;
+	border-radius: 999px;
+	background: var(--border-soft);
 	color: var(--text-muted);
+}
+
+.ops-component[data-category="healthy"] .ops-state {
+	background: var(--ok-soft);
+	color: var(--ok);
+}
+
+.ops-component[data-category="degraded"] .ops-state,
+.ops-component[data-category="stale"] .ops-state {
+	background: var(--warn-soft);
+	color: var(--warn);
+}
+
+.ops-component[data-category="outage"] .ops-state,
+.ops-component[data-category="data_failure"] .ops-state {
+	background: var(--danger-soft);
+	color: var(--danger);
+}
+
+.ops-component-meta {
+	font-size: 12px;
+	color: var(--text-faint);
 }
 
 .ops-component-primary {
@@ -1017,8 +1077,53 @@ body {
 }
 
 .ops-failure-head {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
 	font-size: 13px;
 	font-weight: 700;
+}
+
+/* severity pill */
+.ops-sev {
+	flex: none;
+	font-size: 11px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	padding: 3px 9px;
+	border-radius: 999px;
+}
+
+.ops-sev-critical {
+	background: var(--danger-soft);
+	color: var(--danger);
+}
+
+.ops-sev-warning {
+	background: var(--warn-soft);
+	color: var(--warn);
+}
+
+.ops-sev-info {
+	background: var(--info-soft);
+	color: var(--info);
+}
+
+.ops-failure-where {
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.ops-failure-time {
+	margin-left: auto;
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--text-faint);
+	font-variant-numeric: tabular-nums;
 }
 
 .ops-failure-message {
@@ -1097,31 +1202,51 @@ ul[data-testid="source-list"] li {
 	border: 1px solid var(--border);
 	border-radius: var(--r-md);
 	box-shadow: var(--shadow-sm);
-	padding: 12px 16px;
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
+	transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-ul[data-testid="source-list"] li > span {
-	color: var(--text-muted);
-	font-size: 13px;
+ul[data-testid="source-list"] li:hover {
+	border-color: var(--primary-border);
+	box-shadow: var(--shadow-md);
 }
 
+/* the whole row is the detail trigger */
 ul[data-testid="source-list"] li button {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 3px;
+	width: 100%;
 	border: none;
 	background: none;
-	padding: 0;
+	padding: 14px 18px;
 	font: inherit;
-	font-weight: 700;
-	color: var(--primary-strong);
 	cursor: pointer;
 	text-align: left;
+	border-radius: var(--r-md);
 }
 
-ul[data-testid="source-list"] li button:hover {
-	text-decoration: underline;
+ul[data-testid="source-list"] .source-title {
+	font-weight: 700;
+	font-size: 14.5px;
+	color: var(--text);
+}
+
+ul[data-testid="source-list"] .source-meta {
+	color: var(--text-muted);
+	font-size: 12.5px;
+}
+
+ul[data-testid="source-list"] li:hover .source-title {
+	color: var(--primary-strong);
+}
+
+.source-empty {
+	padding: 26px 18px;
+	text-align: center;
+	color: var(--text-faint);
+	font-size: 13.5px;
+	border-style: dashed;
 }
 
 div[data-testid="source-detail"] {
@@ -1264,12 +1389,204 @@ button:disabled {
 	cursor: not-allowed;
 }
 
-input,
-select,
-textarea {
-	font-family: inherit;
+/* Global form-control baseline — :where() keeps specificity at zero so
+   component-scoped rules (topbar, composer, source search) always win.
+   Checkboxes/radios are excluded: they must keep native metrics. */
+:where(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	padding: 9px 12px;
+	box-shadow: var(--shadow-sm);
+}
+
+:where(
+		input:not([type="checkbox"]):not([type="radio"]),
+		select,
+		textarea
+	):focus {
+	outline: none;
+	border-color: var(--primary);
+	box-shadow: 0 0 0 3px rgba(14, 122, 99, 0.12);
+}
+
+:where(select) {
+	appearance: none;
+	background-image: linear-gradient(
+			45deg,
+			transparent 50%,
+			var(--text-muted) 50%
+		), linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+	background-position: calc(100% - 18px) calc(50% + 1px), calc(100% - 13px)
+		calc(50% + 1px);
+	background-size: 5px 5px, 5px 5px;
+	background-repeat: no-repeat;
+	padding-right: 34px;
+}
+
+/* --- Concept editor (STU-001) -------------------------------------------- */
+.concept-editor {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-lg);
+	box-shadow: var(--shadow-sm);
+	padding: 22px 24px;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+
+.concept-editor h2 {
+	margin: 0 0 4px;
+}
+
+.concept-editor > label {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--text-muted);
+	max-width: 520px;
+}
+
+.concept-editor > label > select,
+.concept-editor > label > input,
+.concept-editor > label > textarea {
+	width: 100%;
+	font: inherit;
 	font-size: 14px;
 	color: var(--text);
+}
+
+.concept-editor textarea {
+	min-height: 160px;
+	resize: vertical;
+	line-height: 1.6;
+}
+
+.concept-editor p[data-testid="type-description"] {
+	margin: -6px 0 0;
+	font-size: 12.5px;
+	color: var(--text-faint);
+	max-width: 520px;
+}
+
+.concept-editor span[role="alert"] {
+	color: var(--danger);
+	font-size: 12.5px;
+	font-weight: 600;
+	margin-top: -6px;
+}
+
+.concept-editor div[role="alert"] {
+	border-radius: 10px;
+	padding: 12px 14px;
+	font-size: 13.5px;
+}
+
+.concept-editor div[data-testid="recovery-prompt"] {
+	background: var(--warn-soft);
+	border: 1px solid #f2ddb0;
+	color: var(--warn);
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+
+.concept-editor div[data-testid="recovery-prompt"] p {
+	margin: 0;
+	flex: 1;
+	min-width: 200px;
+}
+
+.concept-editor div[data-testid="stale-conflict"],
+.concept-editor div[data-testid="global-error"] {
+	background: var(--danger-soft);
+	border: 1px solid #f2c5c0;
+	color: var(--danger);
+}
+
+.concept-editor output[data-testid="saved-info"] {
+	background: var(--ok-soft);
+	border: 1px solid #bfe6d6;
+	color: var(--ok);
+	border-radius: 10px;
+	padding: 10px 14px;
+	font-size: 13.5px;
+	font-weight: 600;
+}
+
+.concept-editor fieldset {
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	padding: 12px 16px 14px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px 18px;
+	align-items: center;
+	max-width: 520px;
+}
+
+.concept-editor fieldset legend {
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--text-muted);
+	padding: 0 6px;
+}
+
+.concept-editor fieldset label {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	font-size: 13.5px;
+	cursor: pointer;
+}
+
+.concept-editor fieldset input[type="checkbox"] {
+	width: 16px;
+	height: 16px;
+	accent-color: var(--primary);
+}
+
+.concept-editor div[data-testid="markdown-preview"] {
+	background: var(--bg);
+	border: 1px dashed var(--primary-border);
+	border-radius: var(--r-md);
+	padding: 14px 18px;
+	max-width: 640px;
+}
+
+.concept-editor div[data-testid="markdown-preview"] p {
+	margin: 0 0 10px;
+}
+
+.concept-editor div[data-testid="markdown-preview"] p:last-child {
+	margin-bottom: 0;
+}
+
+.concept-editor > button {
+	align-self: flex-start;
+	background: linear-gradient(160deg, #0f8468, #0b5f4e);
+	border: none;
+	color: #fff;
+	font-weight: 700;
+	font-size: 14px;
+	padding: 10px 22px;
+	border-radius: 12px;
+	box-shadow: var(--shadow-md);
+}
+
+.concept-editor > button:hover:not(:disabled) {
+	filter: brightness(1.06);
+}
+
+.concept-editor span[data-testid="dirty-indicator"] {
+	color: var(--warn);
+	font-size: 12.5px;
+	font-weight: 600;
+	align-self: center;
 }
 
 a {

@@ -159,7 +159,11 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 	)
 
 	return (
-		<section aria-label="source-registry" data-testid="source-registry">
+		<section
+			aria-label="source-registry"
+			className="source-registry"
+			data-testid="source-registry"
+		>
 			<label>
 				Cari sumber
 				<input
@@ -173,13 +177,18 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 				{visible.map((s) => (
 					<li key={s.id}>
 						<button type="button" onClick={() => openDetail(s)}>
-							{s.title}
+							<span className="source-title">{s.title}</span>
+							<span className="source-meta">
+								{s.author} · {s.language} · {s.rights_status}
+							</span>
 						</button>
-						<span>
-							{s.author} · {s.language} · {s.rights_status}
-						</span>
 					</li>
 				))}
+				{visible.length === 0 && (
+					<li className="source-empty" data-testid="source-empty">
+						Tidak ada sumber yang cocok dengan pencarian.
+					</li>
+				)}
 			</ul>
 
 			{selected && (

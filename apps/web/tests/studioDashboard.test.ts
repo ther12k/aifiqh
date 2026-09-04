@@ -91,12 +91,17 @@ describe('studio dashboard (SSR)', () => {
 		)
 		const flat = html.replace(/<!-- -->/g, '')
 
-		expect(flat).toContain('Pembaruan terakhir: 2026-09-02T12:00:00.000Z')
+		// refresh time is human-formatted (id-ID, UTC) — never a raw ISO label.
+		// (the full ISO remains available as the span's title tooltip)
+		expect(flat).toMatch(/Pembaruan terakhir: \d{1,2} Sep 2026, \d{2}\.\d{2}/)
+		expect(flat).not.toMatch(/Pembaruan terakhir: 2026-09-02/)
 		expect(flat).toContain('data-card="source_health"')
 		expect(flat).toContain('data-state="data"')
-		// reconciled counts rendered per card
-		expect(flat).toContain('revisi aktif: 3')
-		expect(flat).toContain('gagal: 4')
+		// reconciled counts rendered per card, number-forward
+		expect(flat).toContain('revisi aktif')
+		expect(flat).toContain('>3</span>')
+		expect(flat).toContain('gagal')
+		expect(flat).toContain('>4</span>')
 		// zero card states itself distinctly
 		expect(flat).toContain('data-state="zero"')
 		expect(flat).toContain('tidak ada pekerjaan')

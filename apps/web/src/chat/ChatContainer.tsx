@@ -214,6 +214,12 @@ export function ChatContainer() {
 		)
 	}
 
+	/** follow-ups not already asked this session (fill the composer) */
+	const remainingFollowUps = FOLLOW_UPS.filter(
+		(q) =>
+			!chatState.messages.some((m) => m.role === 'user' && m.content === q),
+	)
+
 	const statusBadge = lastTurn
 		? lastTurn.status === 'answered'
 			? 'badge-ok'
@@ -272,18 +278,25 @@ export function ChatContainer() {
 
 				<div className="rail-card">
 					<h4>Coba Tanyakan</h4>
-					<div className="chip-row">
-						{FOLLOW_UPS.map((q) => (
-							<button
-								key={q}
-								type="button"
-								className="chip"
-								onClick={() => setDraft(q)}
-							>
-								{q}
-							</button>
-						))}
-					</div>
+					{remainingFollowUps.length > 0 ? (
+						<div className="chip-row">
+							{remainingFollowUps.map((q) => (
+								<button
+									key={q}
+									type="button"
+									className="chip"
+									onClick={() => setDraft(q)}
+								>
+									{q}
+								</button>
+							))}
+						</div>
+					) : (
+						<p className="rail-disclaimer">
+							Semua saran sudah pernah ditanyakan — lanjutkan dengan pertanyaan
+							Anda sendiri.
+						</p>
+					)}
 				</div>
 
 				<div className="rail-card">

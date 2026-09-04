@@ -1,3 +1,4 @@
+import { formatTimestampId } from '../lib/format'
 import { type CardView, buildCardViews } from '../lib/studioDashboard'
 import type { StudioDashboardLike } from '../lib/studioDashboard'
 
@@ -21,9 +22,9 @@ export function StudioDashboardView(props: {
 	return (
 		<div className="studio-dashboard" aria-label="Dasbor Studio Pengetahuan">
 			<header className="studio-head">
-				<span data-testid="studio-refresh">
+				<span data-testid="studio-refresh" title={dashboard?.generatedAt}>
 					{dashboard
-						? `Pembaruan terakhir: ${dashboard.generatedAt}`
+						? `Pembaruan terakhir: ${formatTimestampId(dashboard.generatedAt)}`
 						: 'memuat…'}
 				</span>
 				{error ? (
@@ -61,7 +62,8 @@ export function StudioDashboardView(props: {
 							<ul className="studio-card-counts">
 								{card.entries.map((e) => (
 									<li key={e.key} data-count={e.key}>
-										{e.label}: {e.value}
+										<span className="count-label">{e.label}</span>
+										<span className="count-value">{e.value}</span>
 									</li>
 								))}
 							</ul>

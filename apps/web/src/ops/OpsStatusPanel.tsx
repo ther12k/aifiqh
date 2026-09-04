@@ -1,3 +1,4 @@
+import { formatTimestampId } from '../lib/format'
 import {
 	type ComponentView,
 	type OpsFailureLike,
@@ -35,27 +36,45 @@ export function OpsStatusPanel(props: {
 			>
 				{banner.title} — {banner.detail}
 			</output>
+			<p className="ops-generated">
+				Diperbarui {formatTimestampId(status.generatedAt)}
+			</p>
 
 			<ul className="ops-components" data-testid="ops-components">
-				{components.map((c) => (
-					<li
-						key={c.key}
-						className="ops-component"
-						data-component={c.key}
-						data-category={c.category}
-					>
-						<span className="ops-component-name">{c.name}</span>
-						<span className="ops-component-line">{c.line}</span>
-						{c.primaryFailure ? (
-							<span className="ops-component-primary">
-								{severityLabel(c.primaryFailure.severity)} ·{' '}
-								{c.primaryFailure.subsystem}/{c.primaryFailure.code}:{' '}
-								{c.primaryFailure.message}{' '}
-								<a href={c.primaryFailure.runbook}>runbook</a>
+				{components.map((c) => {
+					// line = "<health> · <category>[ · <failure counts>]": the
+					// health segment becomes the badge, the rest stays as meta
+					const segments = c.line.split(' · ')
+					const badgeText = segments[0]
+					const metaText = segments.slice(1).join(' · ')
+					return (
+						<li
+							key={c.key}
+							className="ops-component"
+							data-component={c.key}
+							data-category={c.category}
+						>
+							<span className="ops-component-top">
+								<span className="ops-component-name">{c.name}</span>
+								<span className="ops-state">{badgeText}</span>
 							</span>
-						) : null}
-					</li>
-				))}
+							<span className="ops-component-meta">
+								{metaText} ·{' '}
+								{c.lastEventAt
+									? `peristiwa ${formatTimestampId(c.lastEventAt)}`
+									: 'tidak ada peristiwa'}
+							</span>
+							{c.primaryFailure ? (
+								<span className="ops-component-primary">
+									{severityLabel(c.primaryFailure.severity)} ·{' '}
+									{c.primaryFailure.subsystem}/{c.primaryFailure.code}:{' '}
+									{c.primaryFailure.message}{' '}
+									<a href={c.primaryFailure.runbook}>runbook</a>
+								</span>
+							) : null}
+						</li>
+					)
+				})}
 			</ul>
 
 			<section className="ops-drilldown" aria-label="Rincian kegagalan">
@@ -76,8 +95,22 @@ export function OpsStatusPanel(props: {
 							data-severity={f.severity}
 						>
 							<span className="ops-failure-head">
-								[{severityLabel(f.severity)}] {f.subsystem}/{f.code} @{' '}
-								{f.componentKey}
+								<span
+									className={`ops-sev ops-sev-${f.severity}`}
+									data-testid="ops-severity"
+								>
+									{severityLabel(f.severity)}
+								</span>
+								<span className="ops-failure-where">
+									{f.subsystem}/{f.code} @ {f.componentKey}
+								</span>
+								<time
+									className="ops-failure-time"
+									dateTime={f.occurredAt}
+									title={f.occurredAt}
+								>
+									{formatTimestampId(f.occurredAt)}
+								</time>
 							</span>
 							<span className="ops-failure-message">{f.message}</span>
 							<span className="ops-failure-links">

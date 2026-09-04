@@ -183,7 +183,11 @@ export function ConceptEditor({
 	])
 
 	return (
-		<section aria-label="concept-editor" data-testid="concept-editor">
+		<section
+			aria-label="concept-editor"
+			className="concept-editor"
+			data-testid="concept-editor"
+		>
 			<h2>{isNew ? 'Konsep Baru' : 'Editor Konsep'}</h2>
 
 			{recoveredPrompt && (
