@@ -202,7 +202,13 @@ function AnswerCard({ answer }: { answer: StoredAnswer }) {
 function AssistantAvatar() {
 	return (
 		<span className="msg-avatar" aria-hidden="true">
-			<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+			<svg
+				width="16"
+				height="16"
+				viewBox="0 0 24 24"
+				fill="currentColor"
+				aria-hidden="true"
+			>
 				<path d="M12 2l2.4 5.3 5.6.8-4 4 1 5.9L12 15.6 6.9 18l1-5.9-4-4 5.6-.8L12 2z" />
 			</svg>
 		</span>
@@ -441,6 +447,7 @@ export function ChatContainer() {
 								height="26"
 								viewBox="0 0 24 24"
 								fill="currentColor"
+								aria-hidden="true"
 							>
 								<path d="M12 2l2.4 5.3 5.6.8-4 4 1 5.9L12 15.6 6.9 18l1-5.9-4-4 5.6-.8L12 2z" />
 							</svg>
