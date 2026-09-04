@@ -34,12 +34,12 @@ function useHashRoute(): string {
 /* --- inline icons (no external icon deps) ------------------------------- */
 
 function BrandMark() {
-	// eight-point geometric star (rubʿ al-hizb motif) in gold
+	// eight-point geometric star (rubʿ al-hizb motif) in emerald
 	return (
 		<svg
 			className="brand-mark"
-			width="40"
-			height="40"
+			width="38"
+			height="38"
 			viewBox="0 0 40 40"
 			fill="none"
 			aria-hidden="true"
@@ -47,8 +47,8 @@ function BrandMark() {
 			<path
 				d="M20 2 L24 12 L34 8 L30 18 L40 20 L30 22 L34 32 L24 28 L20 38 L16 28 L6 32 L10 22 L0 20 L10 18 L6 8 L16 12 Z"
 				fill="none"
-				stroke="#d9b36a"
-				strokeWidth="1.6"
+				stroke="#0e7a63"
+				strokeWidth="1.8"
 				strokeLinejoin="round"
 			/>
 			<circle
@@ -56,10 +56,10 @@ function BrandMark() {
 				cy="20"
 				r="6.5"
 				fill="none"
-				stroke="#d9b36a"
-				strokeWidth="1.6"
+				stroke="#0e7a63"
+				strokeWidth="1.8"
 			/>
-			<circle cx="20" cy="20" r="2" fill="#d9b36a" />
+			<circle cx="20" cy="20" r="2.2" fill="#0e7a63" />
 		</svg>
 	)
 }
@@ -75,6 +75,11 @@ const ICON_PATHS: Record<string, string> = {
 	home: 'M4 11l8-7 8 7v9h-5v-6h-6v6H4v-9z',
 	moon: 'M20 13.5A8 8 0 1 1 10.5 4 6.5 6.5 0 0 0 20 13.5z',
 	star: 'M12 3l2.5 5.5L20 9.3l-4 4 .9 5.7L12 16.8 7.1 19l.9-5.7-4-4 5.5-.8L12 3z',
+	plus: 'M12 5v14M5 12h14',
+	check: 'M4 12l5 5L20 6',
+	shield: 'M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z',
+	heart:
+		'M12 20s-7-4.5-9-9c-1.5-3.5 1-7 4.5-7 2 0 3.5 1 4.5 2.7C13.5 5 15 4 17 4c3.5 0 6 3.5 4.5 7-2 4.5-9 9-9 9z',
 }
 
 function NavIcon({ d }: { d: string }) {
@@ -113,14 +118,108 @@ function SearchIcon() {
 	)
 }
 
-const NAV_ITEMS = [
-	{ href: '#/chat', label: 'Chatbot', icon: ICON_PATHS.chat },
-	{ href: '#/sources', label: 'Sources', icon: ICON_PATHS.book },
-	{ href: '#/studio', label: 'Knowledge Studio', icon: ICON_PATHS.edit },
-	{ href: '#/studio-dashboard', label: 'Dashboard', icon: ICON_PATHS.grid },
-	{ href: '#/ops', label: 'Operations', icon: ICON_PATHS.activity },
-	{ href: '#/', label: 'Health', icon: ICON_PATHS.pulse },
+const NAV_SECTIONS: Array<{
+	label: string
+	items: Array<{ href: string; label: string; icon: string }>
+}> = [
+	{
+		label: 'Menu',
+		items: [
+			{ href: '#/chat', label: 'Chatbot', icon: ICON_PATHS.chat },
+			{ href: '#/sources', label: 'Sumber', icon: ICON_PATHS.book },
+			{
+				href: '#/studio',
+				label: 'Knowledge Studio',
+				icon: ICON_PATHS.edit,
+			},
+			{
+				href: '#/studio-dashboard',
+				label: 'Dashboard',
+				icon: ICON_PATHS.grid,
+			},
+		],
+	},
+	{
+		label: 'Sistem',
+		items: [
+			{ href: '#/ops', label: 'Operations', icon: ICON_PATHS.activity },
+			{ href: '#/', label: 'Health', icon: ICON_PATHS.pulse },
+		],
+	},
 ]
+
+/** feature cards on the landing page (unauthenticated home) */
+const LANDING_FEATURES = [
+	{
+		icon: ICON_PATHS.check,
+		title: 'Berdasarkan Dalil',
+		desc: "Al-Qur'an & Hadis",
+	},
+	{
+		icon: ICON_PATHS.book,
+		title: 'Mudah Dipahami',
+		desc: 'Penjelasan sederhana',
+	},
+	{
+		icon: ICON_PATHS.shield,
+		title: 'Sumber Terpercaya',
+		desc: 'Referensi jelas',
+	},
+	{
+		icon: ICON_PATHS.heart,
+		title: 'Gratis & Aman',
+		desc: 'Tanpa iklan',
+	},
+]
+
+function Landing() {
+	return (
+		<section className="landing" aria-label="Pengantar AiFiqh">
+			<div className="landing-grid">
+				<div className="landing-copy">
+					<span className="landing-eyebrow">Bertanya • Belajar • Memahami</span>
+					<h1>
+						Teman Belajar Fiqih yang <em>Terpercaya</em>
+					</h1>
+					<p>
+						Dapatkan jawaban berdasarkan dalil yang sahih, dari ulama yang
+						terpercaya, dengan penjelasan yang mudah dipahami.
+					</p>
+					<div className="landing-cta">
+						<a className="btn-primary" href="/auth/login">
+							Mulai Bertanya
+						</a>
+						<a
+							className="btn-ghost"
+							href="/auth/dev-login?email=admin@example.com"
+						>
+							Masuk Cepat (Dev)
+						</a>
+					</div>
+				</div>
+				<div className="landing-visual" aria-hidden="true">
+					<div className="landing-arch">
+						<div className="landing-quote">
+							“Ilmu adalah cahaya yang menuntun.”
+							<span>— Imam Al-Ghazali</span>
+						</div>
+					</div>
+				</div>
+			</div>
+			<ul className="landing-features">
+				{LANDING_FEATURES.map((f) => (
+					<li key={f.title}>
+						<span className="feature-icon">
+							<NavIcon d={f.icon} />
+						</span>
+						<b>{f.title}</b>
+						<span className="feature-desc">{f.desc}</span>
+					</li>
+				))}
+			</ul>
+		</section>
+	)
+}
 
 /** quick-jump keywords for the topbar search (real routes only) */
 const SEARCH_ROUTES: Array<{ match: RegExp; hash: string }> = [
@@ -135,6 +234,7 @@ export default function App() {
 	const route = useHashRoute()
 	const [health, setHealth] = useState<Health | null>(null)
 	const [me, setMe] = useState<Me | null>(null)
+	const [meLoading, setMeLoading] = useState(true)
 
 	useEffect(() => {
 		fetch('/health/components')
@@ -148,6 +248,7 @@ export default function App() {
 			.then((r) => (r.ok ? r.json() : null))
 			.then(setMe)
 			.catch(() => setMe(null))
+			.finally(() => setMeLoading(false))
 	}, [])
 
 	const permissions = me?.permissions ?? []
@@ -178,32 +279,42 @@ export default function App() {
 				<div className="sidebar-brand">
 					<BrandMark />
 					<div>
-						<div className="brand-name">RZ-Fiqh</div>
-						<div className="brand-sub">Fiqh Assistant</div>
+						<div className="brand-name">AiFiqh</div>
+						<div className="brand-sub">Asisten Fiqih</div>
 					</div>
 				</div>
 
+				<a className="sidebar-cta" href="#/chat">
+					<NavIcon d={ICON_PATHS.plus} />
+					Chat Baru
+				</a>
+
 				<nav className="sidebar-nav" aria-label="main">
-					{NAV_ITEMS.map((item) => (
-						<a
-							key={item.href}
-							href={item.href}
-							className={route === item.href.slice(1) ? 'active-nav' : ''}
-						>
-							<NavIcon d={item.icon} />
-							{item.label}
-						</a>
+					{NAV_SECTIONS.map((section) => (
+						<div className="nav-section" key={section.label}>
+							<div className="nav-section-label">{section.label}</div>
+							{section.items.map((item) => (
+								<a
+									key={item.href}
+									href={item.href}
+									className={route === item.href.slice(1) ? 'active-nav' : ''}
+								>
+									<NavIcon d={item.icon} />
+									{item.label}
+								</a>
+							))}
+						</div>
 					))}
 				</nav>
 
 				<div className="sidebar-card">
 					<svg
 						className="moon"
-						width="34"
-						height="34"
+						width="30"
+						height="30"
 						viewBox="0 0 24 24"
 						fill="none"
-						stroke="#d9b36a"
+						stroke="currentColor"
 						strokeWidth="1.6"
 						strokeLinecap="round"
 						aria-hidden="true"
@@ -264,14 +375,26 @@ export default function App() {
 						<kbd>⏎</kbd>
 					</div>
 					<div className="topbar-spacer" />
-					<div className="tenant-chip">
-						<small>Workspace</small>
-						<b>
-							{me?.tenantId
-								? `Tenant ${me.tenantId.slice(0, 8)}`
-								: 'Belum masuk'}
-						</b>
-					</div>
+					{me ? (
+						<div className="user-chip">
+							<span className="avatar">
+								{me.userId.slice(0, 2).toUpperCase()}
+							</span>
+							<span className="who">
+								<b>{me.userId.slice(0, 8)}</b>
+								<small>
+									{me.tenantId
+										? `Tenant ${me.tenantId.slice(0, 8)}`
+										: 'Tanpa tenant'}
+								</small>
+							</span>
+						</div>
+					) : (
+						<div className="tenant-chip">
+							<small>Workspace</small>
+							<b>Belum masuk</b>
+						</div>
+					)}
 				</header>
 
 				<main className="app-content">
@@ -348,7 +471,7 @@ export default function App() {
 							</p>
 						))}
 
-					{route === '/' && (
+					{route === '/' && (me || meLoading) && (
 						<section>
 							<div className="page-head">
 								<h2>Service health</h2>
@@ -373,10 +496,10 @@ export default function App() {
 						</section>
 					)}
 
+					{route === '/' && !meLoading && !me && <Landing />}
+
 					<footer className="app-footer">
-						<span>
-							RZ-Fiqh — citation-first Islamic jurisprudence assistant
-						</span>
+						<span>AiFiqh — citation-first Islamic jurisprudence assistant</span>
 						{me ? (
 							<span>
 								Masuk sebagai {me.userId.slice(0, 8)} · Tenant{' '}

@@ -177,7 +177,10 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 				{visible.map((s) => (
 					<li key={s.id}>
 						<button type="button" onClick={() => openDetail(s)}>
-							<span className="source-title">{s.title}</span>
+							<span className="source-top">
+								<span className="source-title">{s.title}</span>
+								<span className="badge badge-neutral">{s.source_type}</span>
+							</span>
 							<span className="source-meta">
 								{s.author} · {s.language} · {s.rights_status}
 							</span>

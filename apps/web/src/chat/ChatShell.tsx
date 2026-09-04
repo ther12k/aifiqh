@@ -15,12 +15,15 @@ import {
  *    distinct visible states;
  *  - keyboard baseline: the composer is a labelled textarea, submit via
  *    the button or Ctrl/Cmd+Enter (handled by the parent), Cancel is a
- *    real button while streaming.
+ *    real button while streaming;
+ *  - an optional renderMessage lets the parent upgrade specific finished
+ *    messages (e.g. structured answer cards) — the default is verbatim
+ *    paragraphs, never a rewrite.
  */
 
 const DIRECTION_ATTR = { rtl: 'rtl' as const, ltr: 'ltr' as const }
 
-function Paragraphs({ text }: { text: string }) {
+export function MessageParagraphs({ text }: { text: string }) {
 	return (
 		<>
 			{toParagraphs(text).map((p) => (
@@ -44,8 +47,16 @@ export function ChatShell(props: {
 	onDraftChange: (draft: string) => void
 	onSubmit: () => void
 	onCancel: () => void
+	/** optional custom body for specific finished messages */
+	renderMessage?: (message: {
+		id: string
+		role: 'user' | 'assistant' | 'system'
+		content: string
+		answerStatus?: string | null
+	}) => React.ReactNode
 }) {
-	const { state, draft, onDraftChange, onSubmit, onCancel } = props
+	const { state, draft, onDraftChange, onSubmit, onCancel, renderMessage } =
+		props
 	return (
 		<section aria-label="Percakapan fiqih" className="chat-shell">
 			<div aria-live="polite" aria-atomic="false" className="chat-live">
@@ -53,14 +64,21 @@ export function ChatShell(props: {
 			</div>
 
 			<ol className="chat-messages">
-				{state.messages.map((m) => (
-					<li key={m.id} data-role={m.role} data-status={m.answerStatus ?? ''}>
-						<Paragraphs text={m.content} />
-					</li>
-				))}
+				{state.messages.map((m) => {
+					const custom = renderMessage?.(m)
+					return (
+						<li
+							key={m.id}
+							data-role={m.role}
+							data-status={m.answerStatus ?? ''}
+						>
+							{custom ?? <MessageParagraphs text={m.content} />}
+						</li>
+					)
+				})}
 				{state.streaming ? (
 					<li data-role="assistant" data-streaming="true">
-						<Paragraphs text={state.streaming.text} />
+						<MessageParagraphs text={state.streaming.text} />
 					</li>
 				) : null}
 			</ol>
@@ -95,6 +113,7 @@ export function ChatShell(props: {
 						}
 					}}
 					rows={3}
+					placeholder="Tanyakan pertanyaan fiqih di sini…"
 				/>
 				{state.phase === 'streaming' ? (
 					<button type="button" onClick={onCancel}>
@@ -102,6 +121,20 @@ export function ChatShell(props: {
 					</button>
 				) : (
 					<button type="submit" disabled={draft.trim().length === 0}>
+						<svg
+							width="15"
+							height="15"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+							aria-hidden="true"
+						>
+							<path d="M22 2 11 13" />
+							<path d="M22 2 15 22l-4-9-9-4 20-7z" />
+						</svg>
 						Kirim
 					</button>
 				)}
