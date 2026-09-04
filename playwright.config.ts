@@ -9,6 +9,7 @@ const storageEndpoint = process.env.STORAGE_ENDPOINT ?? 'http://localhost:9000'
 // host inotify limit (ENOSPC) on the shared machine, and preview is
 // closer to what ships.
 const API_PORT = '3100'
+const WEB_PORT = '5179'
 
 export default defineConfig({
 	testDir: './e2e',
@@ -18,7 +19,7 @@ export default defineConfig({
 	forbidOnly: !!process.env.CI,
 	retries: process.env.CI ? 1 : 0,
 	use: {
-		baseURL: 'http://127.0.0.1:5173',
+		baseURL: `http://127.0.0.1:${WEB_PORT}`,
 		trace: 'retain-on-failure',
 	},
 	webServer: [
@@ -36,15 +37,15 @@ export default defineConfig({
 			},
 		},
 		{
-			command:
-				'sh -c "bun run build && bunx vite preview --port 5173 --strictPort"',
+			command: `sh -c "bun run build && bunx vite preview --port ${WEB_PORT} --strictPort"`,
 			cwd: './apps/web',
-			url: 'http://127.0.0.1:5173',
+			url: `http://127.0.0.1:${WEB_PORT}`,
 			reuseExistingServer: false,
 			timeout: 120_000,
 			env: {
 				...process.env,
 				VITE_API_TARGET: `http://127.0.0.1:${API_PORT}`,
+				VITE_PORT: WEB_PORT,
 			},
 		},
 	],

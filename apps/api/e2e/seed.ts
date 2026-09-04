@@ -97,6 +97,7 @@ console.log(
 	JSON.stringify({
 		cookieName: SESSION_COOKIE,
 		cookieValue,
+		csrfValue: `e2e-csrf-${suffix}`,
 		userId,
 		tenantId,
 		failureMarker: marker,

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ChatContainer } from './chat/ChatContainer'
 import { ConceptEditor } from './knowledge/ConceptEditor'
 import { OpsStatusContainer } from './ops/OpsStatusContainer'
 import { SourceRegistry } from './sources/SourceRegistry'
@@ -59,6 +60,8 @@ export default function App() {
 			<p>Citation-first Islamic jurisprudence assistant.</p>
 
 			<nav aria-label="main">
+				<a href="#/chat">Percakapan Fiqih</a>
+				{' | '}
 				<a href="#/sources">Source Registry</a>
 				{' | '}
 				<a href="#/studio">Knowledge Studio</a>
@@ -69,6 +72,15 @@ export default function App() {
 				{' | '}
 				<a href="#/">Health</a>
 			</nav>
+
+			{route === '/chat' &&
+				(permissions.includes('knowledge:read') ? (
+					<ChatContainer />
+				) : (
+					<p>
+						<a href="/auth/login">Masuk</a> untuk memulai percakapan fiqih.
+					</p>
+				))}
 
 			{route === '/sources' && <SourceRegistry permissions={permissions} />}
 
@@ -121,9 +133,52 @@ export default function App() {
 				</section>
 			)}
 
-			<p>
-				<a href="/auth/login">Sign in</a>
-			</p>
+			{me ? (
+				<footer
+					style={{
+						marginTop: '2rem',
+						borderTop: '1px solid #ccc',
+						paddingTop: '1rem',
+					}}
+				>
+					<p>
+						Masuk sebagai: <strong>{me.userId}</strong> (Tenant:{' '}
+						{me.tenantId ?? '—'}){' | '}
+						<button
+							type="button"
+							onClick={async () => {
+								const csrfMatch = document.cookie.match(
+									/(?:^|;\s*)aifiqh_csrf=([^;]+)/,
+								)
+								const csrf = csrfMatch ? decodeURIComponent(csrfMatch[1]) : ''
+								await fetch('/auth/logout', {
+									method: 'POST',
+									headers: { 'x-csrf-token': csrf },
+								})
+								window.location.reload()
+							}}
+						>
+							Keluar (Logout)
+						</button>
+					</p>
+				</footer>
+			) : (
+				<footer
+					style={{
+						marginTop: '2rem',
+						borderTop: '1px solid #ccc',
+						paddingTop: '1rem',
+					}}
+				>
+					<p>
+						<a href="/auth/dev-login?email=admin@example.com">
+							Masuk Cepat (Dev Admin)
+						</a>
+						{' | '}
+						<a href="/auth/login">Masuk (OIDC)</a>
+					</p>
+				</footer>
+			)}
 		</main>
 	)
 }

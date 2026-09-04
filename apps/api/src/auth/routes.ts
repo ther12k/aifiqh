@@ -41,6 +41,47 @@ export function authPlugin(deps: AuthDeps) {
 	const { cfg, log, oidc, sql } = deps
 
 	return new Elysia({ name: 'auth' })
+		.get('/auth/dev-login', async ({ request, set }) => {
+			if (cfg.env === 'production') {
+				set.status = 404
+				return 'not found'
+			}
+			const url = new URL(request.url)
+			const email = url.searchParams.get('email') ?? 'admin@example.com'
+			const [user] = await sql<{ id: string; primary_email: string }[]>`
+					select id, primary_email from users where primary_email = ${email} limit 1
+				`
+			if (!user) {
+				set.status = 404
+				return `User with email ${email} not found. Run seed first.`
+			}
+			const [firstTenant] = await sql<{ tenant_id: string }[]>`
+					select tenant_id from tenant_memberships
+					where user_id = ${user.id}::uuid and status = 'active' limit 1
+				`
+			const now = Math.floor(Date.now() / 1000)
+			const expiresAt = new Date((now + cfg.sessionTtlSeconds) * 1000)
+			const session = {
+				sessionId: crypto.randomUUID(),
+				userId: user.id,
+				issuer: 'dev-interaction',
+				subject: user.primary_email,
+				expiresAt: expiresAt.toISOString(),
+				tenantId: firstTenant?.tenant_id ?? '',
+			}
+			await issueSession(sql, { ...session, expiresAt })
+			set.headers['set-cookie'] = [
+				sessionCookieHeader(
+					signSession(session, cfg.sessionSecret),
+					cfg.sessionTtlSeconds,
+					false,
+				),
+				csrfCookieHeader(newCsrfToken(), cfg.sessionTtlSeconds, false),
+			]
+			const redirect = url.searchParams.get('redirect') ?? '/'
+			set.headers.location = redirect
+			set.status = 302
+		})
 		.get('/auth/login', async ({ set }) => {
 			const ep = await oidc.discovery()
 			const state = crypto.randomUUID()

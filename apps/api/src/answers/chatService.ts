@@ -325,22 +325,32 @@ async function runTurn(
 	options: TurnOptions & { userMessageId: string },
 ): Promise<TurnResult> {
 	const { conversationId, content, userMessageId } = options
+	let indexReleaseId = options.indexReleaseId
+	if (!indexReleaseId) {
+		const [aliasRow] = await sql<{ release_id: string }[]>`
+				select release_id from index_aliases
+				where tenant_id = ${principal.tenantId}::uuid and alias = 'production'
+				limit 1`
+		if (aliasRow) {
+			indexReleaseId = aliasRow.release_id
+		}
+	}
 
 	// 1. plan: a UNIQUE trace per turn, bound to the conversation
 	const plan = await planAndPersistQuery(sql, principal, {
 		originalQuery: content,
-		indexReleaseId: options.indexReleaseId,
+		indexReleaseId,
 		requestedMadhhab: options.madhhab,
 		mode: options.mode,
 		conversationId,
 	})
 	await sql`update retrieval_traces set conversation_id = ${conversationId}::uuid
-		where id = ${plan.traceId}::uuid`
+			where id = ${plan.traceId}::uuid`
 	// the user message links to the trace it spawned
 	await sql`update messages set retrieval_trace_id = ${plan.traceId}::uuid
-		where id = ${userMessageId}::uuid`
+			where id = ${userMessageId}::uuid`
 
-	if (!options.indexReleaseId) {
+	if (!indexReleaseId) {
 		// no pinned release: nothing to retrieve from — abstain explicitly
 		const decision: ResponseDecisionOutcome = {
 			decision: 'abstain',
@@ -354,12 +364,12 @@ async function runTurn(
 		await storeResponseDecision(sql, plan.traceId, decision)
 		const ordinal = await nextMessageOrdinal(sql, conversationId)
 		const [message] = await sql<{ id: string }[]>`
-			insert into messages (conversation_id, ordinal, role, content, retrieval_trace_id)
-			values (${conversationId}::uuid, ${ordinal}, 'assistant', 'Belum dapat menjawab: tidak ada indeks aktif.', ${plan.traceId}::uuid)
-			returning id`
+				insert into messages (conversation_id, ordinal, role, content, retrieval_trace_id)
+				values (${conversationId}::uuid, ${ordinal}, 'assistant', 'Belum dapat menjawab: tidak ada indeks aktif.', ${plan.traceId}::uuid)
+				returning id`
 		const [answer] = await sql<{ id: string }[]>`
-			insert into answers (message_id, trace_id, status)
-			values (${message.id}::uuid, ${plan.traceId}::uuid, 'abstained') returning id`
+				insert into answers (message_id, trace_id, status)
+				values (${message.id}::uuid, ${plan.traceId}::uuid, 'abstained') returning id`
 		await sql`update messages set answer_id = ${answer.id}::uuid where id = ${message.id}::uuid`
 		return {
 			conversationId,
@@ -373,7 +383,6 @@ async function runTurn(
 			status: 'abstained',
 		}
 	}
-	const indexReleaseId = options.indexReleaseId
 
 	// 2. retrieval + evidence + expansion (same composable pipeline)
 	const outcome = await executeLanePlan(sql, principal, {

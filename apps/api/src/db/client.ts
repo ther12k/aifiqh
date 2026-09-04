@@ -33,15 +33,54 @@ export async function withTenant<T>(
  * fails closed (zero rows), so all tenant-scoped data access goes through
  * this wrapper.
  */
+function wrapTxSql(tx: unknown): Sql {
+	if (typeof (tx as { begin?: unknown }).begin === 'function') {
+		return tx as Sql
+	}
+	return new Proxy(tx as object, {
+		get(target, prop, receiver) {
+			if (prop === 'begin') {
+				return (fn: (subTx: Sql) => Promise<unknown>) =>
+					(
+						target as {
+							savepoint: (cb: (sp: unknown) => unknown) => Promise<unknown>
+						}
+					).savepoint((sp) => fn(wrapTxSql(sp)))
+			}
+			const val = Reflect.get(target, prop, receiver)
+			return typeof val === 'function'
+				? (val as (...args: unknown[]) => unknown).bind(target)
+				: val
+		},
+	}) as unknown as Sql
+}
+
 export async function scopedTransaction<T>(
 	client: Sql,
 	tenantId: string,
 	fn: (sql: Sql) => Promise<T>,
 ): Promise<T> {
-	return client.begin(async (tx): Promise<T> => {
-		await tx`select set_config('app.tenant_id', ${tenantId}, true)`
-		return fn(tx as unknown as Sql)
-	}) as Promise<T>
+	// If the client is already in a transaction, use savepoint instead of begin
+	const beginFn = (
+		typeof client.begin === 'function'
+			? client.begin.bind(client)
+			: typeof (client as unknown as { savepoint: unknown }).savepoint ===
+					'function'
+				? (
+						client as unknown as { savepoint: typeof client.begin }
+					).savepoint.bind(client)
+				: null
+	) as ((cb: (tx: unknown) => Promise<T>) => Promise<T>) | null
+
+	if (beginFn) {
+		return beginFn(async (tx): Promise<T> => {
+			const wrapped = wrapTxSql(tx)
+			await wrapped`select set_config('app.tenant_id', ${tenantId}, true)`
+			return fn(wrapped)
+		})
+	}
+	await client`select set_config('app.tenant_id', ${tenantId}, true)`
+	return fn(client)
 }
 
 export async function closeDb(): Promise<void> {

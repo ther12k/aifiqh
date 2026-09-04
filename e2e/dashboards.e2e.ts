@@ -12,6 +12,7 @@ import { type BrowserContext, type Page, expect, test } from '@playwright/test'
 interface SeedOutput {
 	cookieName: string
 	cookieValue: string
+	csrfValue: string
 	failureMarker: string
 }
 
@@ -31,6 +32,12 @@ async function newSessionedPage(context: BrowserContext): Promise<Page> {
 		{
 			name: seed.cookieName,
 			value: seed.cookieValue,
+			domain: '127.0.0.1',
+			path: '/',
+		},
+		{
+			name: 'aifiqh_csrf',
+			value: seed.csrfValue,
 			domain: '127.0.0.1',
 			path: '/',
 		},
@@ -96,4 +103,27 @@ test('unauthenticated visitor is pointed to sign in', async ({ page }) => {
 	await expect(page.getByRole('main')).toContainText('Masuk')
 	await page.goto('/#/studio-dashboard')
 	await expect(page.getByRole('main')).toContainText('Masuk')
+	await page.goto('/#/chat')
+	await expect(page.getByRole('main')).toContainText('Masuk')
+})
+
+test('chat interface submits query and receives grounded answer', async ({
+	browser,
+}) => {
+	const context = await browser.newContext()
+	const page = await newSessionedPage(context)
+	await page.goto('/#/chat')
+	await expect(page.locator('.chat-shell')).toBeVisible({ timeout: 15_000 })
+	await page
+		.locator('#chat-draft')
+		.fill('Bagaimana hadits tentang amalan dan niat?')
+	await page.locator('button[type="submit"]').click()
+	const assistantMsg = page.locator(
+		'.chat-messages li[data-role="assistant"]:not([data-streaming])',
+	)
+	await expect(assistantMsg).toBeVisible({ timeout: 30_000 })
+	await expect(assistantMsg.last()).toContainText(
+		/Keputusan|abstain|Hadits|amalan|jawaban/i,
+	)
+	await context.close()
 })

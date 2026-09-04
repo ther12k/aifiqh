@@ -1855,7 +1855,9 @@ function sourceRoutes(deps: AppDeps) {
 				ctx.requireCsrf()
 				const body = (ctx.body ?? {}) as Record<string, unknown>
 				ctx.set.status = 201
-				return startConversation(sql, principal, bodyStr(body.title) ?? null)
+				return await scopedTransaction(sql, principal.tenantId, (tx) =>
+					startConversation(tx, principal, bodyStr(body.title) ?? null),
+				)
 			})
 			.post('/messages/:id/feedback', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
@@ -1901,7 +1903,9 @@ function sourceRoutes(deps: AppDeps) {
 				const ctx = rawCtx as unknown as HandlerCtx
 				const principal = await ctx.requirePermission('knowledge:read')
 				try {
-					return await getConversation(sql, principal, ctx.params.id)
+					return await scopedTransaction(sql, principal.tenantId, (tx) =>
+						getConversation(tx, principal, ctx.params.id),
+					)
 				} catch (err) {
 					if (err instanceof ChatError) {
 						ctx.set.status = 404
@@ -1921,24 +1925,26 @@ function sourceRoutes(deps: AppDeps) {
 					return { error: 'CONTENT_REQUIRED', message: 'content is required' }
 				}
 				try {
-					return await postUserTurn(sql, principal, {
-						conversationId: ctx.params.id,
-						content,
-						indexReleaseId: bodyStr(body.indexReleaseId),
-						madhhab: bodyStrArray(body.madhhab),
-						ensureMadhhab: bodyStrArray(body.ensureMadhhab),
-						contextProfile: bodyStr(body.contextProfile) as
-							| 'exact'
-							| 'standard'
-							| 'comparative'
-							| 'research'
-							| 'document_audit'
-							| undefined,
-						mode: body.mode as
-							| 'grounded_only'
-							| 'allow_general_knowledge'
-							| undefined,
-					})
+					return await scopedTransaction(sql, principal.tenantId, (tx) =>
+						postUserTurn(tx, principal, {
+							conversationId: ctx.params.id,
+							content,
+							indexReleaseId: bodyStr(body.indexReleaseId),
+							madhhab: bodyStrArray(body.madhhab),
+							ensureMadhhab: bodyStrArray(body.ensureMadhhab),
+							contextProfile: bodyStr(body.contextProfile) as
+								| 'exact'
+								| 'standard'
+								| 'comparative'
+								| 'research'
+								| 'document_audit'
+								| undefined,
+							mode: body.mode as
+								| 'grounded_only'
+								| 'allow_general_knowledge'
+								| undefined,
+						}),
+					)
 				} catch (err) {
 					if (err instanceof ChatError) {
 						ctx.set.status = err.code === 'CONVERSATION_NOT_FOUND' ? 404 : 400
@@ -1953,22 +1959,24 @@ function sourceRoutes(deps: AppDeps) {
 				ctx.requireCsrf()
 				const body = (ctx.body ?? {}) as Record<string, unknown>
 				try {
-					return await retryLastTurn(sql, principal, ctx.params.id, {
-						indexReleaseId: bodyStr(body.indexReleaseId),
-						madhhab: bodyStrArray(body.madhhab),
-						ensureMadhhab: bodyStrArray(body.ensureMadhhab),
-						contextProfile: bodyStr(body.contextProfile) as
-							| 'exact'
-							| 'standard'
-							| 'comparative'
-							| 'research'
-							| 'document_audit'
-							| undefined,
-						mode: body.mode as
-							| 'grounded_only'
-							| 'allow_general_knowledge'
-							| undefined,
-					})
+					return await scopedTransaction(sql, principal.tenantId, (tx) =>
+						retryLastTurn(tx, principal, ctx.params.id, {
+							indexReleaseId: bodyStr(body.indexReleaseId),
+							madhhab: bodyStrArray(body.madhhab),
+							ensureMadhhab: bodyStrArray(body.ensureMadhhab),
+							contextProfile: bodyStr(body.contextProfile) as
+								| 'exact'
+								| 'standard'
+								| 'comparative'
+								| 'research'
+								| 'document_audit'
+								| undefined,
+							mode: body.mode as
+								| 'grounded_only'
+								| 'allow_general_knowledge'
+								| undefined,
+						}),
+					)
 				} catch (err) {
 					if (err instanceof ChatError) {
 						ctx.set.status = err.code === 'CONVERSATION_NOT_FOUND' ? 404 : 400
