@@ -160,8 +160,6 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 
 	return (
 		<section aria-label="source-registry" data-testid="source-registry">
-			<h2>Source Registry</h2>
-
 			<label>
 				Cari sumber
 				<input
