@@ -27,7 +27,7 @@ import type { BuiltContext } from '../retrieval/contextBuilder'
 
 export const GENERATION_PIPELINE_VERSION = 'grounded-generation-v1'
 
-export const PROMPT_VERSION = 'grounded-answer-prompt-v1'
+export const PROMPT_VERSION = 'grounded-answer-prompt-v2'
 
 export interface PinnedVersions {
 	pipelineVersion: string
@@ -43,6 +43,9 @@ export interface GenerateAnswerInput {
 	context: BuiltContext
 	decision: ResponseDecisionOutcome
 	providerKey: string
+	/** optional unit texts by id — real model providers need the evidence
+	 * content, not just ids; omitted for test/deterministic generators */
+	evidenceTexts?: Record<string, string>
 	generate: (request: {
 		messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
 		responseFormat: 'text' | 'json_object'
@@ -69,13 +72,37 @@ function buildSystemPrompt(
 	return `Anda adalah asisten fiqih yang HANYA menjawab berdasarkan bukti yang diberikan.
 
 ATURAN JAWABAN (wajib):
-- Keluarkan HANYA satu objek JSON valid, tanpa teks lain.
+- Keluarkan HANYA satu objek JSON valid, tanpa teks lain, tanpa blok kode.
 - schemaVersion: "${ANSWER_SCHEMA_VERSION}"
 - language: "id", "ar", atau "mixed" sesuai pertanyaan.
-- Wajib memuat kelima section: direct_answer, evidence, method, caveats, sources.
-- Setiap klaim material (status ${'`material: true`'}) wajib memiliki minimal satu link evidence.
+- Wajib memuat kelima section (urutan tetap): direct_answer, evidence, method, caveats, sources.
+- Setiap klaim material (material: true) wajib memiliki minimal satu link evidence.
 - Link evidence: relation "direct" wajib memuat kutipan verbatim (quote); relation "synthesis" tidak boleh memuat quote tunggal.
 - evidenceId HANYA boleh salah satu id bukti yang diberikan di bawah. Id lain ditolak.
+- Kutipan Arab ditulis apa adanya; jangan menerjemahkan teks Arab di dalam quote.
+
+STRUKTUR JSON (ikuti PERSIS bentuk ini — jangan menambah/mengubah nama field):
+{
+  "schemaVersion": "${ANSWER_SCHEMA_VERSION}",
+  "language": "id",
+  "sections": [
+    {"kind": "direct_answer", "markdown": "jawaban langsung", "claimIds": ["c1"]},
+    {"kind": "evidence", "markdown": "dalil yang dikutip", "claimIds": ["c1"]},
+    {"kind": "method", "markdown": "metode"},
+    {"kind": "caveats", "markdown": "catatan dan keterbatasan"},
+    {"kind": "sources", "markdown": "sumber yang dikutip"}
+  ],
+  "claims": [
+    {
+      "id": "c1",
+      "text": "pernyataan klaim",
+      "material": true,
+      "evidence": [
+        {"claimId": "c1", "evidenceId": "<id bukti>", "relation": "direct", "quote": "<kutipan verbatim dari bukti>"}
+      ]
+    }
+  ]
+}
 
 BATASAN BAHASA (wajib dipatuhi):
 - ${constraints}
@@ -112,7 +139,13 @@ export async function generateGroundedAnswer(
 	const includedItems = input.context.items.filter((i) => i.included)
 	const evidenceIds = new Set(includedItems.map((i) => i.unitId))
 	const evidenceBlock = includedItems
-		.map((i) => `- id: ${i.unitId} [${i.relation}] ${i.selectionReason}`)
+		.map((i) => {
+			const text = input.evidenceTexts?.[i.unitId]
+			const head = `- id: ${i.unitId} [${i.relation}] ${i.selectionReason}`
+			// evidence content travels with the id for real generators; the
+			// quote stays the ONLY citable surface regardless
+			return text ? `${head}\n  teks: ${text}` : head
+		})
 		.join('\n')
 
 	const pinned: PinnedVersions = {

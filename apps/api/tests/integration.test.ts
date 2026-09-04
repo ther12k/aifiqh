@@ -1,4 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+
+// hermetic tests: force the deterministic chat composer (no external LLM)
+process.env.AIFIQH_CHAT_MODEL = 'off'
 /**
  * DB-backed integration tests. Require DATABASE_URL (default local dev DB
  * on :5434, CI service container on :5432). Skipped when the DB is absent.

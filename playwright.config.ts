@@ -34,6 +34,9 @@ export default defineConfig({
 				PORT: API_PORT,
 				DATABASE_URL: dbUrl,
 				STORAGE_ENDPOINT: storageEndpoint,
+				// e2e is hermetic: the chat composer stays deterministic even
+				// when a real model provider is configured on this machine
+				AIFIQH_CHAT_MODEL: 'off',
 			},
 		},
 		{

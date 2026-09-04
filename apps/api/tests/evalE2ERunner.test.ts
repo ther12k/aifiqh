@@ -118,6 +118,8 @@ function turn(overrides: Partial<TurnResult>): TurnResult {
 		assessment: null,
 		answer: null,
 		status: 'abstained',
+		provider: '',
+		model: '',
 		...overrides,
 	}
 }

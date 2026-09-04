@@ -2,6 +2,8 @@ import type { Principal, StructuredAnswer } from '@aifiqh/shared'
 import { recordAuditInTx } from '../audit/audit'
 import type { Sql } from '../db/client'
 import { HashEmbeddingProvider } from '../index/embeddingService'
+import { DefaultModelGateway } from '../llm/gateway'
+import { resolveChatModelConfig } from '../llm/modelRouter'
 import {
 	type ResponseDecisionOutcome,
 	decideResponse,
@@ -69,6 +71,9 @@ export interface TurnResult {
 	assessment: AssessmentOutcome | null
 	answer: StructuredAnswer | null
 	status: 'answered' | 'abstained' | 'escalated'
+	/** what actually generated the answer — real provider or builtin */
+	provider: string
+	model: string
 }
 
 export async function startConversation(
@@ -381,6 +386,8 @@ async function runTurn(
 			assessment: null,
 			answer: null,
 			status: 'abstained',
+			provider: '',
+			model: '',
 		}
 	}
 
@@ -446,6 +453,8 @@ async function runTurn(
 			assessment,
 			answer: null,
 			status: decision.decision === 'escalate' ? 'escalated' : 'abstained',
+			provider: '',
+			model: '',
 		}
 	}
 
@@ -455,28 +464,117 @@ async function runTurn(
 	const context = buildContext(profileDef, evidenceSelection, expansion)
 	await storeContextManifest(sql, plan.traceId, context)
 
-	// 6. generation: the built-in composer builds claims ONLY from this
-	// turn's manifest items — prior turns are never evidence
+	// 6. generation: a configured model provider (provider_configs +
+	// chat-production alias + secret ref) generates the grounded answer;
+	// without one — or when the model output fails validation — the
+	// deterministic built-in composer takes over. Claims ALWAYS come from
+	// this turn's manifest items; prior turns are never evidence.
 	const includedUnitIds = context.items
 		.filter((i) => i.included)
 		.map((i) => i.unitId)
-	const composed = await composeFromEvidence(
+	const citable = await loadCitableItems(
 		sql,
 		principal,
 		indexReleaseId,
 		includedUnitIds,
 	)
-	const generation = await generateGroundedAnswer({
-		query: content,
-		context,
-		decision,
-		providerKey: 'builtin-compose',
-		generate: async () => ({
-			text: JSON.stringify(composed.answer),
-			finishReason: 'stop',
-			modelId: 'compose-from-evidence',
-		}),
-	})
+
+	let generation: Awaited<ReturnType<typeof generateGroundedAnswer>> | null =
+		null
+	let usedProvider = 'builtin-compose'
+	let usedModel = 'compose-from-evidence'
+	let citations: Array<{
+		ordinal: number
+		sourceId: string
+		sourceRevisionId: string
+		spanId: string
+		quote: string
+	}> = []
+
+	const model = await resolveChatModelConfig(sql)
+	if (model) {
+		const gateway = new DefaultModelGateway()
+		gateway.registerProvider(model.adapter)
+		const evidenceTexts: Record<string, string> = {}
+		for (const id of includedUnitIds) {
+			const item = citable.get(id)
+			if (item) evidenceTexts[id] = item.text
+		}
+		generation = await generateGroundedAnswer({
+			query: content,
+			context,
+			decision,
+			providerKey: model.providerKey,
+			evidenceTexts,
+			generate: async (request) => {
+				const res = await gateway.generate(model.providerKey, {
+					modelId: model.modelId,
+					messages: request.messages,
+					temperature: 0.2,
+					maxTokens: 2048,
+					responseFormat: request.responseFormat,
+				})
+				return {
+					text: res.text,
+					finishReason: res.finishReason,
+					modelId: res.modelId,
+				}
+			},
+		})
+		if (generation.status === 'generated' && generation.answer) {
+			usedProvider = model.providerKey
+			usedModel = generation.pinned?.modelId || model.modelId
+			// citations follow the model's claim links — quotes stay verbatim
+			// unit text read from the pinned release, never model prose
+			const citedIds: string[] = []
+			for (const claim of generation.answer.claims) {
+				for (const link of claim.evidence) {
+					if (!citedIds.includes(link.evidenceId))
+						citedIds.push(link.evidenceId)
+				}
+			}
+			citations = citedIds
+				.map((id, idx) => {
+					const item = citable.get(id)
+					return item
+						? {
+								ordinal: idx + 1,
+								sourceId: item.sourceId,
+								sourceRevisionId: item.sourceRevisionId,
+								spanId: item.spanId,
+								quote: item.text,
+							}
+						: null
+				})
+				.filter((c): c is NonNullable<typeof c> => c !== null)
+		} else {
+			// model output failed grounding/validation — fall back, never
+			// surface an ungrounded draft
+			generation = null
+		}
+	}
+
+	if (!generation) {
+		const composed = await composeFromEvidence(
+			sql,
+			principal,
+			indexReleaseId,
+			includedUnitIds,
+		)
+		citations = composed.citations
+		generation = await generateGroundedAnswer({
+			query: content,
+			context,
+			decision,
+			providerKey: 'builtin-compose',
+			generate: async () => ({
+				text: JSON.stringify(composed.answer),
+				finishReason: 'stop',
+				modelId: 'compose-from-evidence',
+			}),
+		})
+	}
+
 	if (generation.status !== 'generated' || !generation.answer) {
 		// the composer is deterministic; a failure here is still terminal
 		const ordinal = await nextMessageOrdinal(sql, conversationId)
@@ -498,6 +596,8 @@ async function runTurn(
 			assessment,
 			answer: null,
 			status: 'abstained',
+			provider: '',
+			model: '',
 		}
 	}
 
@@ -506,9 +606,9 @@ async function runTurn(
 		conversationId,
 		traceId: plan.traceId,
 		answer: generation.answer,
-		citations: composed.citations,
-		provider: 'builtin-compose',
-		model: 'compose-from-evidence',
+		citations,
+		provider: usedProvider,
+		model: usedModel,
 	})
 
 	return {
@@ -521,6 +621,8 @@ async function runTurn(
 		assessment,
 		answer: generation.answer,
 		status: 'answered',
+		provider: usedProvider,
+		model: usedModel,
 	}
 }
 

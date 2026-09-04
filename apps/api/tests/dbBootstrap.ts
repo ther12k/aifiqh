@@ -7,6 +7,10 @@ import { join } from 'node:path'
 import postgres from 'postgres'
 import { applyMigrations } from '../../../scripts/migrate'
 
+// tests are hermetic: never route chat turns through a real model provider
+// even when one is configured in the local/dev database
+process.env.AIFIQH_CHAT_MODEL = 'off'
+
 export const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
 

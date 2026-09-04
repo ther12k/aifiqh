@@ -24,6 +24,14 @@ const SECTION_LABELS: Record<string, string> = {
 	sources: 'Sumber',
 }
 
+/** real follow-up prompts over the ingested corpus (fill the composer) */
+const FOLLOW_UPS = [
+	'Bagaimana hadits tentang amalan bergantung pada niat?',
+	'Apa kaidah la dharara wa la dhirar?',
+	'Bagaimana hukum riba dalam muamalah?',
+	"Apa rukun wudhu menurut QS Al-Ma'idah: 6?",
+]
+
 /** a cleaned answer section kept for the structured answer card */
 interface AnswerSection {
 	kind: string
@@ -37,14 +45,25 @@ interface StoredAnswer {
 	plain: string
 }
 
+interface TurnSummary {
+	status: string
+	decision: string
+	claims: number
+	citations: number
+	sections: number
+	/** what actually generated the answer — real provider or builtin */
+	provider: string
+	model: string
+}
+
 /** action icons for the answer card footer */
-function ActionIcon({ d }: { d: string }) {
+function ActionIcon({ d, filled }: { d: string; filled?: boolean }) {
 	return (
 		<svg
-			width="14"
-			height="14"
+			width="15"
+			height="15"
 			viewBox="0 0 24 24"
-			fill="none"
+			fill={filled ? 'currentColor' : 'none'}
 			stroke="currentColor"
 			strokeWidth="1.8"
 			strokeLinecap="round"
@@ -58,16 +77,22 @@ function ActionIcon({ d }: { d: string }) {
 
 const ICON_COPY = 'M8 8h12v12H8zM4 16V4h12' // two overlapping rectangles
 const ICON_SHARE = 'M12 3v12M8 7l4-4 4 4M5 13v6h14v-6' // arrow out of a tray
+const ICON_UP =
+	'M7 10v10H4V10h3zm3 10h7a2 2 0 0 0 2-1.7l1-6A2 2 0 0 0 18 10h-5l1-5a2 2 0 0 0-3.4-1.8L10 7v13z'
+const ICON_DOWN =
+	'M17 14V4h3v10h-3zm-3-10H7a2 2 0 0 0-2 1.7l-1 6A2 2 0 0 0 6 14h5l-1 5a2 2 0 0 0 3.4 1.8L14 17V4z'
 
 /**
  * Structured answer card: the direct answer up front, evidence under an
  * explicit label, the remaining sections behind an honest expand toggle,
- * and real copy/share actions. Content is rendered verbatim — the card
- * only re-organizes what the API produced.
+ * and real copy/share/feedback actions. Content is rendered verbatim —
+ * the card only re-organizes what the API produced. Votes are session-
+ * local until a feedback API persists them — never displayed as counts.
  */
 function AnswerCard({ answer }: { answer: StoredAnswer }) {
 	const [expanded, setExpanded] = useState(false)
 	const [copied, setCopied] = useState(false)
+	const [vote, setVote] = useState<'up' | 'down' | null>(null)
 
 	const direct = answer.sections.filter((s) => s.kind === 'direct_answer')
 	const evidence = answer.sections.filter((s) => s.kind === 'evidence')
@@ -141,6 +166,25 @@ function AnswerCard({ answer }: { answer: StoredAnswer }) {
 				</div>
 			)}
 			<div className="answer-actions">
+				<button
+					type="button"
+					className={`answer-action ${vote === 'up' ? 'voted' : ''}`}
+					aria-label="Jawaban membantu"
+					aria-pressed={vote === 'up'}
+					onClick={() => setVote((v) => (v === 'up' ? null : 'up'))}
+				>
+					<ActionIcon d={ICON_UP} filled={vote === 'up'} />
+				</button>
+				<button
+					type="button"
+					className={`answer-action ${vote === 'down' ? 'voted' : ''}`}
+					aria-label="Jawaban kurang membantu"
+					aria-pressed={vote === 'down'}
+					onClick={() => setVote((v) => (v === 'down' ? null : 'down'))}
+				>
+					<ActionIcon d={ICON_DOWN} filled={vote === 'down'} />
+				</button>
+				<span className="answer-action-sep" aria-hidden="true" />
 				<button type="button" className="answer-action" onClick={copyPlain}>
 					<ActionIcon d={ICON_COPY} />
 					{copied ? 'Tersalin' : 'Salin'}
@@ -154,20 +198,15 @@ function AnswerCard({ answer }: { answer: StoredAnswer }) {
 	)
 }
 
-/** real follow-up prompts over the ingested corpus (fill the composer) */
-const FOLLOW_UPS = [
-	'Bagaimana hadits tentang amalan bergantung pada niat?',
-	'Apa kaidah la dharara wa la dhirar?',
-	'Bagaimana hukum riba dalam muamalah?',
-	"Apa rukun wudhu menurut QS Al-Ma'idah: 6?",
-]
-
-interface TurnSummary {
-	status: string
-	decision: string
-	claims: number
-	citations: number
-	sections: number
+/** assistant avatar: the AiFiqh star, on every assistant row */
+function AssistantAvatar() {
+	return (
+		<span className="msg-avatar" aria-hidden="true">
+			<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+				<path d="M12 2l2.4 5.3 5.6.8-4 4 1 5.9L12 15.6 6.9 18l1-5.9-4-4 5.6-.8L12 2z" />
+			</svg>
+		</span>
+	)
 }
 
 export function ChatContainer() {
@@ -258,6 +297,8 @@ export function ChatContainer() {
 			}
 			const result = (await res.json()) as {
 				status: string
+				provider?: string
+				model?: string
 				decision: { decision: string; rationale?: string }
 				answer: {
 					sections: Array<{ kind: string; markdown: string }>
@@ -310,6 +351,8 @@ export function ChatContainer() {
 				claims: result.answer?.claims.length ?? 0,
 				citations,
 				sections: result.answer?.sections.length ?? 0,
+				provider: result.provider ?? '',
+				model: result.model ?? '',
 			})
 
 			if (storedAnswer) {
@@ -367,72 +410,52 @@ export function ChatContainer() {
 			!chatState.messages.some((m) => m.role === 'user' && m.content === q),
 	)
 
-	const statusBadge = lastTurn
-		? lastTurn.status === 'answered'
-			? 'badge-ok'
-			: lastTurn.status === 'escalated'
-				? 'badge-warn'
-				: 'badge-neutral'
-		: 'badge-neutral'
+	const modelLine = lastTurn
+		? lastTurn.provider && lastTurn.provider !== 'builtin-compose'
+			? `Model aktif: ${lastTurn.provider} · ${lastTurn.model}`
+			: 'Model: penyusun deterministik (belum ada provider LLM aktif)'
+		: null
+
+	const statusLine = lastTurn
+		? `Keputusan ${lastTurn.decision} · ${lastTurn.claims} klaim · ${lastTurn.citations} rujukan`
+		: null
 
 	return (
-		<div className="chat-layout">
-			<div className="chat-container">
-				<ChatShell
-					state={chatState}
-					draft={draft}
-					onDraftChange={(val) => {
-						if (chatState.phase === 'error') {
-							setChatState((prev) => clearError(prev))
-						}
-						setDraft(val)
-					}}
-					onSubmit={handleSubmit}
-					onCancel={handleCancel}
-					renderMessage={(m) => {
-						const answer =
-							m.role === 'assistant' ? answersByMsg[m.id] : undefined
-						return answer ? <AnswerCard answer={answer} /> : null
-					}}
-				/>
-			</div>
-
-			<aside className="chat-rail" aria-label="Ringkasan jawaban">
-				<div className="rail-card">
-					<h4>Status Jawaban</h4>
-					{lastTurn ? (
-						<>
-							<span className={`badge ${statusBadge}`}>{lastTurn.status}</span>
-							<div className="rail-kv" style={{ marginTop: 10 }}>
-								<span>Keputusan</span>
-								<b>{lastTurn.decision}</b>
-							</div>
-							<div className="rail-kv">
-								<span>Klaim</span>
-								<b>{lastTurn.claims}</b>
-							</div>
-							<div className="rail-kv">
-								<span>Rujukan bukti</span>
-								<b>{lastTurn.citations}</b>
-							</div>
-							<div className="rail-kv">
-								<span>Bagian jawaban</span>
-								<b>{lastTurn.sections}</b>
-							</div>
-						</>
-					) : (
-						<p className="rail-disclaimer">
-							Belum ada giliran jawaban — ajukan pertanyaan untuk melihat
-							ringkasan bukti di sini.
+		<div className="chat-wrap">
+			<ChatShell
+				state={chatState}
+				draft={draft}
+				onDraftChange={(val) => {
+					if (chatState.phase === 'error') {
+						setChatState((prev) => clearError(prev))
+					}
+					setDraft(val)
+				}}
+				onSubmit={handleSubmit}
+				onCancel={handleCancel}
+				emptyState={
+					<div className="chat-greeting">
+						<span className="greet-icon" aria-hidden="true">
+							<svg
+								width="26"
+								height="26"
+								viewBox="0 0 24 24"
+								fill="currentColor"
+							>
+								<path d="M12 2l2.4 5.3 5.6.8-4 4 1 5.9L12 15.6 6.9 18l1-5.9-4-4 5.6-.8L12 2z" />
+							</svg>
+						</span>
+						<h3>Assalamu&rsquo;alaikum</h3>
+						<p>
+							Ada yang ingin Anda tanyakan seputar fiqih? Jawaban disusun hanya
+							dari Al-Qur&rsquo;an dan Hadits yang terverifikasi.
 						</p>
-					)}
-				</div>
-
-				<div className="rail-card">
-					<h4>Coba Tanyakan</h4>
-					{remainingFollowUps.length > 0 ? (
-						<div className="chip-row">
-							{remainingFollowUps.map((q) => (
+					</div>
+				}
+				composerExtra={
+					remainingFollowUps.length > 0 ? (
+						<div className="chip-row composer-chips">
+							{remainingFollowUps.slice(0, 3).map((q) => (
 								<button
 									key={q}
 									type="button"
@@ -443,23 +466,41 @@ export function ChatContainer() {
 								</button>
 							))}
 						</div>
-					) : (
-						<p className="rail-disclaimer">
-							Semua saran sudah pernah ditanyakan — lanjutkan dengan pertanyaan
-							Anda sendiri.
-						</p>
-					)}
-				</div>
-
-				<div className="rail-card">
-					<h4>Catatan</h4>
-					<p className="rail-disclaimer">
-						Setiap jawaban disusun HANYA dari bukti terpilih pada giliran ini
-						(Al-Qur'an ayat ahkam & Hadits Arba'in). Verifikasi kembali ke kitab
-						aslinya untuk keputusan formal.
-					</p>
-				</div>
-			</aside>
+					) : null
+				}
+				composerNote={
+					<div className="composer-meta">
+						{statusLine ? <span>{statusLine}</span> : null}
+						{modelLine ? <span className="model-line">{modelLine}</span> : null}
+						<span>
+							Jawaban berbasis Al-Qur&rsquo;an &amp; Hadits Arba&rsquo;in —
+							verifikasi ke kitab asli untuk keputusan formal.
+						</span>
+					</div>
+				}
+				renderMessage={(m) => {
+					if (m.role !== 'assistant') return null
+					const answer = answersByMsg[m.id]
+					if (answer) {
+						return (
+							<>
+								<AssistantAvatar />
+								<div className="msg-body">
+									<AnswerCard answer={answer} />
+								</div>
+							</>
+						)
+					}
+					return (
+						<>
+							<AssistantAvatar />
+							<div className="msg-body">
+								<MessageParagraphs text={m.content} />
+							</div>
+						</>
+					)
+				}}
+			/>
 		</div>
 	)
 }

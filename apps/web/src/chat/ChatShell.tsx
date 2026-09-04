@@ -47,6 +47,12 @@ export function ChatShell(props: {
 	onDraftChange: (draft: string) => void
 	onSubmit: () => void
 	onCancel: () => void
+	/** rendered inside the message area when the thread is empty */
+	emptyState?: React.ReactNode
+	/** rendered above the composer (suggestion chips, hints) */
+	composerExtra?: React.ReactNode
+	/** rendered under the composer (model info, disclaimers) */
+	composerNote?: React.ReactNode
 	/** optional custom body for specific finished messages */
 	renderMessage?: (message: {
 		id: string
@@ -55,8 +61,17 @@ export function ChatShell(props: {
 		answerStatus?: string | null
 	}) => React.ReactNode
 }) {
-	const { state, draft, onDraftChange, onSubmit, onCancel, renderMessage } =
-		props
+	const {
+		state,
+		draft,
+		onDraftChange,
+		onSubmit,
+		onCancel,
+		emptyState,
+		composerExtra,
+		composerNote,
+		renderMessage,
+	} = props
 	return (
 		<section aria-label="Percakapan fiqih" className="chat-shell">
 			<div aria-live="polite" aria-atomic="false" className="chat-live">
@@ -64,6 +79,11 @@ export function ChatShell(props: {
 			</div>
 
 			<ol className="chat-messages">
+				{state.messages.length === 0 && emptyState ? (
+					<li className="chat-empty" data-testid="chat-empty">
+						{emptyState}
+					</li>
+				) : null}
 				{state.messages.map((m) => {
 					const custom = renderMessage?.(m)
 					return (
@@ -78,7 +98,20 @@ export function ChatShell(props: {
 				})}
 				{state.streaming ? (
 					<li data-role="assistant" data-streaming="true">
-						<MessageParagraphs text={state.streaming.text} />
+						<span className="msg-avatar" aria-hidden="true">
+							<svg
+								width="16"
+								height="16"
+								viewBox="0 0 24 24"
+								fill="currentColor"
+								aria-hidden="true"
+							>
+								<path d="M12 2l2.4 5.3 5.6.8-4 4 1 5.9L12 15.6 6.9 18l1-5.9-4-4 5.6-.8L12 2z" />
+							</svg>
+						</span>
+						<div className="msg-body">
+							<MessageParagraphs text={state.streaming.text} />
+						</div>
 					</li>
 				) : null}
 			</ol>
@@ -101,43 +134,65 @@ export function ChatShell(props: {
 					onSubmit()
 				}}
 			>
-				<label htmlFor="chat-draft">Pertanyaan</label>
-				<textarea
-					id="chat-draft"
-					value={draft}
-					onChange={(e) => onDraftChange(e.target.value)}
-					onKeyDown={(e) => {
-						if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-							e.preventDefault()
-							onSubmit()
-						}
-					}}
-					rows={3}
-					placeholder="Tanyakan pertanyaan fiqih di sini…"
-				/>
-				{state.phase === 'streaming' ? (
-					<button type="button" onClick={onCancel}>
-						Hentikan
-					</button>
-				) : (
-					<button type="submit" disabled={draft.trim().length === 0}>
-						<svg
-							width="15"
-							height="15"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth="2"
-							strokeLinecap="round"
-							strokeLinejoin="round"
-							aria-hidden="true"
+				{composerExtra}
+				<div className="composer-bar">
+					<label htmlFor="chat-draft" className="sr-only">
+						Pertanyaan
+					</label>
+					<textarea
+						id="chat-draft"
+						value={draft}
+						onChange={(e) => onDraftChange(e.target.value)}
+						onKeyDown={(e) => {
+							if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+								e.preventDefault()
+								onSubmit()
+							}
+						}}
+						rows={2}
+						placeholder="Tanyakan pertanyaan fiqih di sini…"
+					/>
+					{state.phase === 'streaming' ? (
+						<button type="button" className="send-btn" onClick={onCancel}>
+							<svg
+								width="14"
+								height="14"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2"
+								strokeLinecap="round"
+								aria-hidden="true"
+							>
+								<path d="M6 6l12 12M18 6L6 18" />
+							</svg>
+							Hentikan
+						</button>
+					) : (
+						<button
+							type="submit"
+							className="send-btn send-go"
+							aria-label="Kirim"
+							disabled={draft.trim().length === 0}
 						>
-							<path d="M22 2 11 13" />
-							<path d="M22 2 15 22l-4-9-9-4 20-7z" />
-						</svg>
-						Kirim
-					</button>
-				)}
+							<svg
+								width="16"
+								height="16"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+								aria-hidden="true"
+							>
+								<path d="M22 2 11 13" />
+								<path d="M22 2 15 22l-4-9-9-4 20-7z" />
+							</svg>
+						</button>
+					)}
+				</div>
+				{composerNote}
 			</form>
 		</section>
 	)

@@ -517,19 +517,23 @@ body {
 }
 
 /* ==========================================================================
-   Chat (CHAT-002/003) — bubble thread + composer + right rail
+   Chat (CHAT-002/003) — centered conversation column (AiFiqh reference)
    ========================================================================== */
-.chat-layout {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) 300px;
-	gap: 20px;
-	align-items: start;
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	white-space: nowrap;
+	border: 0;
 }
 
-@media (max-width: 1020px) {
-	.chat-layout {
-		grid-template-columns: 1fr;
-	}
+.chat-wrap {
+	max-width: 800px;
+	margin: 0 auto;
 }
 
 .chat-loading {
@@ -551,7 +555,7 @@ body {
 	overflow: hidden;
 	/* the shell owns the viewport height so the composer stays pinned at
 	   its bottom — only the message list scrolls */
-	height: calc(100vh - 200px);
+	height: calc(100vh - 190px);
 	min-height: 540px;
 }
 
@@ -570,18 +574,16 @@ body {
 .chat-messages {
 	list-style: none;
 	margin: 0;
-	padding: 22px;
+	padding: 26px 26px 18px;
 	display: flex;
 	flex-direction: column;
-	gap: 16px;
+	gap: 18px;
 	flex: 1;
 	overflow-y: auto;
+	scroll-behavior: smooth;
 }
 
 .chat-messages li {
-	max-width: 86%;
-	padding: 12px 16px;
-	border-radius: 16px;
 	animation: msg-in 0.18s ease;
 }
 
@@ -596,28 +598,52 @@ body {
 	}
 }
 
+/* user: light-green bubble, right-aligned */
 .chat-messages li[data-role="user"] {
 	align-self: flex-end;
+	max-width: 78%;
 	background: var(--primary-soft);
 	border: 1px solid var(--primary-border);
 	color: var(--text);
-	border-bottom-right-radius: 6px;
+	padding: 11px 16px;
+	border-radius: 18px 18px 4px 18px;
 }
 
+/* assistant: avatar + content directly on white (reference layout) */
 .chat-messages li[data-role="assistant"] {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
 	align-self: stretch;
 	max-width: 100%;
-	background: var(--surface);
-	border: 1px solid var(--border);
-	border-bottom-left-radius: 6px;
-	box-shadow: var(--shadow-sm);
+}
+
+.msg-avatar {
+	flex: none;
+	width: 34px;
+	height: 34px;
+	border-radius: 50%;
+	background: linear-gradient(160deg, #0f8468, #0b5f4e);
+	color: #fff;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	margin-top: 2px;
+}
+
+.msg-body {
+	flex: 1;
+	min-width: 0;
 }
 
 /* non-answered decisions (abstain / escalated) read as caution cards */
-.chat-messages li[data-role="assistant"][data-status="abstain"],
-.chat-messages li[data-role="assistant"][data-status="escalated"] {
+.chat-messages li[data-role="assistant"][data-status="abstain"] .msg-body,
+.chat-messages li[data-role="assistant"][data-status="escalated"] .msg-body {
 	background: var(--warn-soft);
-	border-color: #f2ddb0;
+	border: 1px solid #f2ddb0;
+	border-radius: 12px;
+	padding: 12px 16px;
+	color: var(--warn);
 }
 
 .chat-messages li[data-role="assistant"] p[dir="rtl"] {
@@ -640,7 +666,7 @@ body {
 }
 
 .chat-messages li p {
-	margin: 4px 0;
+	margin: 5px 0;
 }
 
 .chat-messages li p:first-child {
@@ -651,9 +677,50 @@ body {
 	margin-bottom: 0;
 }
 
+/* empty-thread greeting */
+.chat-empty {
+	align-self: center;
+	margin: auto;
+	text-align: center;
+}
+
+.chat-greeting {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	padding: 30px 20px;
+	max-width: 420px;
+}
+
+.greet-icon {
+	width: 52px;
+	height: 52px;
+	border-radius: 50%;
+	background: var(--primary-soft);
+	color: var(--primary-strong);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	margin-bottom: 6px;
+}
+
+.chat-greeting h3 {
+	margin: 0;
+	font-size: 20px;
+	font-weight: 800;
+}
+
+.chat-greeting p {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: 14px;
+	line-height: 1.6;
+}
+
 .chat-note,
 .chat-error {
-	margin: 0 22px 14px;
+	margin: 0 26px 14px;
 	padding: 10px 14px;
 	border-radius: 10px;
 	font-size: 13px;
@@ -671,117 +738,105 @@ body {
 	color: var(--danger);
 }
 
+/* --- composer: suggestion chips + rounded bar + circular send ------------ */
 .chat-composer {
 	border-top: 1px solid var(--border);
-	padding: 16px 22px 18px;
+	padding: 12px 26px 14px;
 	background: var(--surface);
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
 }
 
-.chat-composer label {
-	display: block;
-	font-size: 12px;
-	font-weight: 600;
-	color: var(--text-faint);
-	text-transform: uppercase;
-	letter-spacing: 0.06em;
-	margin-bottom: 8px;
+.composer-chips {
+	padding-bottom: 2px;
 }
 
-.chat-composer textarea {
-	width: 100%;
-	border: 1px solid var(--border);
-	border-radius: 14px;
+.composer-bar {
+	display: flex;
+	align-items: flex-end;
+	gap: 10px;
 	background: var(--bg);
-	padding: 12px 14px;
-	font: inherit;
-	font-size: 14.5px;
-	color: var(--text);
-	resize: vertical;
-	min-height: 74px;
+	border: 1px solid var(--border);
+	border-radius: 18px;
+	padding: 10px 10px 10px 16px;
 	transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.chat-composer textarea:focus {
-	outline: none;
-	background: #fff;
+.composer-bar:focus-within {
 	border-color: var(--primary);
 	box-shadow: 0 0 0 3px rgba(14, 122, 99, 0.12);
 }
 
-.chat-composer button {
-	display: inline-flex;
-	align-items: center;
-	gap: 8px;
-	margin-top: 10px;
+.composer-bar textarea {
+	flex: 1;
 	border: none;
-	background: linear-gradient(160deg, #0f8468, #0b5f4e);
-	color: #fff;
-	font-weight: 700;
-	font-size: 14px;
-	padding: 10px 22px;
-	border-radius: 12px;
-	cursor: pointer;
-	box-shadow: var(--shadow-md);
-	transition: transform 0.12s ease, filter 0.15s ease;
+	background: transparent;
+	padding: 8px 0;
+	font: inherit;
+	font-size: 14.5px;
+	color: var(--text);
+	resize: none;
+	min-height: 44px;
+	max-height: 140px;
+	outline: none;
 }
 
-.chat-composer button:hover:not(:disabled) {
-	filter: brightness(1.06);
+.send-btn {
+	flex: none;
+	width: 42px;
+	height: 42px;
+	border: none;
+	border-radius: 50%;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	background: var(--border-soft);
+	color: var(--text-faint);
+	transition: all 0.15s ease;
+}
+
+.send-btn.send-go {
+	background: linear-gradient(160deg, #0f8468, #0b5f4e);
+	color: #fff;
+	box-shadow: var(--shadow-md);
+}
+
+.send-btn.send-go:hover:not(:disabled) {
+	filter: brightness(1.08);
 	transform: translateY(-1px);
 }
 
-.chat-composer button:disabled {
-	opacity: 0.45;
+.send-btn.send-go:disabled {
+	opacity: 0.4;
 	cursor: not-allowed;
 	box-shadow: none;
 }
 
-/* --- chat right rail ---------------------------------------------------- */
-.chat-rail {
-	display: flex;
-	flex-direction: column;
-	gap: 16px;
-	position: sticky;
-	top: 84px;
-}
-
-.rail-card {
-	background: var(--surface);
-	border: 1px solid var(--border);
-	border-radius: var(--r-lg);
-	box-shadow: var(--shadow-sm);
-	padding: 16px 18px;
-}
-
-.rail-card h4 {
-	margin: 0 0 10px;
-	font-size: 12px;
-	font-weight: 700;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-	color: var(--text-faint);
-}
-
-.rail-kv {
-	display: flex;
-	justify-content: space-between;
-	font-size: 13.5px;
-	padding: 5px 0;
-}
-
-.rail-kv span {
-	color: var(--text-muted);
-}
-
-.rail-kv b {
+/* cancel state keeps a labeled pill so it stays obvious */
+.send-btn:not(.send-go) {
+	width: auto;
+	padding: 0 16px;
+	gap: 6px;
+	background: var(--warn-soft);
+	color: var(--warn);
+	font-size: 13px;
 	font-weight: 700;
 }
 
-.rail-disclaimer {
-	font-size: 12px;
+.composer-meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 14px;
+	font-size: 11.5px;
 	color: var(--text-faint);
-	line-height: 1.55;
-	margin: 10px 0 0;
+	line-height: 1.5;
+}
+
+.composer-meta .model-line {
+	color: var(--primary);
+	font-weight: 600;
 }
 
 .badge {
@@ -1795,14 +1850,15 @@ h2 {
 .answer-action {
 	display: inline-flex;
 	align-items: center;
+	justify-content: center;
 	gap: 6px;
 	border: none;
 	background: none;
 	color: var(--text-faint);
 	font-size: 12.5px;
 	font-weight: 600;
-	padding: 6px 10px;
-	border-radius: 8px;
+	padding: 7px;
+	border-radius: 999px;
 	cursor: pointer;
 	transition: background 0.15s ease, color 0.15s ease;
 }
@@ -1812,9 +1868,23 @@ h2 {
 	color: var(--primary-strong);
 }
 
-/* composer submit — pill with send icon */
-.chat-composer button {
-	border-radius: 999px;
+/* icon-only vote buttons get a rounder, slightly larger hit area */
+.answer-action[aria-label] {
+	width: 32px;
+	height: 32px;
+	padding: 0;
+}
+
+.answer-action.voted {
+	background: var(--primary-soft);
+	color: var(--primary-strong);
+}
+
+.answer-action-sep {
+	width: 1px;
+	height: 18px;
+	background: var(--border);
+	margin: 0 4px;
 }
 
 /* ==========================================================================
