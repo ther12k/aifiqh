@@ -233,8 +233,9 @@ export async function generateGroundedAnswer(
 	// runs even when schema validation already failed so callers see every
 	// problem at once
 	if (validation.answer) {
+		const candidate = validation.answer
 		const unknownIds: string[] = []
-		for (const claim of validation.answer.claims) {
+		for (const claim of candidate.claims) {
 			for (const link of claim.evidence) {
 				if (!evidenceIds.has(link.evidenceId)) {
 					unknownIds.push(link.evidenceId)
@@ -248,19 +249,15 @@ export async function generateGroundedAnswer(
 				message: `evidence id ${id} is not part of the pinned context manifest`,
 			})
 		}
-		if (unknownIds.length > 0) {
-			validation.ok = false
-			validation.answer = null
-		}
 
 		// citation-integrity gate (VAL-002 at generation time): a "direct"
 		// link claims a verbatim quote — when evidence texts are available
 		// the quote MUST appear in the cited unit text (exact or under the
 		// controlled normalization). A real reference with a fabricated or
 		// altered quote is a failed answer, never a cited one.
+		const quoteIssues: SchemaIssue[] = []
 		if (input.evidenceTexts) {
-			const quoteIssues: SchemaIssue[] = []
-			for (const claim of validation.answer.claims) {
+			for (const claim of candidate.claims) {
 				for (const link of claim.evidence) {
 					if (link.relation !== 'direct') continue
 					const quote = link.quote?.trim()
@@ -280,11 +277,12 @@ export async function generateGroundedAnswer(
 					}
 				}
 			}
-			if (quoteIssues.length > 0) {
-				validation.issues.push(...quoteIssues)
-				validation.ok = false
-				validation.answer = null
-			}
+			validation.issues.push(...quoteIssues)
+		}
+
+		if (unknownIds.length > 0 || quoteIssues.length > 0) {
+			validation.ok = false
+			validation.answer = null
 		}
 	}
 
