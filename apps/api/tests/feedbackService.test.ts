@@ -13,6 +13,7 @@ import { buildApp } from '../src/app'
 import { newCsrfToken, signSession } from '../src/auth/session'
 import { issueSession } from '../src/auth/sessionStore'
 import { loadConfig } from '../src/config'
+import { scopedTransaction } from '../src/db/client'
 import { createLogger } from '../src/logger'
 import { ensureMigrations } from './dbBootstrap'
 
@@ -380,5 +381,38 @@ describe('CHAT-006: categorized feedback linked to answer + revisions', () => {
 			new Request('http://localhost/feedback/summary', { headers: auth }),
 		)
 		expect(summary.status).toBe(200)
+	})
+
+	test('RLS contract: app-role feedback requires tenant context (route must wrap)', async () => {
+		// regression: the HTTP route originally called submitFeedback with the
+		// app-role client OUTSIDE scopedTransaction — FORCE RLS on
+		// conversations hid the row and every submission 404'd.
+		const f = await setupFixture()
+		const appUrl = DB_URL.replace(/:\/\/[^@]+@/, '://aifiqh_app:aifiqh_app@')
+		const appSql = postgres(appUrl, { max: 1 })
+
+		// without tenant context: fail closed
+		let withoutCtx: FE | undefined
+		try {
+			await submitFeedback(appSql, f.principal, {
+				messageId: f.assistantMessageId,
+				category: 'helpful',
+			})
+		} catch (e) {
+			withoutCtx = e instanceof FE ? e : undefined
+		}
+		expect(withoutCtx?.code).toBe('MESSAGE_NOT_FOUND')
+
+		// with the route-equivalent wrapper: succeeds
+		const record = await scopedTransaction(appSql, f.principal.tenantId, (tx) =>
+			submitFeedback(tx, f.principal, {
+				messageId: f.assistantMessageId,
+				category: 'doctrinal_issue',
+				details: 'rls regression',
+			}),
+		)
+		expect(record.messageId).toBe(f.assistantMessageId)
+		expect(record.category).toBe('doctrinal_issue')
+		await appSql.end({ timeout: 1 })
 	})
 })

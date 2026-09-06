@@ -15,7 +15,9 @@ const proxy: Record<string, ProxyOptions> = {
 	'/ops': apiTarget,
 	'/eval': apiTarget,
 	'/conversations': apiTarget,
+	'/messages': apiTarget,
 	'/answers': apiTarget,
+	'/feedback': apiTarget,
 }
 
 export default defineConfig({

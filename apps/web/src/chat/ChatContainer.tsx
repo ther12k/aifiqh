@@ -40,6 +40,9 @@ interface AnswerSection {
 
 /** per-message structured answer (keyed by assistant message id) */
 interface StoredAnswer {
+	/** the SERVER-assisted message id — feedback targets this, never the
+	 * client's optimistic placeholder id */
+	serverMessageId: string
 	sections: AnswerSection[]
 	/** plain text for copy/share — section texts joined, no decorations */
 	plain: string
@@ -158,7 +161,8 @@ function AnswerCard({
 	async function submitFeedback(category: string, citationRef?: string) {
 		setFeedbackState('sending')
 		try {
-			const res = await fetch(`/messages/${messageId}/feedback`, {
+			const target = answer.serverMessageId || messageId
+			const res = await fetch(`/messages/${target}/feedback`, {
 				method: 'POST',
 				headers: {
 					'content-type': 'application/json',
@@ -460,6 +464,7 @@ export function ChatContainer() {
 			}
 			const result = (await res.json()) as {
 				status: string
+				assistantMessageId?: string
 				provider?: string
 				model?: string
 				citations?: TurnCitation[]
@@ -496,6 +501,7 @@ export function ChatContainer() {
 					'Jawaban ditemukan.'
 				if (sections.length > 0) {
 					storedAnswer = {
+						serverMessageId: result.assistantMessageId ?? assistantMsgId,
 						sections,
 						plain: sections.map((s) => s.text).join('\n\n'),
 						citations: result.citations ?? [],

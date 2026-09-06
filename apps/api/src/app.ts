@@ -1872,12 +1872,16 @@ function sourceRoutes(deps: AppDeps) {
 					return { error: 'CATEGORY_REQUIRED', message: 'category is required' }
 				}
 				try {
-					return await submitFeedback(sql, principal, {
-						messageId: ctx.params.id,
-						category,
-						details: bodyStr(body.details),
-						citationRef: bodyStr(body.citationRef),
-					})
+					// feedback reads conversations/messages under RLS — must run
+					// with the tenant context set or the join sees zero rows
+					return await scopedTransaction(sql, principal.tenantId, (tx) =>
+						submitFeedback(tx, principal, {
+							messageId: ctx.params.id,
+							category,
+							details: bodyStr(body.details),
+							citationRef: bodyStr(body.citationRef),
+						}),
+					)
 				} catch (err) {
 					if (err instanceof FeedbackError) {
 						ctx.set.status =
@@ -1894,12 +1898,16 @@ function sourceRoutes(deps: AppDeps) {
 			.get('/answers/:id/feedback', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
 				const principal = await ctx.requirePermission('knowledge:read')
-				return listAnswerFeedback(sql, principal, ctx.params.id)
+				return scopedTransaction(sql, principal.tenantId, (tx) =>
+					listAnswerFeedback(tx, principal, ctx.params.id),
+				)
 			})
 			.get('/feedback/summary', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
 				const principal = await ctx.requirePermission('knowledge:read')
-				return feedbackCategoryCounts(sql, principal)
+				return scopedTransaction(sql, principal.tenantId, (tx) =>
+					feedbackCategoryCounts(tx, principal),
+				)
 			})
 			.get('/conversations/:id', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
