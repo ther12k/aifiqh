@@ -76,7 +76,11 @@ export function authPlugin(deps: AuthDeps) {
 					cfg.sessionTtlSeconds,
 					false,
 				),
-				csrfCookieHeader(newCsrfToken(), cfg.sessionTtlSeconds, false),
+				csrfCookieHeader(
+					newCsrfToken(cfg.sessionSecret),
+					cfg.sessionTtlSeconds,
+					false,
+				),
 			]
 			const redirect = url.searchParams.get('redirect') ?? '/'
 			set.headers.location = redirect
@@ -165,7 +169,11 @@ export function authPlugin(deps: AuthDeps) {
 						cfg.sessionTtlSeconds,
 						secure,
 					),
-					csrfCookieHeader(newCsrfToken(), cfg.sessionTtlSeconds, secure),
+					csrfCookieHeader(
+						newCsrfToken(cfg.sessionSecret),
+						cfg.sessionTtlSeconds,
+						secure,
+					),
 				]
 				set.headers.location = '/'
 				set.status = 302
@@ -184,7 +192,11 @@ export function authPlugin(deps: AuthDeps) {
 			// a valid session may only be cleared with the matching CSRF token
 			if (
 				session &&
-				!verifyCsrf(request.headers.get('x-csrf-token'), cookies.aifiqh_csrf)
+				!verifyCsrf(
+					request.headers.get('x-csrf-token'),
+					cookies.aifiqh_csrf,
+					cfg.sessionSecret,
+				)
 			) {
 				set.status = 403
 				return { error: 'forbidden', reasonCode: 'CSRF_TOKEN_INVALID' }

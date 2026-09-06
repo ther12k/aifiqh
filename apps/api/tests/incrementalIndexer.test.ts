@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from 'bun:test'
 import postgres from 'postgres'
 import { buildApp } from '../src/app'
-import { signSession } from '../src/auth/session'
+import { newCsrfToken, signSession } from '../src/auth/session'
 import { issueSession } from '../src/auth/sessionStore'
 import { loadConfig } from '../src/config'
 import { compileIncrementalIndexRelease } from '../src/index/incrementalIndexer'
@@ -102,10 +102,11 @@ async function authHeaders(userId: string, tenantId: string, withCsrf = false) {
 		},
 		cfg.sessionSecret,
 	)
+	const csrfToken = newCsrfToken(cfg.sessionSecret)
 	const headers: Record<string, string> = {
-		cookie: `aifiqh_session=${token}; aifiqh_csrf=t-csrf`,
+		cookie: `aifiqh_session=${token}; aifiqh_csrf=${csrfToken}`,
 	}
-	if (withCsrf) headers['x-csrf-token'] = 't-csrf'
+	if (withCsrf) headers['x-csrf-token'] = csrfToken
 	return headers
 }
 

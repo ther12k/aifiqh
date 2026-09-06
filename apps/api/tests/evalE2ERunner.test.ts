@@ -3,7 +3,7 @@ import type { Principal } from '@aifiqh/shared'
 import postgres from 'postgres'
 import type { TurnResult } from '../src/answers/chatService'
 import { buildApp } from '../src/app'
-import { signSession } from '../src/auth/session'
+import { newCsrfToken, signSession } from '../src/auth/session'
 import { issueSession } from '../src/auth/sessionStore'
 import { loadConfig } from '../src/config'
 import {
@@ -120,6 +120,14 @@ function turn(overrides: Partial<TurnResult>): TurnResult {
 		status: 'abstained',
 		provider: '',
 		model: '',
+		verification: {
+			answerStatus: 'abstained',
+			citationIntegrity: 'not_applicable',
+			claimSupport: 'not_assessed',
+			scholarlyReview: 'not_reviewed',
+			userOutcome: 'insufficient_evidence',
+		},
+		citations: [],
 		...overrides,
 	}
 }
@@ -515,9 +523,10 @@ describe('EVAL-004 HTTP surface', () => {
 			},
 			cfg.sessionSecret,
 		)
+		const csrfToken = newCsrfToken(cfg.sessionSecret)
 		const headers = {
-			cookie: `aifiqh_session=${token}; aifiqh_csrf=t-csrf`,
-			'x-csrf-token': 't-csrf',
+			cookie: `aifiqh_session=${token}; aifiqh_csrf=${csrfToken}`,
+			'x-csrf-token': csrfToken,
 			'content-type': 'application/json',
 		}
 		const res = await testApp.handle(

@@ -43,7 +43,40 @@ interface StoredAnswer {
 	sections: AnswerSection[]
 	/** plain text for copy/share — section texts joined, no decorations */
 	plain: string
+	/** canonical citations from the turn — the evidence panel reads these */
+	citations: TurnCitation[]
+	/** layered verification status from the API */
+	verification: TurnVerification
 }
+
+/** citation row from the turn API (span-scoped, quote verified) */
+interface TurnCitation {
+	ordinal: number
+	sourceId: string
+	sourceRevisionId: string
+	spanId: string
+	quote: string
+}
+
+/** mirrors apps/api/src/answers/answerStatus.ts */
+interface TurnVerification {
+	answerStatus: string
+	citationIntegrity: 'passed' | 'failed' | 'not_applicable'
+	claimSupport: string
+	scholarlyReview: string
+	userOutcome: string
+}
+
+/** feedback categories the API accepts (feedbackService FEEDBACK_CATEGORIES) */
+const FEEDBACK_REASONS: Array<{
+	category: string
+	label: string
+}> = [
+	{ category: 'citation_issue', label: 'Salah rujukan' },
+	{ category: 'doctrinal_issue', label: 'Kesimpulan tidak didukung dalil' },
+	{ category: 'translation_issue', label: 'Terjemahan/teks keliru' },
+	{ category: 'other', label: 'Penjelasan kurang jelas' },
+]
 
 interface TurnSummary {
 	status: string
@@ -82,17 +115,63 @@ const ICON_UP =
 const ICON_DOWN =
 	'M17 14V4h3v10h-3zm-3-10H7a2 2 0 0 0-2 1.7l-1 6A2 2 0 0 0 6 14h5l-1 5a2 2 0 0 0 3.4 1.8L14 17V4z'
 
+const VERIFY_LABELS: Record<string, string> = {
+	passed: 'integritas kutipan lulus',
+	failed: 'integritas kutipan GAGAL',
+	not_applicable: 'tanpa kutipan',
+	automated_check_passed: 'dukungan klaim: pemeriksaan otomatis lulus',
+	not_assessed: 'dukungan klaim: tidak dinilai',
+	not_reviewed: 'belum ditinjau ulama',
+}
+
+function csrfToken(): string {
+	const match = document.cookie.match(/(?:^|;\s*)aifiqh_csrf=([^;]+)/)
+	return match ? decodeURIComponent(match[1]) : ''
+}
+
 /**
  * Structured answer card: the direct answer up front, evidence under an
- * explicit label, the remaining sections behind an honest expand toggle,
- * and real copy/share/feedback actions. Content is rendered verbatim —
- * the card only re-organizes what the API produced. Votes are session-
- * local until a feedback API persists them — never displayed as counts.
+ * explicit label, the remaining sections behind an honest expand toggle.
+ * The evidence panel lists the actual citations (quote + span) and every
+ * layer of the verification contract is shown SEPARATELY — a checked
+ * reference is never presented as scholarly review. Thumbs-up persists as
+ * 'helpful'; thumbs-down asks WHY (wrong reference / unsupported
+ * conclusion / bad translation / unclear) and persists via the feedback
+ * API, so reviewers receive a reason, not just a vote.
  */
-function AnswerCard({ answer }: { answer: StoredAnswer }) {
+function AnswerCard({
+	answer,
+	messageId,
+}: {
+	answer: StoredAnswer
+	messageId: string
+}) {
 	const [expanded, setExpanded] = useState(false)
+	const [citationsOpen, setCitationsOpen] = useState(false)
 	const [copied, setCopied] = useState(false)
 	const [vote, setVote] = useState<'up' | 'down' | null>(null)
+	const [rejecting, setRejecting] = useState(false)
+	const [feedbackState, setFeedbackState] = useState<
+		'idle' | 'sending' | 'sent' | 'error'
+	>('idle')
+
+	async function submitFeedback(category: string, citationRef?: string) {
+		setFeedbackState('sending')
+		try {
+			const res = await fetch(`/messages/${messageId}/feedback`, {
+				method: 'POST',
+				headers: {
+					'content-type': 'application/json',
+					'x-csrf-token': csrfToken(),
+				},
+				body: JSON.stringify({ category, citationRef }),
+			})
+			setFeedbackState(res.ok ? 'sent' : 'error')
+			if (res.ok) setRejecting(false)
+		} catch {
+			setFeedbackState('error')
+		}
+	}
 
 	const direct = answer.sections.filter((s) => s.kind === 'direct_answer')
 	const evidence = answer.sections.filter((s) => s.kind === 'evidence')
@@ -141,6 +220,38 @@ function AnswerCard({ answer }: { answer: StoredAnswer }) {
 					))}
 				</div>
 			)}
+			{answer.citations.length > 0 && (
+				<div className="answer-citations" data-testid="answer-citations">
+					<button
+						type="button"
+						className="answer-toggle"
+						aria-expanded={citationsOpen}
+						onClick={() => setCitationsOpen((v) => !v)}
+					>
+						{`Bukti yang dikutip (${answer.citations.length})`}
+						<span className="toggle-caret" aria-hidden="true">
+							{citationsOpen ? '‹' : '›'}
+						</span>
+					</button>
+					{citationsOpen && (
+						<ol className="citation-list">
+							{answer.citations.map((c) => (
+								<li key={c.spanId} data-testid="citation-row">
+									<span className="citation-ordinal">[{c.ordinal}]</span>
+									<MessageParagraphs text={c.quote} />
+									<button
+										type="button"
+										className="citation-report"
+										onClick={() => submitFeedback('citation_issue', c.spanId)}
+									>
+										Rujukan salah?
+									</button>
+								</li>
+							))}
+						</ol>
+					)}
+				</div>
+			)}
 			{extra.length > 0 && (
 				<div className="answer-extra">
 					<button
@@ -171,7 +282,11 @@ function AnswerCard({ answer }: { answer: StoredAnswer }) {
 					className={`answer-action ${vote === 'up' ? 'voted' : ''}`}
 					aria-label="Jawaban membantu"
 					aria-pressed={vote === 'up'}
-					onClick={() => setVote((v) => (v === 'up' ? null : 'up'))}
+					onClick={() => {
+						const next = vote === 'up' ? null : 'up'
+						setVote(next)
+						if (next === 'up') void submitFeedback('helpful')
+					}}
 				>
 					<ActionIcon d={ICON_UP} filled={vote === 'up'} />
 				</button>
@@ -179,8 +294,8 @@ function AnswerCard({ answer }: { answer: StoredAnswer }) {
 					type="button"
 					className={`answer-action ${vote === 'down' ? 'voted' : ''}`}
 					aria-label="Jawaban kurang membantu"
-					aria-pressed={vote === 'down'}
-					onClick={() => setVote((v) => (v === 'down' ? null : 'down'))}
+					aria-expanded={rejecting}
+					onClick={() => setRejecting((r) => !r)}
 				>
 					<ActionIcon d={ICON_DOWN} filled={vote === 'down'} />
 				</button>
@@ -194,6 +309,48 @@ function AnswerCard({ answer }: { answer: StoredAnswer }) {
 					Bagikan
 				</button>
 			</div>
+			{rejecting && vote === null && (
+				<div className="reject-reasons" data-testid="reject-reasons">
+					<span className="reject-title">Apa masalahnya?</span>
+					<div className="chip-row">
+						{FEEDBACK_REASONS.map((r) => (
+							<button
+								key={r.category}
+								type="button"
+								className="chip"
+								disabled={feedbackState === 'sending'}
+								onClick={() => {
+									setVote('down')
+									void submitFeedback(r.category)
+								}}
+							>
+								{r.label}
+							</button>
+						))}
+					</div>
+				</div>
+			)}
+			{feedbackState === 'sent' && (
+				<output className="feedback-note" data-testid="feedback-sent">
+					Terima kasih — laporan Anda masuk ke antrean tinjauan.
+				</output>
+			)}
+			{feedbackState === 'error' && (
+				<output className="feedback-note feedback-error">
+					Gagal mengirim masukan. Coba lagi.
+				</output>
+			)}
+			{answer.verification && (
+				<p className="verification-line" data-testid="verification-line">
+					{[
+						VERIFY_LABELS[answer.verification.citationIntegrity],
+						VERIFY_LABELS[answer.verification.claimSupport],
+						VERIFY_LABELS[answer.verification.scholarlyReview],
+					]
+						.filter(Boolean)
+						.join(' · ')}
+				</p>
+			)}
 		</div>
 	)
 }
@@ -305,6 +462,8 @@ export function ChatContainer() {
 				status: string
 				provider?: string
 				model?: string
+				citations?: TurnCitation[]
+				verification?: TurnVerification
 				decision: { decision: string; rationale?: string }
 				answer: {
 					sections: Array<{ kind: string; markdown: string }>
@@ -339,6 +498,14 @@ export function ChatContainer() {
 					storedAnswer = {
 						sections,
 						plain: sections.map((s) => s.text).join('\n\n'),
+						citations: result.citations ?? [],
+						verification: result.verification ?? {
+							answerStatus: result.status,
+							citationIntegrity: 'not_applicable',
+							claimSupport: 'not_assessed',
+							scholarlyReview: 'not_reviewed',
+							userOutcome: 'answered',
+						},
 					}
 				}
 			} else {
@@ -493,7 +660,7 @@ export function ChatContainer() {
 							<>
 								<AssistantAvatar />
 								<div className="msg-body">
-									<AnswerCard answer={answer} />
+									<AnswerCard answer={answer} messageId={m.id} />
 								</div>
 							</>
 						)

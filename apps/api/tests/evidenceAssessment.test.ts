@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test } from 'bun:test'
 import type { Principal } from '@aifiqh/shared'
 import postgres from 'postgres'
 import { buildApp } from '../src/app'
-import { signSession } from '../src/auth/session'
+import { newCsrfToken, signSession } from '../src/auth/session'
 import { issueSession } from '../src/auth/sessionStore'
 import { loadConfig } from '../src/config'
 import { compileIndexRelease } from '../src/index/indexCompiler'
@@ -342,12 +342,13 @@ describe('EVD-004: assessment from pipeline + storage', () => {
 			},
 			cfg.sessionSecret,
 		)
+		const csrfToken = newCsrfToken(cfg.sessionSecret)
 		const res = await testApp.handle(
 			new Request('http://localhost/retrieval/search', {
 				method: 'POST',
 				headers: {
-					cookie: `aifiqh_session=${token}; aifiqh_csrf=t-csrf`,
-					'x-csrf-token': 't-csrf',
+					cookie: `aifiqh_session=${token}; aifiqh_csrf=${csrfToken}`,
+					'x-csrf-token': csrfToken,
 					'content-type': 'application/json',
 				},
 				body: JSON.stringify({

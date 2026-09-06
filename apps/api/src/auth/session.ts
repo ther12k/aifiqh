@@ -52,12 +52,17 @@ export function clearSessionCookieHeader(): string {
 }
 
 /**
- * CSRF double-submit token: a random value in a JS-readable cookie that
- * must be echoed in the x-csrf-token header on state-changing requests.
- * Complements SameSite=Lax (which already blocks most cross-site posts).
+ * CSRF double-submit token, session-secret-bound (OWASP signed variant):
+ * the cookie carries `<random>.<hmac(random, sessionSecret)>` and the
+ * x-csrf-token header must present the SAME value. A forged or replayed
+ * pair fails because the attacker cannot compute the HMAC, and the check
+ * is bound to the deployment secret rather than relying on cookie/header
+ * equality alone.
  */
-export function newCsrfToken(): string {
-	return randomBytes(24).toString('base64url')
+export function newCsrfToken(secret: string): string {
+	const value = randomBytes(24).toString('base64url')
+	const mac = createHmac('sha256', secret).update(value).digest('base64url')
+	return `${value}.${mac}`
 }
 
 export function csrfCookieHeader(
@@ -72,16 +77,31 @@ export function clearCsrfCookieHeader(): string {
 	return `${CSRF_COOKIE}=; Path=/; SameSite=Lax; Max-Age=0`
 }
 
-/** Constant-time CSRF comparison; null-safe. */
+/** Signed double-submit check: header must equal the cookie AND the
+ * cookie's HMAC must verify against the session secret. Constant-time. */
 export function verifyCsrf(
 	headerValue: string | null | undefined,
 	cookieValue: string | null | undefined,
+	secret: string,
 ): boolean {
 	if (!headerValue || !cookieValue) return false
+	// equality first (both attacker-controlled strings; length-mismatch
+	// short-circuits before the HMAC work)
 	const a = Buffer.from(headerValue)
 	const b = Buffer.from(cookieValue)
-	if (a.length !== b.length) return false
-	return timingSafeEqual(a, b)
+	if (a.length !== b.length || !timingSafeEqual(a, b)) return false
+
+	const dot = cookieValue.lastIndexOf('.')
+	if (dot < 1) return false
+	const value = cookieValue.slice(0, dot)
+	const mac = cookieValue.slice(dot + 1)
+	const expected = createHmac('sha256', secret)
+		.update(value)
+		.digest('base64url')
+	const macBuf = Buffer.from(mac)
+	const expectedBuf = Buffer.from(expected)
+	if (macBuf.length !== expectedBuf.length) return false
+	return timingSafeEqual(macBuf, expectedBuf)
 }
 
 export function parseCookies(header: string | null): Record<string, string> {

@@ -311,13 +311,15 @@ export function buildApp(deps: AppDeps) {
 			const traceId = (ctx.store as RequestStore).traceId
 			return {
 				traceId,
-				/** CSRF double-submit: x-csrf-token header must equal the cookie. */
+				/** Signed double-submit CSRF: header equals the cookie AND the
+				 * cookie verifies against the session secret (OWASP variant). */
 				requireCsrf(): void {
 					const cookies = parseCookies(ctx.request.headers.get('cookie'))
 					if (
 						!verifyCsrf(
 							ctx.request.headers.get(CSRF_HEADER),
 							cookies.aifiqh_csrf,
+							cfg.sessionSecret,
 						)
 					) {
 						throw new HttpError(403, 'forbidden', 'CSRF_TOKEN_INVALID')

@@ -10,7 +10,7 @@ import { SESSION_COOKIE } from '@aifiqh/shared'
  * Runs under bun: bun apps/api/e2e/seed.ts
  */
 import postgres from 'postgres'
-import { signSession } from '../src/auth/session'
+import { newCsrfToken, signSession } from '../src/auth/session'
 import { issueSession } from '../src/auth/sessionStore'
 import { loadConfig } from '../src/config'
 import { ensureMigrations } from '../tests/dbBootstrap'
@@ -97,7 +97,7 @@ console.log(
 	JSON.stringify({
 		cookieName: SESSION_COOKIE,
 		cookieValue,
-		csrfValue: `e2e-csrf-${suffix}`,
+		csrfValue: newCsrfToken(cfg.sessionSecret),
 		userId,
 		tenantId,
 		failureMarker: marker,

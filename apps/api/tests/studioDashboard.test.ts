@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test } from 'bun:test'
 import type { Principal } from '@aifiqh/shared'
 import postgres from 'postgres'
 import { buildApp } from '../src/app'
-import { signSession } from '../src/auth/session'
+import { newCsrfToken, signSession } from '../src/auth/session'
 import { issueSession } from '../src/auth/sessionStore'
 import { loadConfig } from '../src/config'
 import { createLogger } from '../src/logger'
@@ -244,8 +244,9 @@ describe('STU-003 HTTP surface', () => {
 			},
 			cfg.sessionSecret,
 		)
+		const csrfToken = newCsrfToken(cfg.sessionSecret)
 		const headers = {
-			cookie: `aifiqh_session=${token}; aifiqh_csrf=t-csrf`,
+			cookie: `aifiqh_session=${token}; aifiqh_csrf=${csrfToken}`,
 		}
 		const res = await testApp.handle(
 			new Request('http://localhost/studio/dashboard', { headers }),

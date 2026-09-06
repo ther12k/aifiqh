@@ -150,7 +150,7 @@ async function authFor(
 	)
 	const cookie = `${SESSION_COOKIE}=${token}`
 	if (!withCsrf) return { cookie }
-	const csrf = newCsrfToken()
+	const csrf = newCsrfToken(cfg.sessionSecret)
 	return { cookie: `${cookie}; ${CSRF_COOKIE}=${csrf}`, 'x-csrf-token': csrf }
 }
 

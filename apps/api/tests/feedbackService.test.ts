@@ -10,7 +10,7 @@ import {
 	submitFeedback,
 } from '../src/answers/feedbackService'
 import { buildApp } from '../src/app'
-import { signSession } from '../src/auth/session'
+import { newCsrfToken, signSession } from '../src/auth/session'
 import { issueSession } from '../src/auth/sessionStore'
 import { loadConfig } from '../src/config'
 import { createLogger } from '../src/logger'
@@ -130,9 +130,10 @@ async function authHeaders(userId: string, tenantId: string) {
 		},
 		cfg.sessionSecret,
 	)
+	const csrfToken = newCsrfToken(cfg.sessionSecret)
 	return {
-		cookie: `aifiqh_session=${token}; aifiqh_csrf=t-csrf`,
-		'x-csrf-token': 't-csrf',
+		cookie: `aifiqh_session=${token}; aifiqh_csrf=${csrfToken}`,
+		'x-csrf-token': csrfToken,
 		'content-type': 'application/json',
 	}
 }

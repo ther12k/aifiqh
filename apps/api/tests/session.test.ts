@@ -66,26 +66,53 @@ describe('app sessions (SEC-001)', () => {
 	})
 })
 
-describe('csrf double-submit (hardening)', () => {
-	test('matching header and cookie passes', () => {
-		const token = newCsrfToken()
-		expect(verifyCsrf(token, token)).toBeTrue()
+describe('csrf signed double-submit (hardening)', () => {
+	const SECRET = 'test-session-secret'
+
+	test('signed token from the secret passes when echoed', () => {
+		const token = newCsrfToken(SECRET)
+		expect(verifyCsrf(token, token, SECRET)).toBeTrue()
 	})
 
 	test('missing either side fails', () => {
-		const token = newCsrfToken()
-		expect(verifyCsrf(undefined, token)).toBeFalse()
-		expect(verifyCsrf(token, undefined)).toBeFalse()
+		const token = newCsrfToken(SECRET)
+		expect(verifyCsrf(undefined, token, SECRET)).toBeFalse()
+		expect(verifyCsrf(token, undefined, SECRET)).toBeFalse()
 	})
 
-	test('mismatched or tampered values fail', () => {
-		expect(verifyCsrf(newCsrfToken(), newCsrfToken())).toBeFalse()
-		const token = newCsrfToken()
-		expect(verifyCsrf(`${token}x`, token)).toBeFalse()
+	test('mismatched values fail', () => {
+		expect(
+			verifyCsrf(newCsrfToken(SECRET), newCsrfToken(SECRET), SECRET),
+		).toBeFalse()
+		const token = newCsrfToken(SECRET)
+		expect(verifyCsrf(`${token}x`, token, SECRET)).toBeFalse()
+	})
+
+	test('attacker-forged token without the secret is rejected', () => {
+		// naive double-submit accepts any matching pair; the signed variant
+		// must not — the HMAC cannot be computed without the session secret
+		const forged = 'attacker-chosen-value.attacker-cannot-compute-mac'
+		expect(verifyCsrf(forged, forged, SECRET)).toBeFalse()
+	})
+
+	test('token signed under a different secret is rejected', () => {
+		const token = newCsrfToken('other-deployment-secret')
+		expect(verifyCsrf(token, token, SECRET)).toBeFalse()
+	})
+
+	test('tampered payload invalidates the mac', () => {
+		const token = newCsrfToken(SECRET)
+		const [value, mac] = token.split('.')
+		const tampered = `${value!}tampered.${mac}`
+		expect(verifyCsrf(tampered, tampered, SECRET)).toBeFalse()
+	})
+
+	test('malformed token without mac separator fails', () => {
+		expect(verifyCsrf('plainvalue', 'plainvalue', SECRET)).toBeFalse()
 	})
 
 	test('csrf cookie helpers behave like session cookies', () => {
-		const token = newCsrfToken()
+		const token = newCsrfToken(SECRET)
 		const header = csrfCookieHeader(token, 60, true)
 		expect(header).toContain(`aifiqh_csrf=${token}`)
 		expect(header).toContain('; Secure')

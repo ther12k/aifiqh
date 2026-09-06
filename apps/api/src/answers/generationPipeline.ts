@@ -6,6 +6,7 @@ import {
 } from '@aifiqh/shared'
 import type { ResponseDecisionOutcome } from '../retrieval/abstentionPolicy'
 import type { BuiltContext } from '../retrieval/contextBuilder'
+import { normalizeText } from '../retrieval/queryNormalization'
 
 /**
  * Versioned grounded-generation pipeline (LLM-005).
@@ -250,6 +251,40 @@ export async function generateGroundedAnswer(
 		if (unknownIds.length > 0) {
 			validation.ok = false
 			validation.answer = null
+		}
+
+		// citation-integrity gate (VAL-002 at generation time): a "direct"
+		// link claims a verbatim quote — when evidence texts are available
+		// the quote MUST appear in the cited unit text (exact or under the
+		// controlled normalization). A real reference with a fabricated or
+		// altered quote is a failed answer, never a cited one.
+		if (input.evidenceTexts) {
+			const quoteIssues: SchemaIssue[] = []
+			for (const claim of validation.answer.claims) {
+				for (const link of claim.evidence) {
+					if (link.relation !== 'direct') continue
+					const quote = link.quote?.trim()
+					if (!quote) continue
+					const unitText = input.evidenceTexts[link.evidenceId]
+					if (unitText === undefined) continue // no text supplied (test generators)
+					const exact = unitText.includes(quote)
+					const normalized = normalizeText(unitText).includes(
+						normalizeText(quote),
+					)
+					if (!exact && !normalized) {
+						quoteIssues.push({
+							path: 'claims',
+							code: 'QUOTE_MISMATCH',
+							message: `claim ${claim.id}: quoted text does not appear in evidence ${link.evidenceId} — a paraphrase can never pass as a quotation`,
+						})
+					}
+				}
+			}
+			if (quoteIssues.length > 0) {
+				validation.issues.push(...quoteIssues)
+				validation.ok = false
+				validation.answer = null
+			}
 		}
 	}
 

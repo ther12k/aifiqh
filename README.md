@@ -1,82 +1,97 @@
-# AI-Fiqh (RZ-Fiqh) — Platform Implementation & Knowledge Repository
+# AI-Fiqh — citation-first fiqh assistant
 
-Private repository for **RZ-Fiqh**, a citation-first Islamic jurisprudence (fiqh) assistant and knowledge operations platform: PostgreSQL-canonical curated knowledge, hybrid retrieval (exact + lexical + vector + relationships), adaptive context, model-agnostic generation, deterministic citation validation, and evaluation-driven release gates.
+PostgreSQL-canonical knowledge platform for Islamic jurisprudence (fiqh) Q&A: hybrid retrieval (exact + lexical + vector + relationships) over a versioned corpus, grounded generation that may only cite pinned evidence, deterministic citation/quotation validation, and versioned evaluation gates.
 
-- **North-star metric:** Verified Answer Completion Rate (VACR)
-- **Plan:** 45/45 Must requirements covered · 13 epics · 86 sprint-ready tickets · 19 ordered migrations + 1 hardening migration · 610 story points
-- **Status:** EP-00 (Platform Foundations) implemented and verified; all 20 database migrations applied; tracked on [GitHub issues](https://github.com/ther12k/aifiqh/issues)
+## Implementation status
+
+Evidence is pinned to commit `85624b0` (CI: [run 33923586476](https://github.com/ther12k/aifiqh/actions/runs/33923586476), `verify` + `e2e` green: 523 unit/integration tests, 4 browser e2e). Migration count is repo-generated: `ls db/migrations/*.sql | wc -l` → **37** (001–037).
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Auth & authorization (OIDC, RBAC, access scopes, RLS) | Implemented | `apps/api/src/auth/*`, `tests/integration.test.ts` (RLS isolation, permission recheck), `tests/accessPolicy.test.ts` |
+| Source ingestion (upload, hashing, dedupe, pages/spans, OCR hooks) | Implemented | `apps/api/src/sources/`, `tests/integration.test.ts` (SRC-002/003), `tests/ocrCorrection.test.ts` |
+| Retrieval (exact/identifier lanes, lexical, pgvector, fusion, rerank, evidence selection) | Implemented | `apps/api/src/retrieval/`, `tests/retrievalLanes.test.ts`, `tests/lexicalSearch.test.ts` |
+| Grounded generation with citations | Implemented | `apps/api/src/answers/`, `tests/generationPipeline.test.ts` (grounding + quote-integrity gates) |
+| Layered verification contract | Implemented (layers are separate fields — see below) | `apps/api/src/answers/answerStatus.ts` |
+| Configurable model providers (secret-ref only) | Implemented | `apps/api/src/llm/modelRouter.ts`, `scripts/configure_model.ts`, `tests/providerConfig.test.ts` |
+| Evaluation runs, promotion gates, release/alias lineage | Implemented | `apps/api/src/eval/`, `tests/evalGate.test.ts` |
+| Ops health, failure taxonomy, runbooks | Implemented | `apps/api/src/ops/`, `docs/runbooks/` |
+| Reviewed corpus workflow (editorial approve-before-answerable) | **Partial** — sources have revisions/deprecation; an explicit per-source editorial approval gate is not yet enforced before indexing | [issue #108](https://github.com/ther12k/aifiqh/issues/108) |
+| Claim-support entailment (does the passage actually support the claim?) | **Not implemented** — automated checks cover citation integrity only | [issue #109](https://github.com/ther12k/aifiqh/issues/109) |
+| Scholarly review workflow | **Not implemented** — the API reports `scholarly_review: "not_reviewed"` always | [issue #110](https://github.com/ther12k/aifiqh/issues/110) |
+
+### What "verified" means here — three separate layers
+
+A valid citation does not prove the answer is right. Every answer turn exposes:
+
+```json
+{
+  "verification": {
+    "answerStatus": "answered",
+    "citationIntegrity": "passed",
+    "claimSupport": "automated_check_passed",
+    "scholarlyReview": "not_reviewed",
+    "userOutcome": "answered"
+  }
+}
+```
+
+- **citationIntegrity** — deterministic: cited spans exist on the pinned corpus release and direct-link quotes match the span text verbatim or under controlled Arabic normalization (`QUOTE_MISMATCH` fails the answer at generation time; mismatches are also recorded per citation at finalize).
+- **claimSupport** — automated grounding only: claims may cite manifest evidence ids, abstention policy refuses insufficient evidence. This is NOT entailment — a passage-contradicting conclusion with a real quote is not yet detectable (tracked in #109).
+- **scholarlyReview** — human layer; always `not_reviewed` in this system. Never compressed into a single `verified: true`.
+
+User-facing outcomes are `answered | needs_clarification | insufficient_evidence | needs_scholar_review | system_error` — a provider timeout maps to `system_error`, never "no answer in the corpus".
+
+## Run it locally
+
+Prereqs: [Bun](https://bun.sh) ≥ 1.4, Docker, Python 3 (for the issue-registration script only).
+
+```bash
+bun install
+bun run stack:up        # postgres16+pgvector :5434, minio :9000, oidc :4011
+bun run db:migrate      # applies db/migrations in order (37 as counted above)
+bun run db:seed         # tenants, users (admin@example.com et al.), role catalog
+
+# optional: real corpus (Arba'in hadiths + Qur'anic ayat al-ahkam from public APIs)
+bun scripts/ingest_initial_data.ts
+
+# optional: real model generation (any OpenAI-compatible endpoint; the API key
+# stays in your environment — only env://NAME is stored in the database)
+LLM_BASE_URL=https://api.openai.com/v1 LLM_MODEL=gpt-4o-mini \
+LLM_SECRET_REF=env://OPENAI_API_KEY bun scripts/configure_model.ts
+# without this, chat falls back to a deterministic evidence-quoting composer
+
+# dev servers (web :5174 proxies to api :3100)
+PORT=3100 bun apps/api/src/index.ts
+VITE_PORT=5174 VITE_API_TARGET=http://localhost:3100 bun run dev:web
+
+bun test                # 523 unit + integration tests (hermetic: no external LLM)
+bunx playwright test    # 4 e2e specs against a built app
+```
+
+Then open `http://localhost:5174`, sign in via **Masuk Cepat (Dev Admin)**, ask a question in Chatbot, and expand **Bukti yang dikutip** — each citation shows the quoted passage; the verification line under the answer separates citation integrity from claim support from scholarly review.
 
 ## Repository layout
 
 ```text
-├── docs/           # authoritative sources: PRD v2.0, Engineering Backlog v2.0 (.md + .json)
-│   ├── runbooks/   # operator runbooks: one page per failure subsystem + DR procedure
-│   └── archive/okf-prototype/  # ARCHIVED design artifact — not runtime (see its README)
-├── db/migrations/  # 0001..0019 ordered SQL migrations (DB-001..DB-019)
-├── scripts/        # migrate.ts, seed.ts, OKF generator, GitHub issue registration
-├── docker/         # local OIDC provider (oidc-provider)
-├── docker-compose.yml  # dev stack: postgres16+pgvector (:5434), MinIO (:9000), OIDC (:4011)
+├── apps/api        # Bun + Elysia API: auth, RBAC, sources, retrieval, answers, eval, ops
+├── apps/web        # React + Vite UI (chat, source registry, studio, ops)
+├── apps/worker     # Bun worker runtime
 ├── packages/shared # framework-free DTOs, permission matrix, contracts
-├── apps/api        # Bun + Elysia API: auth, RBAC policy, audit, health, source registry
-├── apps/worker     # Bun worker runtime (ingestion/indexing loop skeleton)
-└── apps/web        # React + Vite shell
+├── db/migrations/  # 0001..0037 ordered SQL migrations
+├── docs/           # PRD/backlog, runbooks; docs/archive is quarantined design history
+├── e2e/            # Playwright specs (hermetic; AIFIQH_CHAT_MODEL=off)
+└── scripts/        # migrate, seed, ingest, configure_model, RLS policy checker
 ```
 
-## Implemented so far (Wave 0 — EP-00)
+## Security posture
 
-| Ticket | Scope | Where |
-|---|---|---|
-| PLAT-001 | Bun workspace monorepo (api/worker/web/shared), typed config, lint/typecheck/test/build scripts, CI gate | root, `apps/*`, `packages/*`, `.github/workflows/ci.yml` |
-| PLAT-002 | One-command dev stack: PostgreSQL 16 + pgvector + pg_trgm, MinIO + bucket init, local OIDC provider, ordered migration runner, idempotent seed | `docker-compose.yml`, `docker/oidc-provider/`, `scripts/migrate.ts`, `scripts/seed.ts` |
-| SEC-001 | OIDC login/callback/logout with issuer/audience/JWKS validation, state+nonce, one-time identity upsert, HMAC-signed short-lived session cookies with server-side revocation | `apps/api/src/auth/*` |
-| SEC-002 | Tenant RBAC (6 roles × 11 permissions), hierarchical access scopes with descendant coverage, deny-by-default policy service with reason codes | `apps/api/src/auth/policy.ts` |
-| AUD-001 | Append-only audit events (actor/tenant/action/entity/before-after/reason/trace_id), DB trigger rejects UPDATE/DELETE | `apps/api/src/audit/audit.ts`, migration 0003 |
-| OBS-001 | Correlation IDs on every request (`x-trace-id`), structured JSON logs with redaction, component health contract (liveness/readiness/degraded) | `apps/api/src/observability/`, `logger.ts`, health routes |
-
-**Security hardening (migration 0020, beyond the backlog):** tenant RLS is `FORCE`d and the API connects as a dedicated non-superuser role (`aifiqh_app` — superusers bypass RLS by design), so unset/foreign tenant context sees zero rows (fail closed); all tenant-scoped access runs through `scopedTransaction`, which sets `app.tenant_id` per transaction (policies normalize `''` → NULL because Postgres never returns NULL for a once-set GUC); login states and session revocations live in PostgreSQL (survive restarts, multi-instance safe); state-changing routes enforce CSRF double-submit (`x-csrf-token` header vs `aifiqh_csrf` cookie).
-
-Plus migrations **DB-001..DB-019 + DB-020** (identity, RBAC, audit, source registry, revisions, ingestion jobs, pages/sections/spans, OCR, knowledge concepts/revisions, provenance/links, changesets/releases/aliases, index configs, retrieval units + pgvector/trigram projections, conversations, traces/context, model/prompt/flag config, answers/claims/citations, evaluation + gates, ops health + tenant RLS + dashboard views).
-
-## Verification
-
-```bash
-bun install
-bun run stack:up      # postgres + minio + oidc
-bun run db:migrate    # 19 ordered migrations
-bun run db:seed       # tenants, users, role catalog, scopes
-bun run lint          # biome
-bun run typecheck     # 4/4 workspaces
-bun test              # 45 tests (unit + DB integration: RBAC, audit immutability,
-                      # revision immutability, changeset guards, RLS isolation)
-bun run build         # api, worker, web
-```
-
-CI runs the same gate on every push with a pgvector service container (`.github/workflows/ci.yml`).
-
-## Archived design material
-
-The OKF v0.2 planning bundle now lives in [`docs/archive/okf-prototype/`](docs/archive/okf-prototype/) as a historical design artifact — **not** part of the runtime architecture (curated knowledge is canonical in PostgreSQL). CI enforces the quarantine: no runtime package may import from `docs/archive/`, and no migration may reference those schemas.
-
-## Release-readiness gates
-
-Next milestone: *Database-First Foundation Accepted for Corpus and Retrieval Development* (GitHub milestone, issues #96–101):
-
-1. Tests and CI remain green
-2. Migration 0021 succeeds on realistic populated data (REL-HARD-001)
-3. No cross-tenant leak through reused pooled sessions (REL-HARD-002)
-4. Runtime role passes direct-database adversarial tests (REL-HARD-003)
-5. Release and answer state-machine races are controlled (REL-HARD-005)
-6. Database + object-storage restore reproduces an answer trace (REL-HARD-004)
-7. RLS hot paths meet the latency budget (REL-HARD-006)
-8. Archived design material is unmistakably non-runtime (done)
-9. Worker concurrency technically restricted until claim/lease lands (done)
-
-Product development proceeds in parallel: EP-02 ingestion → EP-05 compiler → EP-06 exact/lexical benchmark **before** the pgvector lane (exact-source precision must not regress), then EP-07 evidence selection.
+- Tenant RLS is `FORCE`d; the API connects as non-superuser `aifiqh_app`; all tenant access flows through `scopedTransaction` (sets `app.tenant_id` per transaction; unset context fails closed).
+- CSRF: signed double-submit — the `aifiqh_csrf` cookie is HMAC-bound to the session secret (`value.mac`); header must echo it AND the MAC must verify. Forged pairs are rejected (`tests/session.test.ts`).
+- Model API keys are never stored: `provider_secret_refs` holds external references (`env://`, `file://`, vault schemes); resolution happens at request time in `modelRouter`.
+- Corpus text is untrusted input: the generation prompt treats evidence as citable material only, evidence ids outside the pinned manifest are rejected (`UNKNOWN_EVIDENCE_ID`), and fabricated quotes fail (`QUOTE_MISMATCH`).
+- Residual gaps (injection red-teaming, cache authorization contexts, SSRF checks on URL ingestion) are tracked: #111.
 
 ## Issue tracking
 
-The 86 backlog tickets are registered as GitHub issues grouped by epic milestones (`EP-00` … `EP-12`) and labeled by type, priority, and wave. Re-run registration idempotently:
-
-```bash
-python3 scripts/register_github_issues.py --repo ther12k/aifiqh
-```
+All work is tracked on [GitHub issues](https://github.com/ther12k/aifiqh/issues). Historical planning material (45/45 Must requirements, 13 epics, 86 tickets) lives in `docs/` and the issue tracker — treat this README's status table as the source of truth for what actually works today.

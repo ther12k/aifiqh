@@ -2091,3 +2091,98 @@ h2 {
 		font-size: 32px;
 	}
 }
+
+/* ==========================================================================
+   Answer card: evidence panel + reason-tagged feedback + verification line
+   ========================================================================== */
+.answer-citations {
+	margin-top: 10px;
+}
+
+.citation-list {
+	list-style: none;
+	margin: 8px 0 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.citation-list li {
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 12px 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.citation-ordinal {
+	font-size: 11.5px;
+	font-weight: 800;
+	color: var(--primary-strong);
+	letter-spacing: 0.04em;
+}
+
+.citation-list p[dir="rtl"] {
+	font-family: var(--font-arabic);
+	font-size: 18px;
+	line-height: 2;
+	direction: rtl;
+	text-align: right;
+	margin: 2px 0;
+}
+
+.citation-report {
+	align-self: flex-start;
+	border: none;
+	background: none;
+	padding: 2px 0;
+	color: var(--text-faint);
+	font-size: 11.5px;
+	font-weight: 600;
+	cursor: pointer;
+	text-decoration: underline dotted;
+}
+
+.citation-report:hover {
+	color: var(--danger);
+}
+
+.reject-reasons {
+	margin-top: 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.reject-title {
+	font-size: 12.5px;
+	font-weight: 700;
+	color: var(--text-muted);
+}
+
+.feedback-note {
+	display: block;
+	margin-top: 8px;
+	font-size: 12px;
+	color: var(--ok);
+	background: var(--ok-soft);
+	border-radius: 8px;
+	padding: 6px 10px;
+}
+
+.feedback-note.feedback-error {
+	color: var(--danger);
+	background: var(--danger-soft);
+}
+
+.verification-line {
+	margin: 10px 0 0;
+	padding-top: 8px;
+	border-top: 1px dashed var(--border);
+	font-size: 11.5px;
+	color: var(--text-faint);
+	letter-spacing: 0.01em;
+}

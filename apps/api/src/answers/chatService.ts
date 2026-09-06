@@ -27,6 +27,7 @@ import {
 import { executeLanePlan } from '../retrieval/laneFusion'
 import { planAndPersistQuery } from '../retrieval/queryPlanner'
 import { HashRerankerProvider } from '../retrieval/reranker'
+import { type VerificationStatus, deriveVerification } from './answerStatus'
 import { finalizeGroundedAnswer } from './answerTraceService'
 import { generateGroundedAnswer } from './generationPipeline'
 
@@ -70,10 +71,24 @@ export interface TurnResult {
 	decision: ResponseDecisionOutcome
 	assessment: AssessmentOutcome | null
 	answer: StructuredAnswer | null
-	status: 'answered' | 'abstained' | 'escalated'
+	status: 'answered' | 'abstained' | 'escalated' | 'failed'
 	/** what actually generated the answer — real provider or builtin */
 	provider: string
 	model: string
+	/** layered verification status (citation integrity ≠ claim support ≠
+	 * scholarly review) with the user-facing outcome mapping */
+	verification: VerificationStatus
+	/** canonical citations for this turn — the UI's evidence panel reads
+	 * these (span-scoped, quote verified at finalize) */
+	citations: TurnCitation[]
+}
+
+export interface TurnCitation {
+	ordinal: number
+	sourceId: string
+	sourceRevisionId: string
+	spanId: string
+	quote: string
 }
 
 export async function startConversation(
@@ -388,6 +403,14 @@ async function runTurn(
 			status: 'abstained',
 			provider: '',
 			model: '',
+			verification: deriveVerification({
+				status: 'abstained',
+				decision,
+				assessment: null,
+				citationsOk: false,
+				citedCount: 0,
+			}),
+			citations: [],
 		}
 	}
 
@@ -455,6 +478,14 @@ async function runTurn(
 			status: decision.decision === 'escalate' ? 'escalated' : 'abstained',
 			provider: '',
 			model: '',
+			verification: deriveVerification({
+				status: decision.decision === 'escalate' ? 'escalated' : 'abstained',
+				decision,
+				assessment,
+				citationsOk: false,
+				citedCount: 0,
+			}),
+			citations: [],
 		}
 	}
 
@@ -595,9 +626,17 @@ async function runTurn(
 			decision,
 			assessment,
 			answer: null,
-			status: 'abstained',
+			status: 'failed',
 			provider: '',
 			model: '',
+			verification: deriveVerification({
+				status: 'failed',
+				decision,
+				assessment,
+				citationsOk: false,
+				citedCount: 0,
+			}),
+			citations: [],
 		}
 	}
 
@@ -623,6 +662,17 @@ async function runTurn(
 		status: 'answered',
 		provider: usedProvider,
 		model: usedModel,
+		verification: deriveVerification({
+			status: 'answered',
+			decision,
+			assessment,
+			// citations are built from units read on the PINNED release with
+			// verbatim span text — zero citations on an answered turn means
+			// the answer has no citable support at all
+			citationsOk: citations.length > 0,
+			citedCount: citations.length,
+		}),
+		citations,
 	}
 }
 

@@ -297,4 +297,77 @@ describe('LLM-005: versioned grounded-generation pipeline', () => {
 		expect(r2.status).toBe('failed')
 		expect(r2.issues.map((i) => i.code)).toContain('INCOMPLETE_GENERATION')
 	})
+
+	test('citation integrity: a fabricated quote fails even with a real reference', async () => {
+		// the reviewer's core scenario, deterministic half: the evidence id
+		// is REAL and the quote is plausible — but the quoted text does not
+		// appear in the cited passage. The answer must not pass solely
+		// because the citation exists.
+		const { generate } = makeGenerate(() => {
+			const answer = validAnswerJson() as {
+				claims: Array<{ evidence: Array<Record<string, unknown>> }>
+			}
+			answer.claims[0].evidence[0].quote =
+				'Air mutlak dan air selainnya sama-sama suci.' // NOT in the unit text
+			return JSON.stringify(answer)
+		})
+		const result = await generateGroundedAnswer({
+			query: 'q',
+			context: contextFixture(),
+			decision: decisionFixture(),
+			providerKey: 'openai',
+			evidenceTexts: {
+				[EV_1]: 'Sesungguhnya air mutlak itu suci. (riwayat Muslim)',
+				[EV_2]: 'Air yang terkena najis menjadi tidak suci.',
+			},
+			generate,
+		})
+		expect(result.status).toBe('failed')
+		expect(result.issues.map((i) => i.code)).toContain('QUOTE_MISMATCH')
+		expect(result.answer).toBeNull()
+	})
+
+	test('citation integrity: verbatim and normalization-passing quotes pass', async () => {
+		const { generate } = makeGenerate(() => {
+			const answer = validAnswerJson() as {
+				claims: Array<{ evidence: Array<Record<string, unknown>> }>
+			}
+			// exact verbatim substring of the unit text
+			answer.claims[0].evidence[0].quote = 'air mutlak itu suci'
+			return JSON.stringify(answer)
+		})
+		const result = await generateGroundedAnswer({
+			query: 'q',
+			context: contextFixture(),
+			decision: decisionFixture(),
+			providerKey: 'openai',
+			evidenceTexts: {
+				// normalization target: same text with diacritics/tatweel noise
+				[EV_1]: 'Sesungguhnya اَلْمَاءُ الْمُطْلَقُ tasAWuq... air mutlak itu suci.',
+				[EV_2]: 'Air terkena najis.',
+			},
+			generate,
+		})
+		expect(result.status).toBe('generated')
+	})
+
+	test('citation integrity: quotes are not checked when no texts supplied', async () => {
+		// deterministic/test generators pass no evidenceTexts — the gate
+		// stays silent (finalization verifies quotes against the DB instead)
+		const { generate } = makeGenerate(() => {
+			const answer = validAnswerJson() as {
+				claims: Array<{ evidence: Array<Record<string, unknown>> }>
+			}
+			answer.claims[0].evidence[0].quote = 'teks yang tidak ada di mana pun'
+			return JSON.stringify(answer)
+		})
+		const result = await generateGroundedAnswer({
+			query: 'q',
+			context: contextFixture(),
+			decision: decisionFixture(),
+			providerKey: 'openai',
+			generate,
+		})
+		expect(result.status).toBe('generated')
+	})
 })
