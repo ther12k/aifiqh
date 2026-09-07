@@ -20,7 +20,7 @@ import type { AssessmentOutcome } from '../retrieval/evidenceAssessment'
  * system_error — it must never read as "the corpus has no answer".
  */
 
-export const ANSWER_STATUS_CONTRACT_VERSION = 'answer-status-v2'
+export const ANSWER_STATUS_CONTRACT_VERSION = 'answer-status-v3'
 
 export type CitationIntegrity = 'passed' | 'failed' | 'not_applicable'
 
@@ -29,8 +29,15 @@ export type ClaimSupport =
 	| 'automated_check_insufficient'
 	| 'not_assessed'
 
-/** scholarly review is a human gate — always not_reviewed from this system */
-export type ScholarlyReview = 'not_reviewed'
+/**
+ * Scholarly review (#110): a HUMAN layer. `not_reviewed` remains the
+ * default; `scholar_reviewed` requires every material claim to carry a
+ * standing reviewer approval; any rejection marks the answer contested.
+ */
+export type ScholarlyReview =
+	| 'not_reviewed'
+	| 'scholar_reviewed'
+	| 'scholar_contested'
 
 export type UserOutcome =
 	| 'answered'
@@ -55,6 +62,11 @@ export interface VerificationInput {
 	/** deterministic citation checks: no citation failed integrity */
 	citationsOk: boolean
 	citedCount: number
+	/** standing claim-review verdicts (#110) — answered turns only */
+	claimReviews?: {
+		standing: Array<{ claimId: string; verdict: 'approve' | 'reject' | 'correct' }>
+		materialClaimCount: number
+	}
 }
 
 export function deriveVerification(
@@ -94,9 +106,23 @@ export function deriveVerification(
 		}
 	}
 
-	// answered
+	// answered — the scholarly layer aggregates standing claim reviews:
+	// every material claim approved ⇒ scholar_reviewed; reviews present but
+	// incomplete/rejected/corrected ⇒ scholar_contested; none ⇒ not_reviewed
+	let scholarlyReview: ScholarlyReview = 'not_reviewed'
+	if (input.claimReviews && input.claimReviews.materialClaimCount > 0) {
+		const { standing, materialClaimCount } = input.claimReviews
+		if (standing.length > 0) {
+			const approvals = standing.filter((v) => v.verdict === 'approve').length
+			scholarlyReview =
+				approvals === materialClaimCount
+					? 'scholar_reviewed'
+					: 'scholar_contested'
+		}
+	}
 	return {
 		...base,
+		scholarlyReview,
 		citationIntegrity: input.citationsOk ? 'passed' : 'failed',
 		claimSupport: 'automated_check_passed',
 		userOutcome: 'answered',

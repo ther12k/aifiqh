@@ -125,6 +125,11 @@ const VERIFY_LABELS: Record<string, string> = {
 	automated_check_passed: 'dukungan klaim: pemeriksaan otomatis lulus',
 	not_assessed: 'dukungan klaim: tidak dinilai',
 	not_reviewed: 'belum ditinjau ulama',
+	// #110: the human layer is operational — these keep the distinction
+	// between "reference checked" (otomatis) and "reviewed by a scholar"
+	scholar_reviewed: 'DITINJAU ULAMA: semua klaim disetujui reviewer',
+	scholar_contested:
+		'DIPERSENGKAHAN: ada klaim yang ditolak/dikoreksi reviewer',
 }
 
 function csrfToken(): string {
