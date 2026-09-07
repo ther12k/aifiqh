@@ -465,6 +465,96 @@ const REQUIRED_SOURCE_FIELDS = [
 	'accessScopeId',
 ] as const
 
+// DB-039 acquisition & usage-policy registry vocabularies
+const ACQUISITION_METHODS = [
+	'bulk_file',
+	'api',
+	'repository_snapshot',
+	'approved_crawl',
+	'manual_entry',
+] as const
+const ALLOWED_USES = [
+	'display',
+	'storage',
+	'rag',
+	'export',
+	'model_training',
+] as const
+
+interface AcquisitionValues {
+	acquisition_method: string | null
+	policy_reference: string | null
+	policy_checked_at: string | null
+	allowed_uses: string[] | null
+	retention_policy: string | null
+	update_policy: string | null
+	parser_version: string | null
+}
+
+/**
+ * Parse the optional acquisition/policy registry fields (DB-039). Absent
+ * fields stay null — 'unknown' must remain expressible. Provided values are
+ * validated against the controlled vocabularies; violations come back as
+ * invalid field names for the 400 body.
+ */
+function parseAcquisitionInput(body: Record<string, unknown>): {
+	invalid: string[]
+	values: AcquisitionValues
+} {
+	const invalid: string[] = []
+	const str = (key: string, out: string): string | null => {
+		const v = body[key]
+		if (v === undefined || v === null) return null
+		if (typeof v !== 'string' || !v.trim()) {
+			invalid.push(out)
+			return null
+		}
+		return v.trim()
+	}
+	let acquisitionMethod = str('acquisitionMethod', 'acquisitionMethod')
+	if (
+		acquisitionMethod &&
+		!ACQUISITION_METHODS.includes(
+			acquisitionMethod as (typeof ACQUISITION_METHODS)[number],
+		)
+	) {
+		invalid.push('acquisitionMethod')
+		acquisitionMethod = null
+	}
+	let allowedUses: string[] | null = null
+	if (body.allowedUses !== undefined && body.allowedUses !== null) {
+		if (
+			Array.isArray(body.allowedUses) &&
+			body.allowedUses.every((u) => typeof u === 'string') &&
+			body.allowedUses.length > 0 &&
+			body.allowedUses.every((u) =>
+				ALLOWED_USES.includes(u as (typeof ALLOWED_USES)[number]),
+			)
+		) {
+			allowedUses = body.allowedUses as string[]
+		} else {
+			invalid.push('allowedUses')
+		}
+	}
+	let policyCheckedAt = str('policyCheckedAt', 'policyCheckedAt')
+	if (policyCheckedAt && Number.isNaN(Date.parse(policyCheckedAt))) {
+		invalid.push('policyCheckedAt')
+		policyCheckedAt = null
+	}
+	return {
+		invalid,
+		values: {
+			acquisition_method: acquisitionMethod,
+			policy_reference: str('policyReference', 'policyReference'),
+			policy_checked_at: policyCheckedAt,
+			allowed_uses: allowedUses,
+			retention_policy: str('retentionPolicy', 'retentionPolicy'),
+			update_policy: str('updatePolicy', 'updatePolicy'),
+			parser_version: str('parserVersion', 'parserVersion'),
+		},
+	}
+}
+
 interface SourceRow {
 	id: string
 	tenant_id: string
@@ -476,6 +566,13 @@ interface SourceRow {
 	publisher: string | null
 	rights_status: string
 	rights_notes: string | null
+	acquisition_method: string | null
+	policy_reference: string | null
+	policy_checked_at: string | null
+	allowed_uses: string[] | null
+	retention_policy: string | null
+	update_policy: string | null
+	parser_version: string | null
 	access_scope_id: string
 	created_by: string | null
 	created_at: Date
@@ -510,9 +607,13 @@ function sourceRoutes(deps: AppDeps) {
 				ctx.requireCsrf()
 				const body = ctx.body as Record<string, unknown>
 				const missing = REQUIRED_SOURCE_FIELDS.filter((f) => !body?.[f])
-				if (missing.length > 0) {
+				const acquisition = parseAcquisitionInput(body)
+				if (missing.length > 0 || acquisition.invalid.length > 0) {
 					ctx.set.status = 400
-					return { error: 'validation_failed', fields: missing }
+					return {
+						error: 'validation_failed',
+						fields: [...missing, ...acquisition.invalid],
+					}
 				}
 				// the access scope must exist, belong to the caller's tenant, and be
 				// within the caller's granted scopes (no cross-tenant scope injection).
@@ -538,13 +639,22 @@ function sourceRoutes(deps: AppDeps) {
 						const [inserted] = await tx<SourceRow[]>`
           insert into sources
             (tenant_id, title, author, source_type, language, edition, publisher,
-             rights_status, access_scope_id, created_by)
+             rights_status, access_scope_id, created_by,
+             acquisition_method, policy_reference, policy_checked_at,
+             allowed_uses, retention_policy, update_policy, parser_version)
           values
             (${principal.tenantId}::uuid, ${body.title as string}, ${body.author as string},
              ${body.sourceType as string}, ${body.language as string},
              ${(body.edition as string) || null}, ${(body.publisher as string) || null},
              ${body.rightsStatus as string}, ${body.accessScopeId as string}::uuid,
-             ${principal.userId}::uuid)
+             ${principal.userId}::uuid,
+             ${acquisition.values.acquisition_method},
+             ${acquisition.values.policy_reference},
+             ${acquisition.values.policy_checked_at},
+             ${acquisition.values.allowed_uses ?? []}::text[],
+             ${acquisition.values.retention_policy},
+             ${acquisition.values.update_policy},
+             ${acquisition.values.parser_version})
           returning *
         `
 						if (!inserted) throw new HttpError(500, 'insert_failed')
@@ -619,6 +729,7 @@ function sourceRoutes(deps: AppDeps) {
 				const principal = await ctx.requirePermission('source:update_metadata')
 				ctx.requireCsrf()
 				const body = (ctx.body ?? {}) as Record<string, unknown>
+				const acquisition = parseAcquisitionInput(body)
 				const patch = {
 					title:
 						typeof body.title === 'string' && body.title ? body.title : null,
@@ -640,12 +751,26 @@ function sourceRoutes(deps: AppDeps) {
 						typeof body.rightsStatus === 'string' && body.rightsStatus
 							? body.rightsStatus
 							: null,
+					acquisition_method: acquisition.values.acquisition_method,
+					policy_reference: acquisition.values.policy_reference,
+					policy_checked_at: acquisition.values.policy_checked_at,
+					allowed_uses: acquisition.values.allowed_uses,
+					retention_policy: acquisition.values.retention_policy,
+					update_policy: acquisition.values.update_policy,
+					parser_version: acquisition.values.parser_version,
+				}
+				if (acquisition.invalid.length > 0) {
+					ctx.set.status = 400
+					return { error: 'validation_failed', fields: acquisition.invalid }
 				}
 				if (Object.values(patch).every((v) => v === null)) {
 					ctx.set.status = 400
 					return {
 						error: 'validation_failed',
-						fields: ['title|author|language|edition|publisher|rightsStatus'],
+						fields: [
+							'title|author|language|edition|publisher|rightsStatus',
+							'| acquisition/policy fields (DB-039)',
+						],
 					}
 				}
 				// read-before-write + scope check + update + audit in ONE
@@ -684,7 +809,14 @@ function sourceRoutes(deps: AppDeps) {
 						language = coalesce(${patch.language}, language),
 						edition = coalesce(${patch.edition}, edition),
 						publisher = coalesce(${patch.publisher}, publisher),
-						rights_status = coalesce(${patch.rights_status}, rights_status)
+						rights_status = coalesce(${patch.rights_status}, rights_status),
+						acquisition_method = coalesce(${patch.acquisition_method}, acquisition_method),
+						policy_reference = coalesce(${patch.policy_reference}, policy_reference),
+						policy_checked_at = coalesce(${patch.policy_checked_at}, policy_checked_at),
+						allowed_uses = coalesce(${patch.allowed_uses}, allowed_uses),
+						retention_policy = coalesce(${patch.retention_policy}, retention_policy),
+						update_policy = coalesce(${patch.update_policy}, update_policy),
+						parser_version = coalesce(${patch.parser_version}, parser_version)
 					where id = ${ctx.params.id}::uuid
 					returning *
 				`
@@ -697,7 +829,13 @@ function sourceRoutes(deps: AppDeps) {
 							entityType: 'source',
 							entityId: ctx.params.id,
 							beforeRef: { title: b.title, rights_status: b.rights_status },
-							afterRef: { title: a.title, rights_status: a.rights_status },
+							afterRef: {
+								title: a.title,
+								rights_status: a.rights_status,
+								acquisition_method: a.acquisition_method,
+								policy_reference: a.policy_reference,
+								allowed_uses: a.allowed_uses,
+							},
 							reason: (body.reason as string) || null,
 							traceId: ctx.traceId,
 						})

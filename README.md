@@ -4,12 +4,12 @@ PostgreSQL-canonical knowledge platform for Islamic jurisprudence (fiqh) Q&A: hy
 
 ## Implementation status
 
-Evidence is pinned to commit `85624b0` (CI: [run 33923586476](https://github.com/ther12k/aifiqh/actions/runs/33923586476), `verify` + `e2e` green: 523 unit/integration tests, 4 browser e2e) plus the editorial approval gate (#108) on top. Migration count is repo-generated: `ls db/migrations/*.sql | wc -l` → **38** (001–038).
+Evidence is pinned to commit `85624b0` (CI: [run 33923586476](https://github.com/ther12k/aifiqh/actions/runs/33923586476), `verify` + `e2e` green: 523 unit/integration tests, 4 browser e2e) plus the editorial approval gate (#108) and the source acquisition registry on top. Migration count is repo-generated: `ls db/migrations/*.sql | wc -l` → **39** (001–039).
 
 | Capability | Status | Evidence |
 |---|---|---|
 | Auth & authorization (OIDC, RBAC, access scopes, RLS) | Implemented | `apps/api/src/auth/*`, `tests/integration.test.ts` (RLS isolation, permission recheck), `tests/accessPolicy.test.ts` |
-| Source ingestion (upload, hashing, dedupe, pages/spans, OCR hooks) | Implemented | `apps/api/src/sources/`, `tests/integration.test.ts` (SRC-002/003), `tests/ocrCorrection.test.ts` |
+| Source ingestion (upload, hashing, dedupe, pages/spans, OCR hooks) + acquisition & usage-policy registry | Implemented — sources carry `acquisition_method`, `policy_reference`, human-checked `policy_checked_at`, `allowed_uses` (controlled vocabulary), retention/update policy, `parser_version` | `apps/api/src/sources/`, `db/migrations/0039_source_acquisition_registry.sql`, `tests/integration.test.ts` (SRC-001, DB-039 round-trip), `tests/ocrCorrection.test.ts` |
 | Retrieval (exact/identifier lanes, lexical, pgvector, fusion, rerank, evidence selection) | Implemented | `apps/api/src/retrieval/`, `tests/retrievalLanes.test.ts`, `tests/lexicalSearch.test.ts` |
 | Grounded generation with citations | Implemented | `apps/api/src/answers/`, `tests/generationPipeline.test.ts` (grounding + quote-integrity gates) |
 | Layered verification contract | Implemented (layers are separate fields — see below) | `apps/api/src/answers/answerStatus.ts` |
@@ -49,7 +49,7 @@ Prereqs: [Bun](https://bun.sh) ≥ 1.4, Docker, Python 3 (for the issue-registra
 ```bash
 bun install
 bun run stack:up        # postgres16+pgvector :5434, minio :9000, oidc :4011
-bun run db:migrate      # applies db/migrations in order (38 as counted above)
+bun run db:migrate      # applies db/migrations in order (39 as counted above)
 bun run db:seed         # tenants, users (admin@example.com et al.), role catalog
 
 # optional: real corpus (Arba'in hadiths + Qur'anic ayat al-ahkam from public APIs).
@@ -81,7 +81,7 @@ Then open `http://localhost:5174`, sign in via **Masuk Cepat (Dev Admin)**, ask 
 ├── apps/web        # React + Vite UI (chat, source registry, studio, ops)
 ├── apps/worker     # Bun worker runtime
 ├── packages/shared # framework-free DTOs, permission matrix, contracts
-├── db/migrations/  # 0001..0038 ordered SQL migrations
+├── db/migrations/  # 0001..0039 ordered SQL migrations
 ├── docs/           # PRD/backlog, runbooks; docs/archive is quarantined design history
 ├── e2e/            # Playwright specs (hermetic; AIFIQH_CHAT_MODEL=off)
 └── scripts/        # migrate, seed, ingest, configure_model, RLS policy checker
@@ -94,6 +94,7 @@ Then open `http://localhost:5174`, sign in via **Masuk Cepat (Dev Admin)**, ask 
 - Model API keys are never stored: `provider_secret_refs` holds external references (`env://`, `file://`, vault schemes); resolution happens at request time in `modelRouter`.
 - Corpus text is untrusted input: the generation prompt treats evidence as citable material only, evidence ids outside the pinned manifest are rejected (`UNKNOWN_EVIDENCE_ID`), and fabricated quotes fail (`QUOTE_MISMATCH`).
 - Residual gaps (injection red-teaming, cache authorization contexts, SSRF checks on URL ingestion) are tracked: #111.
+- Corpus expansion follows a policy-gated acquisition roadmap (#117: Tanzil + QuranEnc + HadeethEnc + IslamHouse first), with import validation gates (#118), a pinned OKF v0.2 import/export adapter (#115), and contextual embedding input evaluated on the retrieval ladder (#116).
 
 ## Issue tracking
 

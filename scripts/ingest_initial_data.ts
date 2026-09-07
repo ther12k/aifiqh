@@ -177,9 +177,11 @@ async function main() {
 		const hadithPublisher = 'Maktabah Darul Hadits'
 		const [srcHadith] = await tx<{ id: string }[]>`
 				insert into sources (
-					tenant_id, title, author, source_type, language, edition, publisher, rights_status, access_scope_id, created_by
+					tenant_id, title, author, source_type, language, edition, publisher, rights_status, access_scope_id, created_by,
+					acquisition_method, policy_reference, parser_version
 				) values (
-					${tenantId}::uuid, ${hadithTitle}, ${hadithAuthor}, 'book', 'ar', ${hadithEdition}, ${hadithPublisher}, 'public_domain', ${scopeId}::uuid, ${adminId}::uuid
+					${tenantId}::uuid, ${hadithTitle}, ${hadithAuthor}, 'book', 'ar', ${hadithEdition}, ${hadithPublisher}, 'public_domain', ${scopeId}::uuid, ${adminId}::uuid,
+					'api', 'https://api.myquran.com/v2/hadits/arbain/semua', 'ingest_initial_data-v1'
 				) returning id`
 
 		// #108 editorial approval gate: revisions land in pending_review —
@@ -206,9 +208,11 @@ async function main() {
 		const quranPublisher = 'Kemenag RI'
 		const [srcQuran] = await tx<{ id: string }[]>`
 				insert into sources (
-					tenant_id, title, author, source_type, language, edition, publisher, rights_status, access_scope_id, created_by
+					tenant_id, title, author, source_type, language, edition, publisher, rights_status, access_scope_id, created_by,
+					acquisition_method, policy_reference, parser_version
 				) values (
-					${tenantId}::uuid, ${quranTitle}, ${quranAuthor}, 'book', 'ar', ${quranEdition}, ${quranPublisher}, 'public_domain', ${scopeId}::uuid, ${adminId}::uuid
+					${tenantId}::uuid, ${quranTitle}, ${quranAuthor}, 'book', 'ar', ${quranEdition}, ${quranPublisher}, 'public_domain', ${scopeId}::uuid, ${adminId}::uuid,
+					'api', 'https://equran.id/api/v2/surat (data source: Kementerian Agama RI)', 'ingest_initial_data-v1'
 				) returning id`
 
 		const [revQuran] = await tx<{ id: string }[]>`

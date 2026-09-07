@@ -406,6 +406,87 @@ describe('source registry API (SRC-001 slice, RBAC + audit + CSRF)', () => {
 		expect(audits.every((a) => a.trace_id !== null)).toBeTrue()
 	})
 
+	test('acquisition & policy registry fields round-trip (DB-039)', async () => {
+		const editor = await authFor(ids.editorA, ids.tenantA, true)
+
+		// invalid vocabulary / malformed values are rejected by name
+		const bad = await app.handle(
+			new Request('http://localhost/sources', {
+				method: 'POST',
+				headers: { ...editor, 'content-type': 'application/json' },
+				body: JSON.stringify({
+					title: 'Bad Policy',
+					author: 'x',
+					sourceType: 'book',
+					language: 'ar',
+					rightsStatus: 'licensed',
+					accessScopeId: ids.scopeRootA,
+					acquisitionMethod: 'scraped', // not in the vocabulary
+					allowedUses: ['rag', 'everything'], // 'everything' is not
+					policyCheckedAt: 'not-a-date',
+				}),
+			}),
+		)
+		expect(bad.status).toBe(400)
+		const badFields = (await bad.json()).fields
+		expect(badFields).toContain('acquisitionMethod')
+		expect(badFields).toContain('allowedUses')
+		expect(badFields).toContain('policyCheckedAt')
+
+		// a source acquired from a provider records where from and on what terms
+		const res = await app.handle(
+			new Request('http://localhost/sources', {
+				method: 'POST',
+				headers: { ...editor, 'content-type': 'application/json' },
+				body: JSON.stringify({
+					title: 'Tanzil Quran (Uthmani)',
+					author: 'Tanzil.net',
+					sourceType: 'dataset',
+					language: 'ar',
+					rightsStatus: 'public_domain',
+					accessScopeId: ids.scopeRootA,
+					acquisitionMethod: 'bulk_file',
+					policyReference:
+						'https://tanzil.net/download (terms: verbatim + attribution)',
+					policyCheckedAt: '2026-09-07T00:00:00.000Z',
+					allowedUses: ['display', 'storage', 'rag'],
+					retentionPolicy: 'keep raw snapshot per provider terms',
+					updatePolicy: 'pin edition; re-check upstream yearly',
+					parserVersion: 'tanzil-xml-v1',
+				}),
+			}),
+		)
+		expect(res.status).toBe(201)
+		const { id } = await res.json()
+
+		const got = await app.handle(
+			new Request(`http://localhost/sources/${id}`, {
+				headers: { cookie: (await authFor(ids.editorA, ids.tenantA)).cookie },
+			}),
+		)
+		const row = await got.json()
+		expect(row.acquisition_method).toBe('bulk_file')
+		expect(row.allowed_uses).toEqual(['display', 'storage', 'rag'])
+		expect(row.policy_reference).toContain('tanzil.net')
+		expect(row.parser_version).toBe('tanzil-xml-v1')
+
+		// policy verification is a separate later act: patch records it
+		const patched = await app.handle(
+			new Request(`http://localhost/sources/${id}/metadata`, {
+				method: 'PATCH',
+				headers: { ...editor, 'content-type': 'application/json' },
+				body: JSON.stringify({ allowedUses: ['display', 'rag'] }),
+			}),
+		)
+		expect(patched.status).toBe(200)
+		const reread = await app.handle(
+			new Request(`http://localhost/sources/${id}`, {
+				headers: { cookie: (await authFor(ids.editorA, ids.tenantA)).cookie },
+			}),
+		)
+		expect((await reread.json()).allowed_uses ?? []).toEqual(['display', 'rag'])
+	})
+
 	test('reader can read but not create; reason code explains denial', async () => {
 		const reader = await authFor(ids.readerA, ids.tenantA, true)
 		const denied = await app.handle(
