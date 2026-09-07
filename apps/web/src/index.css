@@ -2232,3 +2232,265 @@ h2 {
 	color: var(--text-faint);
 	letter-spacing: 0.01em;
 }
+
+/* ==========================================================================
+   Reviewer Workspace UI (#110 / #119)
+   ========================================================================== */
+
+.reviewer-workspace {
+	width: 100%;
+	margin-top: 16px;
+}
+
+.reviewer-layout {
+	display: grid;
+	grid-template-columns: 280px 1fr;
+	gap: 20px;
+	align-items: start;
+}
+
+.reviewer-queue {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	padding: 16px;
+}
+
+.reviewer-queue h3 {
+	margin: 0 0 12px;
+	font-size: 15px;
+	font-weight: 600;
+}
+
+.queue-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.queue-item {
+	border-radius: 8px;
+	border: 1px solid var(--border);
+	background: var(--bg);
+	transition: all 0.15s ease;
+}
+
+.queue-item.active {
+	border-color: var(--primary);
+	background: var(--primary-soft);
+}
+
+.queue-item button {
+	width: 100%;
+	border: none;
+	background: none;
+	padding: 10px 12px;
+	text-align: left;
+	cursor: pointer;
+	font: inherit;
+}
+
+.queue-item-question {
+	font-weight: 500;
+	font-size: 13.5px;
+	color: var(--ink);
+	margin-bottom: 4px;
+	line-height: 1.3;
+}
+
+.queue-item-meta {
+	display: flex;
+	justify-content: space-between;
+	font-size: 11.5px;
+	color: var(--ink-soft);
+}
+
+.reviewer-main {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	padding: 24px;
+}
+
+.review-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	padding-bottom: 16px;
+	border-bottom: 1px solid var(--border);
+	margin-bottom: 20px;
+}
+
+.review-header h3 {
+	margin: 4px 0 0;
+	font-size: 18px;
+	color: var(--ink);
+}
+
+.claims-list {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	margin-top: 12px;
+}
+
+.claim-review-card {
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	background: var(--bg);
+	padding: 16px;
+}
+
+.claim-card-columns {
+	display: grid;
+	grid-template-columns: 1.1fr 1fr;
+	gap: 20px;
+}
+
+.claim-col-head,
+.evidence-col-head {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 8px;
+	font-weight: 600;
+	font-size: 13px;
+	color: var(--ink-soft);
+}
+
+.claim-text {
+	font-size: 14.5px;
+	line-height: 1.5;
+	color: var(--ink);
+	margin: 0 0 12px;
+}
+
+.claim-standing-status {
+	font-size: 13px;
+	margin-bottom: 8px;
+}
+
+.verdict-tag {
+	display: inline-block;
+	padding: 2px 8px;
+	border-radius: 999px;
+	font-size: 11.5px;
+	font-weight: 600;
+}
+
+.verdict-approve {
+	background: #e6f7f2;
+	color: #0e7a63;
+}
+
+.verdict-reject {
+	background: #fde8e8;
+	color: #c81e1e;
+}
+
+.verdict-correct {
+	background: #fef08a;
+	color: #854d0e;
+}
+
+.verdict-none {
+	background: var(--border);
+	color: var(--ink-soft);
+}
+
+.claim-standing-meta {
+	font-size: 12px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 8px 10px;
+	margin-bottom: 12px;
+}
+
+.verdict-note,
+.verdict-correction {
+	margin-bottom: 4px;
+}
+
+.verdict-time {
+	color: var(--ink-soft);
+}
+
+.claim-actions {
+	display: flex;
+	gap: 8px;
+	margin-top: 12px;
+}
+
+.btn-verdict {
+	padding: 6px 14px;
+	border-radius: 6px;
+	font-size: 13px;
+	font-weight: 500;
+	cursor: pointer;
+	border: 1px solid transparent;
+	transition: all 0.15s ease;
+}
+
+.btn-approve {
+	background: #0e7a63;
+	color: white;
+}
+.btn-approve:hover {
+	background: #0b5e4c;
+}
+
+.btn-reject {
+	background: #ef4444;
+	color: white;
+}
+.btn-reject:hover {
+	background: #dc2626;
+}
+
+.btn-correct {
+	background: var(--surface);
+	border-color: var(--border);
+	color: var(--ink);
+}
+.btn-correct:hover {
+	background: var(--border);
+}
+
+.evidence-passage-box {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 12px;
+	margin-bottom: 8px;
+}
+
+.evidence-meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	align-items: center;
+	font-size: 12px;
+	margin-bottom: 6px;
+}
+
+.span-pill {
+	background: rgba(14, 122, 99, 0.1);
+	color: var(--primary);
+	padding: 1px 6px;
+	border-radius: 4px;
+	font-family: monospace;
+	font-size: 11px;
+}
+
+.evidence-quote {
+	margin: 0;
+	padding-left: 10px;
+	border-left: 3px solid var(--primary);
+	font-size: 13px;
+	line-height: 1.5;
+	color: var(--ink);
+}

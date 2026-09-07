@@ -18,6 +18,7 @@ const proxy: Record<string, ProxyOptions> = {
 	'/messages': apiTarget,
 	'/answers': apiTarget,
 	'/feedback': apiTarget,
+	'/reviewer': apiTarget,
 }
 
 export default defineConfig({

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ChatContainer } from './chat/ChatContainer'
+import { ReviewerWorkspace } from './chat/ReviewerWorkspace'
 import { ConceptEditor } from './knowledge/ConceptEditor'
 import { OpsStatusContainer } from './ops/OpsStatusContainer'
 import { SourceRegistry } from './sources/SourceRegistry'
@@ -136,6 +137,11 @@ const NAV_SECTIONS: Array<{
 				href: '#/studio-dashboard',
 				label: 'Dashboard',
 				icon: ICON_PATHS.grid,
+			},
+			{
+				href: '#/reviewer',
+				label: 'Tinjauan Klaim',
+				icon: ICON_PATHS.shield,
 			},
 		],
 	},
@@ -421,6 +427,16 @@ export default function App() {
 							<p>Ringkasan kesehatan sumber, pekerjaan terbuka, dan rilis.</p>
 						</div>
 					)}
+					{route === '/reviewer' && (
+						<div className="page-head">
+							<h2>Ruang Kerja Peninjau Ulama</h2>
+							<p>
+								Tinjau klaim jawaban dan rujukan dalil secara berdampingan.
+								Keputusan penolakan/koreksi otomatis dicatat sebagai kasus
+								regresi evaluasi.
+							</p>
+						</div>
+					)}
 					{route === '/ops' && (
 						<div className="page-head">
 							<h2>Status Operasional</h2>
@@ -460,6 +476,10 @@ export default function App() {
 								<a href="/auth/login">Masuk</a> untuk melihat dasbor studio.
 							</p>
 						))}
+
+					{route === '/reviewer' && (
+						<ReviewerWorkspace permissions={permissions} />
+					)}
 
 					{route === '/ops' &&
 						(permissions.includes('ops:read') ? (

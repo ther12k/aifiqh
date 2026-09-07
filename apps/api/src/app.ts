@@ -18,6 +18,13 @@ import {
 	startConversation,
 } from './answers/chatService'
 import {
+	ClaimReviewError,
+	type ClaimVerdict,
+	aggregateScholarlyReview,
+	standingVerdicts,
+	submitClaimReview,
+} from './answers/claimReviewService'
+import {
 	EVIDENCE_PACK_VERSION,
 	type EvidencePack,
 	EvidencePackError,
@@ -2407,6 +2414,201 @@ function sourceRoutes(deps: AppDeps) {
 				} catch (err) {
 					if (err instanceof AnswerTraceError) {
 						ctx.set.status = err.code === 'ANSWER_NOT_FOUND' ? 404 : 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			// --- Reviewer workspace endpoints (#110 / #119) ---
+			.get('/reviewer/queue', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('review:approve')
+				const rows = await scopedTransaction(
+					sql,
+					principal.tenantId,
+					async (tx) => {
+						return await tx<
+							{
+								answer_id: string
+								conversation_id: string
+								created_at: string
+								question: string | null
+								claim_count: number
+								reviewed_claim_count: number
+							}[]
+						>`
+							select a.id as answer_id, cv.id as conversation_id, a.created_at::text,
+								(select content from messages where conversation_id = cv.id and role = 'user' order by ordinal asc limit 1) as question,
+								(select count(*)::int from answer_claims ac where ac.answer_id = a.id) as claim_count,
+								(select count(distinct cr.claim_id)::int from claim_reviews cr where cr.answer_id = a.id) as reviewed_claim_count
+							from answers a
+							join messages m on m.id = a.message_id
+							join conversations cv on cv.id = m.conversation_id
+							where cv.tenant_id = ${principal.tenantId}::uuid
+							order by a.created_at desc limit 50`
+					},
+				)
+				return { queue: rows }
+			})
+			.get('/answers/:id/claims', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				const answerId = ctx.params.id
+
+				const data = await scopedTransaction(
+					sql,
+					principal.tenantId,
+					async (tx) => {
+						const [ans] = await tx<
+							{
+								id: string
+								conversation_id: string
+								created_at: string
+								question: string | null
+								answer_text: string | null
+							}[]
+						>`
+							select a.id, cv.id as conversation_id, a.created_at::text,
+								(select content from messages where conversation_id = cv.id and role = 'user' order by ordinal asc limit 1) as question,
+								m.content as answer_text
+							from answers a
+							join messages m on m.id = a.message_id
+							join conversations cv on cv.id = m.conversation_id
+							where a.id = ${answerId}::uuid and cv.tenant_id = ${principal.tenantId}::uuid
+							limit 1`
+						if (!ans) return null
+
+						const claims = await tx<
+							{
+								id: string
+								claim_text: string
+								claim_kind: string
+								ordinal: number
+							}[]
+						>`
+							select id, claim_text, claim_kind, ordinal
+							from answer_claims where answer_id = ${answerId}::uuid order by ordinal asc`
+
+						const evidence = await tx<
+							{
+								claim_id: string
+								evidence_id: string
+								unit_id: string | null
+								span_id: string | null
+								span_key: string | null
+								original_text: string | null
+								authority_type: string | null
+								madhhab: string[] | null
+								stance: string | null
+								grading: string | null
+								grading_by: string | null
+								source_title: string | null
+								source_author: string | null
+							}[]
+						>`
+							select ce.claim_id, ce.id as evidence_id, ce.unit_id,
+								ss.id as span_id, ss.span_key, ss.original_text, ss.authority_type,
+								ss.madhhab, ss.stance, ss.grading, ss.grading_by,
+								s.title as source_title, s.author as source_author
+							from claim_evidence ce
+							join answer_claims ac on ac.id = ce.claim_id
+							left join retrieval_units ru on ru.id = ce.unit_id
+							left join source_spans ss on ss.id = ru.source_span_id
+							left join source_revisions sr on sr.id = ss.source_revision_id
+							left join sources s on s.id = sr.source_id
+							where ac.answer_id = ${answerId}::uuid`
+
+						const verdicts = await standingVerdicts(tx, principal, answerId)
+						const verdictByClaim = new Map(verdicts.map((v) => [v.claimId, v]))
+
+						const evidenceByClaim = new Map<
+							string,
+							Array<(typeof evidence)[number]>
+						>()
+						for (const e of evidence) {
+							const list = evidenceByClaim.get(e.claim_id) ?? []
+							list.push(e)
+							evidenceByClaim.set(e.claim_id, list)
+						}
+
+						const materialCount = claims.length
+						const scholarlyReview = aggregateScholarlyReview(
+							verdicts,
+							materialCount,
+						)
+
+						return {
+							answerId: ans.id,
+							conversationId: ans.conversation_id,
+							createdAt: ans.created_at,
+							question: ans.question ?? 'Tanya jawab fiqih',
+							answerText: ans.answer_text,
+							scholarlyReview,
+							claims: claims.map((c) => ({
+								id: c.id,
+								text: c.claim_text,
+								kind: c.claim_kind,
+								ordinal: c.ordinal,
+								standingVerdict: verdictByClaim.get(c.id) ?? null,
+								evidence: (evidenceByClaim.get(c.id) ?? []).map((ev) => ({
+									evidenceId: ev.evidence_id,
+									unitId: ev.unit_id,
+									spanId: ev.span_id,
+									spanKey: ev.span_key,
+									originalText: ev.original_text,
+									authorityType: ev.authority_type,
+									madhhab: ev.madhhab ?? [],
+									stance: ev.stance,
+									grading: ev.grading,
+									gradingBy: ev.grading_by,
+									sourceTitle: ev.source_title,
+									sourceAuthor: ev.source_author,
+								})),
+							})),
+						}
+					},
+				)
+
+				if (!data) {
+					ctx.set.status = 404
+					return { error: 'not_found' }
+				}
+				return data
+			})
+			.post('/answers/:id/claims/:claimId/review', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('review:approve')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				const verdict = body.verdict as ClaimVerdict
+				if (
+					verdict !== 'approve' &&
+					verdict !== 'reject' &&
+					verdict !== 'correct'
+				) {
+					ctx.set.status = 400
+					return { error: 'validation_failed', fields: ['verdict'] }
+				}
+				try {
+					const result = await scopedTransaction(
+						sql,
+						principal.tenantId,
+						(tx) =>
+							submitClaimReview(tx, principal, {
+								answerId: ctx.params.id,
+								claimId: ctx.params.claimId,
+								verdict,
+								note: typeof body.note === 'string' ? body.note : null,
+								correctedText:
+									typeof body.correctedText === 'string'
+										? body.correctedText
+										: null,
+							}),
+					)
+					return result
+				} catch (err) {
+					if (err instanceof ClaimReviewError) {
+						ctx.set.status = err.code === 'CLAIM_NOT_FOUND' ? 404 : 400
 						return { error: err.code, message: err.message }
 					}
 					throw err
