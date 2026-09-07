@@ -17,16 +17,22 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 // PKCE S256 is REQUIRED on the only client; the app signs the authorization
 // request with a challenge and proves possession at the token endpoint.
 import { createServer } from 'node:http'
+import { readFileSync } from 'node:fs'
 import Provider from 'oidc-provider'
 
 const ISSUER = process.env.ISSUER ?? 'http://localhost:4011'
 const PORT = Number(process.env.PORT ?? 4011)
 
 function parseAccounts() {
-	const raw = process.env.OIDC_ACCOUNTS ?? ''
+	// file-based provisioning preferred on servers: keeps credential
+	// material out of the process environment (docker inspect visibility)
+	const filePath = process.env.OIDC_ACCOUNTS_FILE
+	const raw = filePath
+		? readFileSync(filePath, 'utf8')
+		: (process.env.OIDC_ACCOUNTS ?? '')
 	if (!raw.trim()) {
 		throw new Error(
-			'OIDC_ACCOUNTS is required (JSON array of {email, name?, passwordScrypt|password}). ' +
+			'OIDC_ACCOUNTS (or OIDC_ACCOUNTS_FILE) is required (JSON array of {email, name?, passwordScrypt|password}). ' +
 				'Generate passwordScrypt with: node index.js --hash <password>',
 		)
 	}
