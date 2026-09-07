@@ -6,6 +6,26 @@ import Provider from 'oidc-provider'
 const ISSUER = process.env.ISSUER ?? 'http://localhost:4011'
 const PORT = Number(process.env.PORT ?? 4011)
 
+// Allow extra redirect URIs via env var (space-separated) for production domains
+const EXTRA_REDIRECT_URIS = (process.env.EXTRA_REDIRECT_URIS ?? '')
+	.split(' ')
+	.map((u) => u.trim())
+	.filter(Boolean)
+
+const REDIRECT_URIS = [
+	'http://localhost:3000/auth/callback',
+	'http://localhost:5173/auth/callback',
+	...EXTRA_REDIRECT_URIS,
+]
+
+const POST_LOGOUT_URIS = [
+	'http://localhost:5173',
+	...(process.env.POST_LOGOUT_URIS ?? '')
+		.split(' ')
+		.map((u) => u.trim())
+		.filter(Boolean),
+]
+
 class MemoryAdapter {
 	constructor(name) {
 		this.name = name
@@ -50,11 +70,8 @@ const provider = new Provider(ISSUER, {
 		{
 			client_id: 'aifiqh-api',
 			client_secret: 'dev-client-secret',
-			redirect_uris: [
-				'http://localhost:3000/auth/callback',
-				'http://localhost:5173/auth/callback',
-			],
-			post_logout_redirect_uris: ['http://localhost:5173'],
+			redirect_uris: REDIRECT_URIS,
+			post_logout_redirect_uris: POST_LOGOUT_URIS,
 			grant_types: ['authorization_code'],
 			response_types: ['code'],
 			token_endpoint_auth_method: 'client_secret_basic',
