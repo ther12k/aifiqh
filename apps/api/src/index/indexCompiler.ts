@@ -137,8 +137,9 @@ export async function compileIndexRelease(
 			join source_revisions sr on sr.id = ss.source_revision_id
 			join sources s on s.id = sr.source_id
 			left join source_sections sec on sec.id = ss.section_id
-			where s.tenant_id = ${principal.tenantId}::uuid
-				and sr.status = 'active'
+				where s.tenant_id = ${principal.tenantId}::uuid
+					and sr.status = 'active'
+					and ss.traceability_status = 'traceable'
 			order by ss.id asc`
 
 		const [indexRelease] = await tx<{ id: string }[]>`
