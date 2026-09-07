@@ -59,6 +59,53 @@ export interface CasePairComparison {
 	candidateTraceId: string | null
 }
 
+export interface ComparisonDimensions {
+	retrievalQuality: {
+		baselineRecall: number | null
+		candidateRecall: number | null
+		deltaRecall: number | null
+		baselineMrr: number | null
+		candidateMrr: number | null
+		deltaMrr: number | null
+	}
+	citationIntegrity: {
+		baselineResolution: number | null
+		candidateResolution: number | null
+		deltaResolution: number | null
+		baselineQuoteMatch: number | null
+		candidateQuoteMatch: number | null
+		deltaQuoteMatch: number | null
+	}
+	claimSupport: {
+		baselineUnsupportedClaims: number | null
+		candidateUnsupportedClaims: number | null
+		deltaUnsupportedClaims: number | null
+	}
+	abstentionClarification: {
+		baselineSensitiveCompliance: number | null
+		candidateSensitiveCompliance: number | null
+		deltaSensitiveCompliance: number | null
+	}
+	reviewerAcceptance: {
+		baselinePolicyCompliance: number | null
+		candidatePolicyCompliance: number | null
+		deltaPolicyCompliance: number | null
+	}
+	latency: {
+		baselineAvgMs: number | null
+		candidateAvgMs: number | null
+		deltaAvgMs: number | null
+	}
+}
+
+export interface InspectableFailure {
+	caseKey: string
+	outcome: ComparisonOutcome
+	reasons: string[]
+	candidateTraceId: string | null
+	baselineTraceId: string | null
+}
+
 export interface ComparisonReport {
 	comparisonVersion: string
 	baseline: {
@@ -80,6 +127,8 @@ export interface ComparisonReport {
 		unchanged: number
 		regressedCaseKeys: string[]
 	}
+	dimensions: ComparisonDimensions
+	inspectableFailures: InspectableFailure[]
 	casePairs: CasePairComparison[]
 	mapped: boolean
 }
@@ -365,6 +414,89 @@ export async function compareRuns(
 			.map((p) => p.caseKey),
 	}
 
+	// Helper to extract delta
+	const num = (r: Record<string, unknown>, k: string): number | null =>
+		typeof r[k] === 'number' ? (r[k] as number) : null
+	const delta = (c: number | null, b: number | null): number | null =>
+		c !== null && b !== null ? Number((c - b).toFixed(4)) : null
+
+	const bRep = baselineRun.report ?? {}
+	const cRep = candidateRun.report ?? {}
+
+	const bRecall = num(bRep, 'recallAtK')
+	const cRecall = num(cRep, 'recallAtK')
+	const bMrr = num(bRep, 'mrr')
+	const cMrr = num(cRep, 'mrr')
+
+	const bRes = num(bRep, 'citationResolutionRate')
+	const cRes = num(cRep, 'citationResolutionRate')
+	const bQuote = num(bRep, 'exactQuoteMatchRate')
+	const cQuote = num(cRep, 'exactQuoteMatchRate')
+
+	const bUnsupp = num(bRep, 'unsupportedClaimsRate')
+	const cUnsupp = num(cRep, 'unsupportedClaimsRate')
+
+	const bSens = num(bRep, 'sensitiveComplianceRate')
+	const cSens = num(cRep, 'sensitiveComplianceRate')
+
+	const bPol = num(bRep, 'policyComplianceRate')
+	const cPol = num(cRep, 'policyComplianceRate')
+
+	const bLat = num(bRep, 'avgLatencyMs')
+	const cLat = num(cRep, 'avgLatencyMs')
+
+	const dimensions: ComparisonDimensions = {
+		retrievalQuality: {
+			baselineRecall: bRecall,
+			candidateRecall: cRecall,
+			deltaRecall: delta(cRecall, bRecall),
+			baselineMrr: bMrr,
+			candidateMrr: cMrr,
+			deltaMrr: delta(cMrr, bMrr),
+		},
+		citationIntegrity: {
+			baselineResolution: bRes,
+			candidateResolution: cRes,
+			deltaResolution: delta(cRes, bRes),
+			baselineQuoteMatch: bQuote,
+			candidateQuoteMatch: cQuote,
+			deltaQuoteMatch: delta(cQuote, bQuote),
+		},
+		claimSupport: {
+			baselineUnsupportedClaims: bUnsupp,
+			candidateUnsupportedClaims: cUnsupp,
+			deltaUnsupportedClaims: delta(cUnsupp, bUnsupp),
+		},
+		abstentionClarification: {
+			baselineSensitiveCompliance: bSens,
+			candidateSensitiveCompliance: cSens,
+			deltaSensitiveCompliance: delta(cSens, bSens),
+		},
+		reviewerAcceptance: {
+			baselinePolicyCompliance: bPol,
+			candidatePolicyCompliance: cPol,
+			deltaPolicyCompliance: delta(cPol, bPol),
+		},
+		latency: {
+			baselineAvgMs: bLat,
+			candidateAvgMs: cLat,
+			deltaAvgMs: delta(cLat, bLat),
+		},
+	}
+
+	const inspectableFailures: InspectableFailure[] = casePairs
+		.filter((p) => p.outcome === 'regressed')
+		.map((p) => ({
+			caseKey: p.caseKey,
+			outcome: p.outcome,
+			reasons: p.deltas.map(
+				(d) =>
+					`${d.metric}: ${d.baseline} -> ${d.candidate} (${d.better} was better)`,
+			),
+			candidateTraceId: p.candidateTraceId,
+			baselineTraceId: p.baselineTraceId,
+		}))
+
 	const report: ComparisonReport = {
 		comparisonVersion: EVAL_COMPARISON_VERSION,
 		baseline: {
@@ -380,6 +512,8 @@ export async function compareRuns(
 			report: candidateRun.report,
 		},
 		summary,
+		dimensions,
+		inspectableFailures,
 		casePairs,
 		mapped,
 	}
