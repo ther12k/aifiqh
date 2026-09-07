@@ -17,6 +17,7 @@ import type { ExpansionOutcome } from '../src/retrieval/evidenceExpansion'
 import { applyEvidencePolicy } from '../src/retrieval/evidenceSelector'
 import type { EvidenceCandidate } from '../src/retrieval/evidenceSelector'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -274,7 +275,8 @@ describe('CTX-001: immutable manifest storage + route', () => {
 			returning id`
 		const [srcRev] = await sql<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${src.id}::uuid, 1, 'active') returning id`
+			values (${src.id}::uuid, 1, 'pending_review') returning id`
+		await approveTestRevision(sql, srcRev.id)
 		const mkUnit = async () => {
 			const id = crypto.randomUUID()
 			const [span] = await sql<{ id: string }[]>`
@@ -375,7 +377,8 @@ describe('CTX-001: immutable manifest storage + route', () => {
 			values (${tenant.id}::uuid, 'Kitab Zakat', 'Tim', 'book', 'id', 'public_domain', ${scope.id}::uuid) returning id`
 		const [rev] = await sql<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${src.id}::uuid, 1, 'active') returning id`
+			values (${src.id}::uuid, 1, 'pending_review') returning id`
+		await approveTestRevision(sql, rev.id)
 		await sql`insert into source_spans (source_revision_id, span_key, original_text)
 			values (${rev.id}::uuid, 'ctx-1', 'Zakat fitrah wajib berupa makanan pokok setiap jiwa.')`
 		await sql`insert into source_spans (source_revision_id, span_key, original_text)

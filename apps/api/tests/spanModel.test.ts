@@ -14,6 +14,7 @@ import {
 	resolveSpan,
 } from '../src/sources/spanResolver'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -137,9 +138,10 @@ describe('canonical page, section and stable span model (ING-002)', () => {
 			(tx) =>
 				tx<{ id: string }[]>`
 				insert into source_revisions (source_id, revision_number, status)
-				values (${src.id}::uuid, floor(random()*100000)::int, 'active')
+				values (${src.id}::uuid, floor(random()*100000)::int, 'pending_review')
 				returning id`,
 		)
+		await approveTestRevision(sql, rev.id)
 
 		const mockOutput: ProcessorOutput = {
 			pages: [
@@ -289,9 +291,10 @@ describe('canonical page, section and stable span model (ING-002)', () => {
 			(tx) =>
 				tx<{ id: string }[]>`
 				insert into source_revisions (source_id, revision_number, status)
-				values (${src.id}::uuid, floor(random()*100000)::int, 'active')
+				values (${src.id}::uuid, floor(random()*100000)::int, 'pending_review')
 				returning id`,
 		)
+		await approveTestRevision(sql, rev.id)
 		const [span] = await scopedTransaction(
 			sql,
 			tenantId,

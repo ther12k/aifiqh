@@ -6,6 +6,7 @@ import { issueSession } from '../src/auth/sessionStore'
 import { loadConfig } from '../src/config'
 import { createLogger } from '../src/logger'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -124,7 +125,8 @@ async function makeDiffFixture(withNewerRevision = false) {
 		values (${tenantId}::uuid, 'Kitab Dalil', 'x', 'book', 'ar', 'public_domain', ${scopeId}::uuid) returning id`
 	const [srev] = await sql<{ id: string }[]>`
 		insert into source_revisions (source_id, revision_number, status)
-		values (${src.id}::uuid, 1, 'active') returning id`
+		values (${src.id}::uuid, 1, 'pending_review') returning id`
+	await approveTestRevision(sql, srev.id)
 	const [span] = await sql<{ id: string }[]>`
 		insert into source_spans (source_revision_id, span_key, original_text)
 		values (${srev.id}::uuid, ${`df-${crypto.randomUUID().slice(0, 6)}`}, 'Nash tentang thaharah') returning id`

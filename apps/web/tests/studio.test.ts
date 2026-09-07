@@ -17,8 +17,10 @@ import {
 	validateDraft,
 } from '../src/lib/editorState'
 import {
+	REVISION_STATUS_LABELS,
 	SourceRegistry,
 	canDeprecateRevision,
+	canReviewRevision,
 	canUploadRevision,
 } from '../src/sources/SourceRegistry'
 
@@ -146,5 +148,24 @@ describe('source registry & revision timeline UI (SRC-004)', () => {
 
 		expect(canDeprecateRevision(['source:read'])).toBeFalse()
 		expect(canDeprecateRevision(['source:read', 'source:deprecate'])).toBeTrue()
+	})
+
+	test('editorial review gating (#108): only review:approve decides', () => {
+		// an editor can upload but never approve their own upload
+		expect(
+			canReviewRevision(['source:read', 'source:create', 'source:deprecate']),
+		).toBeFalse()
+		// the reviewer role carries the decision permission
+		expect(canReviewRevision(['source:read', 'review:approve'])).toBeTrue()
+
+		// every lifecycle state has an honest Indonesian label
+		for (const status of [
+			'processing',
+			'pending_review',
+			'active',
+			'deprecated',
+		]) {
+			expect(REVISION_STATUS_LABELS[status]).toBeTruthy()
+		}
 	})
 })

@@ -153,6 +153,8 @@ async function main() {
 
 	let kReleaseId = ''
 	let configId = ''
+	// revisions created this run — they land in pending_review (#108)
+	const pendingRevisionIds: string[] = []
 
 	// 3. Set up Sources in tenant Alpha
 	// We run with app.tenant_id set for RLS compliance
@@ -180,9 +182,13 @@ async function main() {
 					${tenantId}::uuid, ${hadithTitle}, ${hadithAuthor}, 'book', 'ar', ${hadithEdition}, ${hadithPublisher}, 'public_domain', ${scopeId}::uuid, ${adminId}::uuid
 				) returning id`
 
+		// #108 editorial approval gate: revisions land in pending_review —
+		// ingest never activates content; a reviewer does (see the end of
+		// this script for how)
 		const [revHadith] = await tx<{ id: string }[]>`
 				insert into source_revisions (source_id, revision_number, status, created_by)
-				values (${srcHadith.id}::uuid, 1, 'active', ${adminId}::uuid) returning id`
+				values (${srcHadith.id}::uuid, 1, 'pending_review', ${adminId}::uuid) returning id`
+		pendingRevisionIds.push(revHadith.id)
 
 		for (const h of hadithList) {
 			const spanKey = `hadith-arbain-${String(h.no).padStart(2, '0')}`
@@ -207,7 +213,8 @@ async function main() {
 
 		const [revQuran] = await tx<{ id: string }[]>`
 				insert into source_revisions (source_id, revision_number, status, created_by)
-				values (${srcQuran.id}::uuid, 1, 'active', ${adminId}::uuid) returning id`
+				values (${srcQuran.id}::uuid, 1, 'pending_review', ${adminId}::uuid) returning id`
+		pendingRevisionIds.push(revQuran.id)
 
 		for (let i = 0; i < quranVerses.length; i++) {
 			const v = quranVerses[i]
@@ -327,7 +334,42 @@ async function main() {
 		configId = config.id
 	})
 
-	// 7. Compile Index Release
+	// 7. Editorial approval gate (#108): the revisions above are
+	// pending_review and the index compiler only admits approved revisions —
+	// compiling now would produce an empty corpus. Someone must review and
+	// approve before anything becomes answerable:
+	//   - Studio → Sumber → review panel, signed in as a reviewer, or
+	//   - POST /api/sources/:sourceId/revisions/:revisionId/review
+	// INGEST_AUTO_APPROVE=1 records the approval as the admin user running
+	// this bootstrap (the operator is the reviewer on first setup) and
+	// continues; without it the script stops here.
+	if (process.env.INGEST_AUTO_APPROVE !== '1') {
+		console.log(
+			`\n⏸  ${pendingRevisionIds.length} revision(s) await editorial review (status pending_review).`,
+		)
+		console.log(
+			'Approve them in Studio → Sumber, then rerun with INGEST_AUTO_APPROVE=1 to compile+promote the index.',
+		)
+		process.exit(0)
+	}
+	await sql.begin(async (tx) => {
+		await tx`select set_config('app.tenant_id', ${tenantId}, true)`
+		for (const revId of pendingRevisionIds) {
+			await tx`
+				insert into source_revision_reviews (tenant_id, source_revision_id, decision, actor_type, actor_id, note)
+				values (${tenantId}::uuid, ${revId}::uuid, 'approve', 'user', ${adminId},
+					'bootstrap corpus review — public-domain Quran/Hadith texts verified during ingest')`
+			await tx`update source_revisions set status = 'active' where id = ${revId}::uuid`
+			await tx`
+				insert into source_revision_status_events (source_revision_id, from_status, to_status, actor_type, actor_id, reason)
+				values (${revId}::uuid, 'pending_review', 'active', 'user', ${adminId}, 'bootstrap approval')`
+		}
+	})
+	console.log(
+		`Approved ${pendingRevisionIds.length} revision(s) — recorded as editorial decisions with reviewer ${adminId}`,
+	)
+
+	// 8. Compile Index Release
 	const compiled = await compileIndexRelease(sql, principal, {
 		knowledgeReleaseId: kReleaseId,
 		configurationId: configId,
@@ -336,7 +378,7 @@ async function main() {
 		`Compiled index release ${compiled.indexReleaseId}: ${compiled.unitsCompiled} total retrieval units (${compiled.sourceUnits} source spans, ${compiled.knowledgeUnits} concepts)`,
 	)
 
-	// 8. Embed units with HashEmbeddingProvider
+	// 9. Embed units with HashEmbeddingProvider
 	const embedRes = await embedIndexRelease(
 		sql,
 		principal,
@@ -347,7 +389,7 @@ async function main() {
 		`Embedded index units: ${embedRes.embeddingsCreated} created, ${embedRes.embeddingsReused} reused`,
 	)
 
-	// 9. Promote Index Release & point production alias
+	// 10. Promote Index Release & point production alias
 	await sql.begin(async (tx) => {
 		await tx`select set_config('app.tenant_id', ${tenantId}, true)`
 		await tx`update index_releases set state = 'promoted' where id = ${compiled.indexReleaseId}::uuid`

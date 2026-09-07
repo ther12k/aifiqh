@@ -13,6 +13,7 @@ import type { Principal } from '@aifiqh/shared'
 import postgres from 'postgres'
 import { runLexicalLane } from '../src/retrieval/retrievalLanes'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -135,7 +136,8 @@ beforeAll(async () => {
 	sourceId = src.id
 	const [rev] = await sql<{ id: string }[]>`
 		insert into source_revisions (source_id, revision_number, status)
-		values (${src.id}::uuid, 1, 'active') returning id`
+		values (${src.id}::uuid, 1, 'pending_review') returning id`
+	await approveTestRevision(sql, rev.id)
 	revisionId = rev.id
 	await sql`
 		insert into source_pages (source_revision_id, page_number, image_storage_key)

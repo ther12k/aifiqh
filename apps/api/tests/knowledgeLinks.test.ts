@@ -7,6 +7,7 @@ import { loadConfig } from '../src/config'
 import { scopedTransaction } from '../src/db/client'
 import { createLogger } from '../src/logger'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -162,9 +163,10 @@ async function makeSourceSpan(
 		(tx) =>
 			tx<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${src.id}::uuid, 1, 'active')
+			values (${src.id}::uuid, 1, 'pending_review')
 			returning id`,
 	)
+	await approveTestRevision(sql, rev.id)
 	const [span] = await scopedTransaction(
 		sql,
 		tenantId,

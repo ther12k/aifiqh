@@ -8,6 +8,7 @@ import { compileIncrementalIndexRelease } from '../src/index/incrementalIndexer'
 import { compileIndexRelease } from '../src/index/indexCompiler'
 import { createLogger } from '../src/logger'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -136,7 +137,8 @@ describe('incremental indexing from source and knowledge-release diffs (IDX-006)
 			values (${tenantId}::uuid, 'Source A', 'Author', 'book', 'ar', 'public_domain', ${scopeId}::uuid) returning id`
 		const [revA] = await sql<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${srcA.id}::uuid, 1, 'active') returning id`
+			values (${srcA.id}::uuid, 1, 'pending_review') returning id`
+		await approveTestRevision(sql, revA.id)
 		await sql`insert into source_spans (source_revision_id, span_key, original_text)
 			values (${revA.id}::uuid, 'span-a-1', 'Teks sumber A yang tetap aktif.')`
 
@@ -145,7 +147,8 @@ describe('incremental indexing from source and knowledge-release diffs (IDX-006)
 			values (${tenantId}::uuid, 'Source B (to deprecate)', 'Author', 'book', 'ar', 'public_domain', ${scopeId}::uuid) returning id`
 		const [revB] = await sql<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${srcB.id}::uuid, 1, 'active') returning id`
+			values (${srcB.id}::uuid, 1, 'pending_review') returning id`
+		await approveTestRevision(sql, revB.id)
 		await sql`insert into source_spans (source_revision_id, span_key, original_text)
 			values (${revB.id}::uuid, 'span-b-1', 'Teks sumber B yang akan dideprecate.')`
 
@@ -183,7 +186,8 @@ describe('incremental indexing from source and knowledge-release diffs (IDX-006)
 			values (${tenantId}::uuid, 'Source D (new)', 'Author', 'book', 'ar', 'public_domain', ${scopeId}::uuid) returning id`
 		const [revD] = await sql<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${srcD.id}::uuid, 1, 'active') returning id`
+			values (${srcD.id}::uuid, 1, 'pending_review') returning id`
+		await approveTestRevision(sql, revD.id)
 		await sql`insert into source_spans (source_revision_id, span_key, original_text)
 			values (${revD.id}::uuid, 'span-d-1', 'Teks sumber D yang baru ditambahkan.')`
 

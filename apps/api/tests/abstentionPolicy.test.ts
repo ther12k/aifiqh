@@ -19,6 +19,7 @@ import {
 import { applyEvidencePolicy } from '../src/retrieval/evidenceSelector'
 import type { EvidenceCandidate } from '../src/retrieval/evidenceSelector'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -251,7 +252,8 @@ describe('EVD-005: decision storage and route integration', () => {
 			values (${tenant.id}::uuid, 'Kitab Umum', 'Tim', 'book', 'id', 'public_domain', ${scope.id}::uuid) returning id`
 		const [rev] = await sql<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${src.id}::uuid, 1, 'active') returning id`
+			values (${src.id}::uuid, 1, 'pending_review') returning id`
+		await approveTestRevision(sql, rev.id)
 		await sql`insert into source_spans (source_revision_id, span_key, original_text)
 			values (${rev.id}::uuid, 'abs-1', 'Hukum memotong kuku saat berpuasa dibahas panjang.')`
 

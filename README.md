@@ -4,7 +4,7 @@ PostgreSQL-canonical knowledge platform for Islamic jurisprudence (fiqh) Q&A: hy
 
 ## Implementation status
 
-Evidence is pinned to commit `85624b0` (CI: [run 33923586476](https://github.com/ther12k/aifiqh/actions/runs/33923586476), `verify` + `e2e` green: 523 unit/integration tests, 4 browser e2e). Migration count is repo-generated: `ls db/migrations/*.sql | wc -l` → **37** (001–037).
+Evidence is pinned to commit `85624b0` (CI: [run 33923586476](https://github.com/ther12k/aifiqh/actions/runs/33923586476), `verify` + `e2e` green: 523 unit/integration tests, 4 browser e2e) plus the editorial approval gate (#108) on top. Migration count is repo-generated: `ls db/migrations/*.sql | wc -l` → **38** (001–038).
 
 | Capability | Status | Evidence |
 |---|---|---|
@@ -16,7 +16,7 @@ Evidence is pinned to commit `85624b0` (CI: [run 33923586476](https://github.com
 | Configurable model providers (secret-ref only) | Implemented | `apps/api/src/llm/modelRouter.ts`, `scripts/configure_model.ts`, `tests/providerConfig.test.ts` |
 | Evaluation runs, promotion gates, release/alias lineage | Implemented | `apps/api/src/eval/`, `tests/evalGate.test.ts` |
 | Ops health, failure taxonomy, runbooks | Implemented | `apps/api/src/ops/`, `docs/runbooks/` |
-| Reviewed corpus workflow (editorial approve-before-answerable) | **Partial** — sources have revisions/deprecation; an explicit per-source editorial approval gate is not yet enforced before indexing | [issue #108](https://github.com/ther12k/aifiqh/issues/108) |
+| Reviewed corpus workflow (editorial approve-before-answerable) | Implemented — revisions land `pending_review`; DB triggers refuse born-active rows and any activation without a recorded approval (`source_revision_reviews`); the index compiler admits approved revisions only | `db/migrations/0038_editorial_approval_gate.sql`, `apps/api/src/app.ts` (`POST .../review`), `tests/editorialGate.test.ts` (trigger matrix + approval flips answer availability) |
 | Claim-support entailment (does the passage actually support the claim?) | **Not implemented** — automated checks cover citation integrity only | [issue #109](https://github.com/ther12k/aifiqh/issues/109) |
 | Scholarly review workflow | **Not implemented** — the API reports `scholarly_review: "not_reviewed"` always | [issue #110](https://github.com/ther12k/aifiqh/issues/110) |
 
@@ -49,10 +49,13 @@ Prereqs: [Bun](https://bun.sh) ≥ 1.4, Docker, Python 3 (for the issue-registra
 ```bash
 bun install
 bun run stack:up        # postgres16+pgvector :5434, minio :9000, oidc :4011
-bun run db:migrate      # applies db/migrations in order (37 as counted above)
+bun run db:migrate      # applies db/migrations in order (38 as counted above)
 bun run db:seed         # tenants, users (admin@example.com et al.), role catalog
 
-# optional: real corpus (Arba'in hadiths + Qur'anic ayat al-ahkam from public APIs)
+# optional: real corpus (Arba'in hadiths + Qur'anic ayat al-ahkam from public APIs).
+# Stops at pending_review — nothing becomes answerable until a reviewer approves
+# (Studio → Sumber → Setujui, or rerun with INGEST_AUTO_APPROVE=1 to record the
+# approval as the operator and compile+promote the index)
 bun scripts/ingest_initial_data.ts
 
 # optional: real model generation (any OpenAI-compatible endpoint; the API key
@@ -65,7 +68,7 @@ LLM_SECRET_REF=env://OPENAI_API_KEY bun scripts/configure_model.ts
 PORT=3100 bun apps/api/src/index.ts
 VITE_PORT=5174 VITE_API_TARGET=http://localhost:3100 bun run dev:web
 
-bun test                # 523 unit + integration tests (hermetic: no external LLM)
+bun test                # 542 unit + integration tests (hermetic: no external LLM)
 bunx playwright test    # 4 e2e specs against a built app
 ```
 
@@ -78,7 +81,7 @@ Then open `http://localhost:5174`, sign in via **Masuk Cepat (Dev Admin)**, ask 
 ├── apps/web        # React + Vite UI (chat, source registry, studio, ops)
 ├── apps/worker     # Bun worker runtime
 ├── packages/shared # framework-free DTOs, permission matrix, contracts
-├── db/migrations/  # 0001..0037 ordered SQL migrations
+├── db/migrations/  # 0001..0038 ordered SQL migrations
 ├── docs/           # PRD/backlog, runbooks; docs/archive is quarantined design history
 ├── e2e/            # Playwright specs (hermetic; AIFIQH_CHAT_MODEL=off)
 └── scripts/        # migrate, seed, ingest, configure_model, RLS policy checker

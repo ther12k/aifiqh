@@ -8,6 +8,7 @@ import {
 	validateAnswerCitations,
 } from '../src/validation/citationValidator'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -55,7 +56,8 @@ async function setupFixture(): Promise<CiteFixture> {
 		returning id`
 	const [activeRev] = await sql<{ id: string }[]>`
 		insert into source_revisions (source_id, revision_number, status)
-		values (${src.id}::uuid, 2, 'active') returning id`
+		values (${src.id}::uuid, 2, 'pending_review') returning id`
+	await approveTestRevision(sql, activeRev.id)
 	const [deprecatedRev] = await sql<{ id: string }[]>`
 		insert into source_revisions (source_id, revision_number, status)
 		values (${src.id}::uuid, 1, 'deprecated') returning id`

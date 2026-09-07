@@ -34,6 +34,7 @@ import {
 import { type Config, loadConfig } from '../src/config'
 import { type Sql, scopedTransaction } from '../src/db/client'
 import { createLogger } from '../src/logger'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -544,7 +545,8 @@ describe('audit immutability (AUD-001 / DB-003)', () => {
 		expect(src).toBeDefined()
 		const [rev] = await sql<{ id: string }[]>`
       insert into source_revisions (source_id, revision_number, status)
-      values (${src?.id}, floor(random()*100000)::int, 'active') returning id`
+      values (${src?.id}, floor(random()*100000)::int, 'pending_review') returning id`
+		await approveTestRevision(sql, rev.id)
 		const sha = crypto.randomUUID().replaceAll('-', '').repeat(4).slice(0, 64)
 		const [file] = await sql<{ id: string }[]>`
       insert into source_files (source_revision_id, sha256, storage_key, mime_type, size_bytes)
@@ -745,10 +747,12 @@ describe('composite lineage constraints (HARD-002)', () => {
 		const [src] = await sql<{ id: string }[]>`select id from sources limit 1`
 		const [revA] = await sql<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${src.id}, floor(random()*90000+10000)::int, 'active') returning id`
+			values (${src.id}, floor(random()*90000+10000)::int, 'pending_review') returning id`
+		await approveTestRevision(sql, revA.id)
 		const [revB] = await sql<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${src.id}, floor(random()*90000+10000)::int, 'active') returning id`
+			values (${src.id}, floor(random()*90000+10000)::int, 'pending_review') returning id`
+		await approveTestRevision(sql, revB.id)
 		const [pageB] = await sql<{ id: string }[]>`
 			insert into source_pages (source_revision_id, page_number)
 			values (${revB.id}, 1) returning id`
@@ -1002,7 +1006,8 @@ describe('least-privilege grants and child-table RLS (HARD-001)', () => {
 			const [srcA] = await tx<{ id: string }[]>`select id from sources limit 1`
 			await tx`
 				insert into source_revisions (source_id, revision_number, status)
-				values (${srcA?.id}, floor(random()*90000+10000)::int, 'active')`
+				values (${srcA?.id}, floor(random()*90000+10000)::int, 'pending_review')`
+			await approveTestRevision(tx, srcA.id)
 		})
 		const scoped = await scopedTransaction(
 			appSql,
@@ -1462,6 +1467,25 @@ describe('revision deprecation lifecycle (SRC-003)', () => {
 		revisionId = (await first.json()).revisionId
 		const replacementId = (await second.json()).revisionId
 
+		// #108: uploads land pending_review — the reviewer approves through
+		// the review route before any deprecation flow can act on them
+		for (const rid of [revisionId, replacementId]) {
+			const okRev = await app.handle(
+				new Request(
+					`http://localhost/sources/${sourceId}/revisions/${rid}/review`,
+					{
+						method: 'POST',
+						headers: {
+							...(await authFor(ids.adminA, ids.tenantA, true)),
+							'content-type': 'application/json',
+						},
+						body: JSON.stringify({ decision: 'approve' }),
+					},
+				),
+			)
+			expect(okRev.status).toBe(200)
+		}
+
 		const dep = await app.handle(
 			new Request(
 				`http://localhost/sources/${sourceId}/revisions/${revisionId}/deprecate`,
@@ -1496,10 +1520,16 @@ describe('revision deprecation lifecycle (SRC-003)', () => {
 			(tx) =>
 				tx<{ to_status: string; reason: string }[]>`
 				select to_status, reason from source_revision_status_events
-				where source_revision_id = ${revisionId}::uuid`,
+				where source_revision_id = ${revisionId}::uuid
+				order by created_at asc`,
 		)
-		expect(events[0].to_status).toBe('deprecated')
-		expect(events[0].reason).toBe('superseded print')
+		// #108: the full lifecycle trail — ingest, editorial approval, retirement
+		expect(events.map((e) => e.to_status)).toEqual([
+			'pending_review',
+			'active',
+			'deprecated',
+		])
+		expect(events[2].reason).toBe('superseded print')
 		const audits = await scopedTransaction(
 			sql,
 			ids.tenantA,
@@ -2149,9 +2179,10 @@ describe('source immutability and historical-reference invariants (SRC-005)', ()
 			(tx) =>
 				tx<{ id: string }[]>`
 					insert into source_revisions (source_id, revision_number, status)
-					values (${src.id}::uuid, 1, 'active')
+					values (${src.id}::uuid, 1, 'pending_review')
 					returning id`,
 		)
+		await approveTestRevision(sql, rev.id)
 		const sha = crypto.randomUUID().replaceAll('-', '').repeat(2).slice(0, 64)
 		const [file] = await scopedTransaction(
 			sql,
@@ -2215,9 +2246,10 @@ describe('source immutability and historical-reference invariants (SRC-005)', ()
 			(tx) =>
 				tx<{ id: string }[]>`
 					insert into source_revisions (source_id, revision_number, status)
-					values (${src.id}::uuid, 1, 'active')
+					values (${src.id}::uuid, 1, 'pending_review')
 					returning id`,
 		)
+		await approveTestRevision(sql, rev.id)
 
 		// Create child relations: page, section, span
 		const [page] = await scopedTransaction(
@@ -2311,6 +2343,22 @@ describe('source immutability and historical-reference invariants (SRC-005)', ()
 		)
 		expect(rev2Res.status).toBe(201)
 		const { revisionId: rev2Id } = await rev2Res.json()
+
+		// #108: approve both through the review route before deprecating —
+		// the replacement must be active for the chain to link
+		for (const rid of [rev1Id, rev2Id]) {
+			const okRev = await app.handle(
+				new Request(
+					`http://localhost/sources/${sourceId}/revisions/${rid}/review`,
+					{
+						method: 'POST',
+						headers: { ...adminAuth, 'content-type': 'application/json' },
+						body: JSON.stringify({ decision: 'approve' }),
+					},
+				),
+			)
+			expect(okRev.status).toBe(200)
+		}
 
 		// 4. Deprecate revision 1 pointing to revision 2
 		const depRes = await app.handle(

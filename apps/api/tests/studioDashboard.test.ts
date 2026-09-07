@@ -12,6 +12,7 @@ import {
 	listFailedJobs,
 } from '../src/studio/dashboardService'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -97,7 +98,8 @@ beforeAll(async () => {
 		returning id`
 	const [rev] = await sql<{ id: string }[]>`
 		insert into source_revisions (source_id, revision_number, status)
-		values (${src.id}::uuid, 1, 'active') returning id`
+		values (${src.id}::uuid, 1, 'pending_review') returning id`
+	await approveTestRevision(sql, rev.id)
 	const [processor] = await sql<{ id: string }[]>`
 		select id from processor_definitions limit 1`
 	await sql`

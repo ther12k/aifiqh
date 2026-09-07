@@ -20,6 +20,7 @@ import {
 } from '../src/retrieval/reranker'
 import type { RetrievalCandidate } from '../src/retrieval/retrievalLanes'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -268,7 +269,8 @@ describe('EVD-001: reranker adapter and relevance policy', () => {
 			values (${tenant.id}::uuid, 'Kitab Tayammum', 'Tim', 'book', 'id', 'public_domain', ${scope.id}::uuid) returning id`
 		const [rev] = await sql<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${src.id}::uuid, 1, 'active') returning id`
+			values (${src.id}::uuid, 1, 'pending_review') returning id`
+		await approveTestRevision(sql, rev.id)
 		await sql`insert into source_spans (source_revision_id, span_key, original_text)
 			values (${rev.id}::uuid, 'rr-1', 'Debu suci digunakan untuk tayammum pengganti wudhu.')`
 

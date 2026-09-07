@@ -7,6 +7,7 @@ import {
 import { runOcrForPage } from '../../worker/src/ocr/ocrService'
 import { scopedTransaction } from '../src/db/client'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -46,9 +47,10 @@ async function makePage(): Promise<string> {
 		(tx) =>
 			tx<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${src.id}::uuid, 1, 'active')
+			values (${src.id}::uuid, 1, 'pending_review')
 			returning id`,
 	)
+	await approveTestRevision(sql, rev.id)
 	const [page] = await scopedTransaction(
 		sql,
 		tenantId,

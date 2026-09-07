@@ -13,6 +13,7 @@ import {
 	expandEvidenceContext,
 } from '../src/retrieval/evidenceExpansion'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -90,7 +91,8 @@ async function setupFixture(): Promise<ExpandFixture> {
 		values (${tenant.id}::uuid, 'Kitab Thaharah', 'Tim', 'book', 'id', 'public_domain', ${scope.id}::uuid) returning id`
 	const [rev] = await sql<{ id: string }[]>`
 		insert into source_revisions (source_id, revision_number, status)
-		values (${src.id}::uuid, 1, 'active') returning id`
+		values (${src.id}::uuid, 1, 'pending_review') returning id`
+	await approveTestRevision(sql, rev.id)
 	const spanKeys = ['span-a', 'span-b', 'span-c']
 	const spanTexts = [SPAN_A, SPAN_B, SPAN_C]
 	const spanIds: string[] = []
@@ -228,7 +230,8 @@ describe('EVD-003: structural evidence expansion', () => {
 			returning id`
 		const [otherRev] = await sql<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${otherSrc.id}::uuid, 1, 'active') returning id`
+			values (${otherSrc.id}::uuid, 1, 'pending_review') returning id`
+		await approveTestRevision(sql, otherRev.id)
 		const [otherSpan] = await sql<{ id: string }[]>`
 			insert into source_spans (source_revision_id, span_key, original_text)
 			values (${otherRev.id}::uuid, 'foreign-1', 'Teks asing di luar lingkup.') returning id`

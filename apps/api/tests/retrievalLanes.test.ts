@@ -19,6 +19,7 @@ import {
 	runVectorLane,
 } from '../src/retrieval/retrievalLanes'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -95,7 +96,8 @@ async function makeLaneRelease(): Promise<LaneFixture> {
 		values (${tenant.id}::uuid, 'Fiqih Air', 'Tim', 'book', 'id', 'public_domain', ${scope.id}::uuid) returning id`
 	const [revId] = await sql<{ id: string }[]>`
 		insert into source_revisions (source_id, revision_number, status)
-		values (${srcId.id}::uuid, 1, 'active') returning id`
+		values (${srcId.id}::uuid, 1, 'pending_review') returning id`
+	await approveTestRevision(sql, revId.id)
 	await sql`insert into source_spans (source_revision_id, span_key, original_text)
 		values (${revId.id}::uuid, 'span-lexical', ${LEXICAL_TEXT})`
 	await sql`insert into source_spans (source_revision_id, span_key, original_text)
@@ -109,7 +111,8 @@ async function makeLaneRelease(): Promise<LaneFixture> {
 		values (${tenant.id}::uuid, 'Rawdat at-Talibin', 'An-Nawawi', 'book', 'ar', 'public_domain', ${scope.id}::uuid) returning id`
 	const [revAr] = await sql<{ id: string }[]>`
 		insert into source_revisions (source_id, revision_number, status)
-		values (${srcAr.id}::uuid, 1, 'active') returning id`
+		values (${srcAr.id}::uuid, 1, 'pending_review') returning id`
+	await approveTestRevision(sql, revAr.id)
 	await sql`insert into source_spans (source_revision_id, span_key, original_text)
 		values (${revAr.id}::uuid, 'span-quote', ${ARABIC_QUOTE_ORIGINAL})`
 

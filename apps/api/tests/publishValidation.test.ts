@@ -25,6 +25,7 @@ const fakeOidc = {
 
 import { loadConfig } from '../src/config'
 import { createLogger } from '../src/logger'
+import { approveTestRevision } from './revisionSeed'
 const silentLog = createLogger('error', {}, () => {})
 const cfg = loadConfig({
 	DATABASE_URL: DB_URL,
@@ -133,8 +134,9 @@ async function makeValidatableConcept(scopeId: string) {
 		returning id`
 	const [srev] = await sql<{ id: string }[]>`
 		insert into source_revisions (source_id, revision_number, status)
-		values (${src.id}::uuid, 1, 'active')
+		values (${src.id}::uuid, 1, 'pending_review')
 		returning id`
+	await approveTestRevision(sql, srev.id)
 	const [span] = await sql<{ id: string }[]>`
 		insert into source_spans (source_revision_id, span_key, original_text)
 		values (${srev.id}::uuid, ${`pv-${crypto.randomUUID().slice(0, 8)}`}, 'Khuff: penutup kaki')

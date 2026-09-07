@@ -16,6 +16,7 @@ import { loadConfig } from '../src/config'
 import { compileIndexRelease } from '../src/index/indexCompiler'
 import { createLogger } from '../src/logger'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -94,7 +95,8 @@ async function setupFixture(): Promise<ChatFixture> {
 		returning id`
 	const [rev] = await sql<{ id: string }[]>`
 		insert into source_revisions (source_id, revision_number, status)
-		values (${src.id}::uuid, 1, 'active') returning id`
+		values (${src.id}::uuid, 1, 'pending_review') returning id`
+	await approveTestRevision(sql, rev.id)
 	await sql`insert into source_spans (source_revision_id, span_key, original_text)
 		values (${rev.id}::uuid, 'cht-a', ${TOPIC_A_TEXT})`
 	await sql`insert into source_spans (source_revision_id, span_key, original_text)

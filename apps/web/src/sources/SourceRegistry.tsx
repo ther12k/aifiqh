@@ -55,6 +55,33 @@ export function canDeprecateRevision(permissions: string[]): boolean {
 	return permissions.includes('source:deprecate')
 }
 
+/** Review decisions are offered only for the review:approve permission hint. */
+export function canReviewRevision(permissions: string[]): boolean {
+	return permissions.includes('review:approve')
+}
+
+/** Indonesian status labels for the revision lifecycle (#108). */
+export const REVISION_STATUS_LABELS: Record<string, string> = {
+	processing: 'diproses',
+	pending_review: 'menunggu tinjauan',
+	active: 'aktif (disetujui)',
+	deprecated: 'tidak berlaku',
+}
+
+interface ReviewRow {
+	id: string
+	decision: string
+	actor_id: string | null
+	note: string | null
+	created_at: string
+}
+
+const REVIEW_DECISION_LABELS: Record<string, string> = {
+	approve: 'disetujui',
+	reject: 'ditolak',
+	retire: 'ditarik',
+}
+
 export interface SourceRegistryProps {
 	/** permissions held by the current principal (UI hints only — the server remains authoritative) */
 	permissions: string[]
@@ -69,13 +96,18 @@ export interface SourceRegistryProps {
 export function SourceRegistry({ permissions }: SourceRegistryProps) {
 	const canCreate = permissions.includes('source:create')
 	const canDeprecate = canDeprecateRevision(permissions)
+	const canReview = canReviewRevision(permissions)
 
 	const [sources, setSources] = useState<SourceRow[]>([])
 	const [query, setQuery] = useState('')
 	const [statusFilter, setStatusFilter] = useState('')
 	const [selected, setSelected] = useState<SourceRow | null>(null)
 	const [revisions, setRevisions] = useState<RevisionRow[]>([])
+	const [reviewsByRevision, setReviewsByRevision] = useState<
+		Record<string, ReviewRow[]>
+	>({})
 	const [uploadError, setUploadError] = useState<string | undefined>()
+	const [reviewNotice, setReviewNotice] = useState<string | undefined>()
 	const [uploading, setUploading] = useState(false)
 
 	const loadSources = useCallback(async () => {
@@ -93,7 +125,21 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 		if (res.ok) {
 			const body = await res.json()
 			// route returns an array (or { error } on failure)
-			setRevisions(Array.isArray(body) ? (body as RevisionRow[]) : [])
+			const revs = Array.isArray(body) ? (body as RevisionRow[]) : []
+			setRevisions(revs)
+			// review history per revision (empty for never-reviewed ones)
+			const history: Record<string, ReviewRow[]> = {}
+			for (const r of revs) {
+				const rres = await fetch(
+					`/sources/${source.id}/revisions/${r.id}/reviews`,
+				)
+				if (rres.ok) {
+					const rbody = await rres.json()
+					if (Array.isArray(rbody.reviews) && rbody.reviews.length > 0)
+						history[r.id] = rbody.reviews as ReviewRow[]
+				}
+			}
+			setReviewsByRevision(history)
 		}
 	}, [])
 
@@ -112,6 +158,11 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 					body: file,
 				})
 				if (res.status === 201) {
+					// #108: a landed revision is pending_review — say so
+					setUploadError(undefined)
+					setReviewNotice(
+						'Revisi tersimpan dan menunggu tinjauan editor — belum bisa dikutip jawaban.',
+					)
 					await openDetail(selected)
 				} else {
 					const body = (await res.json().catch(() => ({}))) as {
@@ -142,6 +193,40 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 				{
 					reason,
 				},
+			)
+			if (res.status === 200) {
+				await openDetail(selected)
+			}
+		},
+		[selected, openDetail],
+	)
+
+	/** #108: the editorial decision — approve/reject/retire through the
+	 * review route; the server records who decided and why */
+	const reviewRevision = useCallback(
+		async (revisionId: string, decision: 'approve' | 'reject' | 'retire') => {
+			if (!selected) return
+			let note = ''
+			if (decision !== 'approve') {
+				note = (
+					window.prompt(
+						decision === 'reject'
+							? 'Alasan penolakan (wajib)?'
+							: 'Alasan penarikan (wajib)?',
+					) ?? ''
+				).trim()
+				if (!note) return
+			} else if (
+				!window.confirm(
+					'Setujui revisi ini? Isinya baru bisa dikutip jawaban setelah disetujui.',
+				)
+			) {
+				return
+			}
+			const res = await api(
+				'POST',
+				`/sources/${selected.id}/revisions/${revisionId}/review`,
+				{ decision, note: note || undefined },
 			)
 			if (res.status === 200) {
 				await openDetail(selected)
@@ -210,26 +295,75 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 					<ol data-testid="revision-timeline">
 						{revisions.map((r) => (
 							<li key={r.id} data-status={r.status}>
-								#{r.revision_number} ·{' '}
-								{r.status === 'deprecated' ? (
-									<em data-testid="deprecated-label">
-										tidak berlaku (deprecated)
-									</em>
-								) : (
-									r.status
-								)}{' '}
-								· {new Date(r.created_at).toLocaleString()}
-								{r.status === 'active' && canDeprecate && (
-									<button
-										type="button"
-										data-testid={`deprecate-${r.revision_number}`}
-										onClick={() => {
-											const reason = window.prompt('Alasan deprecate?')
-											if (reason) void deprecateRevision(r.id, reason)
-										}}
+								<span className="revision-line">
+									#{r.revision_number} ·{' '}
+									<span
+										className={`badge ${
+											r.status === 'pending_review'
+												? 'badge-warn'
+												: r.status === 'active'
+													? 'badge-ok'
+													: 'badge-neutral'
+										}`}
+										data-testid={`revision-status-${r.revision_number}`}
 									>
-										Deprecate
-									</button>
+										{REVISION_STATUS_LABELS[r.status] ?? r.status}
+									</span>{' '}
+									· {new Date(r.created_at).toLocaleString()}
+								</span>
+								{r.status === 'pending_review' && canReview && (
+									<span className="review-actions">
+										<button
+											type="button"
+											data-testid={`approve-${r.revision_number}`}
+											onClick={() => void reviewRevision(r.id, 'approve')}
+										>
+											Setujui
+										</button>
+										<button
+											type="button"
+											data-testid={`reject-${r.revision_number}`}
+											onClick={() => void reviewRevision(r.id, 'reject')}
+										>
+											Tolak
+										</button>
+									</span>
+								)}
+								{r.status === 'active' && canReview && (
+									<span className="review-actions">
+										<button
+											type="button"
+											data-testid={`retire-${r.revision_number}`}
+											onClick={() => void reviewRevision(r.id, 'retire')}
+										>
+											Tarik
+										</button>
+									</span>
+								)}
+								{r.status === 'active' && canDeprecate && (
+									<span className="review-actions">
+										<button
+											type="button"
+											data-testid={`deprecate-${r.revision_number}`}
+											onClick={() => {
+												const reason = window.prompt('Alasan deprecate?')
+												if (reason) void deprecateRevision(r.id, reason)
+											}}
+										>
+											Deprecate
+										</button>
+									</span>
+								)}
+								{reviewsByRevision[r.id] && (
+									<ul className="review-history">
+										{reviewsByRevision[r.id].map((rv) => (
+											<li key={rv.id}>
+												{REVIEW_DECISION_LABELS[rv.decision] ?? rv.decision}
+												{rv.note ? ` — ${rv.note}` : ''} ·{' '}
+												{new Date(rv.created_at).toLocaleString()}
+											</li>
+										))}
+									</ul>
 								)}
 							</li>
 						))}
@@ -253,6 +387,9 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 						<div role="alert" data-testid="upload-error">
 							{uploadError}
 						</div>
+					)}
+					{reviewNotice && !uploadError && (
+						<output data-testid="review-notice">{reviewNotice}</output>
 					)}
 				</div>
 			)}

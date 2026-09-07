@@ -6,6 +6,7 @@ import { issueSession } from '../src/auth/sessionStore'
 import { loadConfig } from '../src/config'
 import { createLogger } from '../src/logger'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -119,8 +120,9 @@ describe('OCR review and correction workflow (OCR-002)', () => {
 			returning id`
 		const [rev] = await sql<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${src.id}::uuid, 1, 'active')
+			values (${src.id}::uuid, 1, 'pending_review')
 			returning id`
+		await approveTestRevision(sql, rev.id)
 		const [page] = await sql<{ id: string }[]>`
 			insert into source_pages (source_revision_id, page_number, image_storage_key)
 			values (${rev.id}::uuid, 1, 'pages/scan.png')

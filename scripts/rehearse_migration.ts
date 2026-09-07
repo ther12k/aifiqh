@@ -23,6 +23,7 @@ import { join } from 'node:path'
  */
 import postgres from 'postgres'
 import { applyMigrations } from './migrate'
+import { approveTestRevision } from '../apps/api/tests/revisionSeed'
 
 const URL_ = process.argv[2] ?? process.env.REHEARSAL_DB_URL ?? ''
 if (!URL_) {
@@ -127,7 +128,8 @@ async function seedPopulatedDataset(): Promise<Record<string, string>> {
 	ids.source = src.id
 	const [rev] = await sql<{ id: string }[]>`
 		insert into source_revisions (source_id, revision_number, status)
-		values (${src.id}, 1, 'active') returning id`
+		values (${src.id}, 1, 'pending_review') returning id`
+	await approveTestRevision(sql, rev.id)
 	ids.revision = rev.id
 	const [page] = await sql<{ id: string }[]>`
 		insert into source_pages (source_revision_id, page_number, image_storage_key)

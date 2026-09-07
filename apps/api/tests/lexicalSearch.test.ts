@@ -11,6 +11,7 @@ import {
 } from '../src/index/lexicalSearch'
 import { createLogger } from '../src/logger'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -126,7 +127,8 @@ async function makeIndexCorpus() {
 		values (${tenantId}::uuid, 'Kitab Fiqh Lexical', 'x', 'book', 'ar', 'public_domain', ${scopeId}::uuid) returning id`
 	const [rev] = await sql<{ id: string }[]>`
 		insert into source_revisions (source_id, revision_number, status)
-		values (${src.id}::uuid, 1, 'active') returning id`
+		values (${src.id}::uuid, 1, 'pending_review') returning id`
+	await approveTestRevision(sql, rev.id)
 	const [sec] = await sql<{ id: string }[]>`
 		insert into source_sections (source_revision_id, ordinal, heading)
 		values (${rev.id}::uuid, 1, 'Bab Tayamum') returning id`

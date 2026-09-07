@@ -16,6 +16,7 @@ import {
 import { executeLanePlan } from '../src/retrieval/laneFusion'
 import { HashRerankerProvider } from '../src/retrieval/reranker'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -92,7 +93,8 @@ async function setupFixture(): Promise<InspFixture> {
 		returning id`
 	const [rev] = await sql<{ id: string }[]>`
 		insert into source_revisions (source_id, revision_number, status)
-		values (${src.id}::uuid, 1, 'active') returning id`
+		values (${src.id}::uuid, 1, 'pending_review') returning id`
+	await approveTestRevision(sql, rev.id)
 	await sql`insert into source_spans (source_revision_id, span_key, original_text)
 		values (${rev.id}::uuid, 'ins-1', ${SPAN_TEXT})`
 
@@ -291,7 +293,8 @@ describe('INS-001: Retrieval Inspector trace API', () => {
 			returning id`
 		const [foreignRev] = await sql<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${foreignSrc.id}::uuid, 1, 'active') returning id`
+			values (${foreignSrc.id}::uuid, 1, 'pending_review') returning id`
+		await approveTestRevision(sql, foreignRev.id)
 		const [foreignSpan] = await sql<{ id: string }[]>`
 			insert into source_spans (source_revision_id, span_key, original_text)
 			values (${foreignRev.id}::uuid, 'sec-1', 'Teks rahasia di luar lingkup.') returning id`

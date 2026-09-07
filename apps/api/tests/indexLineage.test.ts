@@ -7,6 +7,7 @@ import { loadConfig } from '../src/config'
 import { INDEX_COMPILER_VERSION } from '../src/index/indexCompiler'
 import { createLogger } from '../src/logger'
 import { ensureMigrations } from './dbBootstrap'
+import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
@@ -134,7 +135,8 @@ async function makeCorpus(): Promise<Corpus> {
 		values (${tenantId}::uuid, 'Kitab Rel', 'x', 'book', 'ar', 'public_domain', ${scopeId}::uuid) returning id`
 	const [rev] = await sql<{ id: string }[]>`
 		insert into source_revisions (source_id, revision_number, status)
-		values (${src.id}::uuid, 1, 'active') returning id`
+		values (${src.id}::uuid, 1, 'pending_review') returning id`
+	await approveTestRevision(sql, rev.id)
 	const [section] = await sql<{ id: string }[]>`
 		insert into source_sections (source_revision_id, ordinal, heading)
 		values (${rev.id}::uuid, 1, 'Bab Nikah') returning id`
@@ -326,7 +328,8 @@ describe('stable retrieval-unit identity and structural lineage (IDX-002)', () =
 			returning id`
 		const [depRev] = await sql<{ id: string }[]>`
 			insert into source_revisions (source_id, revision_number, status)
-			values (${depSrc.id}::uuid, 1, 'active') returning id`
+			values (${depSrc.id}::uuid, 1, 'pending_review') returning id`
+		await approveTestRevision(sql, depRev.id)
 		const [depSpan] = await sql<{ id: string }[]>`
 			insert into source_spans (source_revision_id, span_key, original_text)
 			values (${depRev.id}::uuid, ${`dp-${crypto.randomUUID().slice(0, 6)}`}, 'Teks yang akan hilang.') returning id`
