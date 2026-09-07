@@ -64,7 +64,10 @@ export interface VerificationInput {
 	citedCount: number
 	/** standing claim-review verdicts (#110) — answered turns only */
 	claimReviews?: {
-		standing: Array<{ claimId: string; verdict: 'approve' | 'reject' | 'correct' }>
+		standing: Array<{
+			claimId: string
+			verdict: 'approve' | 'reject' | 'correct'
+		}>
 		materialClaimCount: number
 	}
 }

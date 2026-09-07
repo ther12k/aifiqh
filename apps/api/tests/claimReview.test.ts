@@ -7,14 +7,14 @@
 import { beforeAll, describe, expect, test } from 'bun:test'
 import type { Principal } from '@aifiqh/shared'
 import postgres from 'postgres'
-import { startConversation, postUserTurn } from '../src/answers/chatService'
-import {
-	aggregateScholarlyReview,
-	submitClaimReview,
-	standingVerdicts,
-	type StandingVerdict,
-} from '../src/answers/claimReviewService'
 import { deriveVerification } from '../src/answers/answerStatus'
+import { postUserTurn, startConversation } from '../src/answers/chatService'
+import {
+	type StandingVerdict,
+	aggregateScholarlyReview,
+	standingVerdicts,
+	submitClaimReview,
+} from '../src/answers/claimReviewService'
 import { compileIndexRelease } from '../src/index/indexCompiler'
 import { ensureMigrations } from './dbBootstrap'
 import { approveTestRevision } from './revisionSeed'
@@ -241,8 +241,10 @@ describe('scholarly claim review (#110)', () => {
 			}).scholarlyReview,
 		).toBe('scholar_contested')
 		expect(
-			deriveVerification({ ...mk('answered'), claimReviews: { standing: [], materialClaimCount: 1 } })
-				.scholarlyReview,
+			deriveVerification({
+				...mk('answered'),
+				claimReviews: { standing: [], materialClaimCount: 1 },
+			}).scholarlyReview,
 		).toBe('not_reviewed')
 		// a turn produced BEFORE any review stays not_reviewed — the answer-
 		// time snapshot is honest; standing verdicts are read live for display

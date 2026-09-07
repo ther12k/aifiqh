@@ -1,7 +1,11 @@
 import type { Principal } from '@aifiqh/shared'
 import { recordAuditInTx } from '../audit/audit'
 import type { Sql } from '../db/client'
-import { addEvaluationCase, createEvaluationSet, createSetVersion } from '../eval/evalSetService'
+import {
+	addEvaluationCase,
+	createEvaluationSet,
+	createSetVersion,
+} from '../eval/evalSetService'
 
 /**
  * Scholarly claim review (#110) — the HUMAN verification layer.
@@ -23,7 +27,11 @@ export type ClaimVerdict = 'approve' | 'reject' | 'correct'
 
 export class ClaimReviewError extends Error {
 	constructor(
-		public code: 'ANSWER_NOT_FOUND' | 'CLAIM_NOT_FOUND' | 'INVALID_VERDICT' | 'VALIDATION_FAILED',
+		public code:
+			| 'ANSWER_NOT_FOUND'
+			| 'CLAIM_NOT_FOUND'
+			| 'INVALID_VERDICT'
+			| 'VALIDATION_FAILED',
 		message: string,
 	) {
 		super(message)
@@ -107,10 +115,11 @@ async function scopedClaimAndFlow(
 		correctedText?: string | null
 		note?: string | null
 	},
-): Promise<{ claim: { id: string; claim_text: string }; evalCaseId: string | null }> {
-	const [claim] = await sql<
-		{ id: string; claim_text: string }[]
-	>`
+): Promise<{
+	claim: { id: string; claim_text: string }
+	evalCaseId: string | null
+}> {
+	const [claim] = await sql<{ id: string; claim_text: string }[]>`
 		select ac.id, ac.claim_text
 		from answer_claims ac
 		join answers a on a.id = ac.answer_id
@@ -121,7 +130,8 @@ async function scopedClaimAndFlow(
 			and ac.answer_id = ${input.answerId}::uuid
 			and cv.tenant_id = ${principal.tenantId}::uuid
 		limit 1`
-	if (!claim) throw new ClaimReviewError('CLAIM_NOT_FOUND', 'claim not found in tenant')
+	if (!claim)
+		throw new ClaimReviewError('CLAIM_NOT_FOUND', 'claim not found in tenant')
 
 	if (input.verdict === 'approve') return { claim, evalCaseId: null }
 
@@ -164,7 +174,9 @@ async function scopedClaimAndFlow(
 		})),
 		expectedBehavior:
 			spanPins.length === 0
-				? { note: `claim review ${input.verdict}: ${input.correctedText ?? input.note ?? ''}` }
+				? {
+						note: `claim review ${input.verdict}: ${input.correctedText ?? input.note ?? ''}`,
+					}
 				: undefined,
 		ownerUserId: principal.userId,
 	})
