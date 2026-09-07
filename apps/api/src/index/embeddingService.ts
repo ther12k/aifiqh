@@ -17,12 +17,54 @@ export interface EmbeddingProvider {
 
 export class EmbeddingError extends Error {
 	constructor(
-		public code: 'DIMENSION_MISMATCH' | 'PROVIDER_FAILED' | 'RELEASE_NOT_FOUND',
+		public code:
+			| 'DIMENSION_MISMATCH'
+			| 'PROVIDER_FAILED'
+			| 'RELEASE_NOT_FOUND'
+			| 'INPUT_TOO_LONG',
 		message: string,
 	) {
 		super(message)
 		this.name = 'EmbeddingError'
 	}
+}
+
+/**
+ * Embedding-input representation (#116): the vector is computed over a
+ * deliberate, auditable composition — known metadata (source title, section
+ * path, concept title) followed by the passage itself — never over YAML,
+ * URLs, hashes, or access-control fields. Metadata-derived context only;
+ * LLM-generated context would be a separately evaluated variant.
+ *
+ * input_hash pins THIS composed text (retrieval identity) and stays
+ * distinct from the unit content_hash (content identity), so switching
+ * representation re-embeds once and then stabilizes.
+ */
+export const EMBEDDING_INPUT_VERSION = 'embedding-input-v2'
+
+/**
+ * Truncation guard (#116): oversized inputs FAIL the build instead of
+ * silently losing their tail (provider auto-truncate must stay off — the
+ * tail is often the qualifying exception). ~24k chars ≈ 6k tokens.
+ */
+export const MAX_EMBEDDING_INPUT_CHARS = 24_000
+
+export interface EmbeddingInputParts {
+	content: string
+	sourceTitle?: string | null
+	/** nearest section heading; ancestors are prefixed by the caller */
+	sectionHeading?: string | null
+	conceptTitle?: string | null
+}
+
+/** Deterministic composition: role lines first, then the content block. */
+export function composeEmbeddingInput(parts: EmbeddingInputParts): string {
+	const lines: string[] = []
+	if (parts.sourceTitle) lines.push(`Source: ${parts.sourceTitle}`)
+	if (parts.sectionHeading) lines.push(`Section: ${parts.sectionHeading}`)
+	if (parts.conceptTitle) lines.push(`Concept: ${parts.conceptTitle}`)
+	lines.push('Content:', parts.content)
+	return lines.join('\n')
 }
 
 /**
@@ -97,10 +139,30 @@ export async function embedIndexRelease(
 	if (!release)
 		throw new EmbeddingError('RELEASE_NOT_FOUND', 'Index release not found')
 
-	const units = await sql<{ id: string; normalized_text: string }[]>`
-		select id, normalized_text from retrieval_units
-		where index_release_id = ${indexReleaseId}::uuid
-		order by id asc`
+	const units = await sql<
+		{
+			id: string
+			normalized_text: string
+			source_title: string | null
+			section_heading: string | null
+			parent_heading: string | null
+			concept_title: string | null
+		}[]
+	>`
+		select ru.id, ru.normalized_text,
+			s.title as source_title,
+			sec.heading as section_heading,
+			parent_sec.heading as parent_heading,
+			k.title as concept_title
+		from retrieval_units ru
+		left join source_spans ss on ss.id = ru.source_span_id
+		left join source_revisions sr on sr.id = ss.source_revision_id
+		left join sources s on s.id = sr.source_id
+		left join source_sections sec on sec.id = ss.section_id
+		left join source_sections parent_sec on parent_sec.id = sec.parent_section_id
+		left join knowledge_concept_revisions k on k.id = ru.knowledge_revision_id
+		where ru.index_release_id = ${indexReleaseId}::uuid
+		order by ru.id asc`
 
 	let created = 0
 	let reused = 0
@@ -109,10 +171,32 @@ export async function embedIndexRelease(
 	for (let i = 0; i < units.length; i += batchSize) {
 		const batch = units.slice(i, i + batchSize)
 
+		// the retrieval-identity input: metadata context + content (#116)
+		const composedTexts = new Map<string, string>()
+		for (const u of batch) {
+			const sectionHeading = [u.parent_heading, u.section_heading]
+				.filter((h): h is string => Boolean(h))
+				.join(' > ')
+			const text = composeEmbeddingInput({
+				content: u.normalized_text,
+				sourceTitle: u.source_title,
+				sectionHeading: sectionHeading || null,
+				conceptTitle: u.concept_title,
+			})
+			if (text.length > MAX_EMBEDDING_INPUT_CHARS) {
+				throw new EmbeddingError(
+					'INPUT_TOO_LONG',
+					`unit ${u.id}: embedding input is ${text.length} chars (limit ${MAX_EMBEDDING_INPUT_CHARS}) — split the unit instead of truncating the evidence`,
+				)
+			}
+			composedTexts.set(u.id, text)
+		}
+
 		// reuse: same model+version AND same input hash → skip the provider
 		const toEmbed: { unitId: string; text: string; hash: string }[] = []
 		for (const u of batch) {
-			const hash = inputHash(u.normalized_text)
+			const text = composedTexts.get(u.id)!
+			const hash = inputHash(text)
 			const [existing] = await sql<{ id: string }[]>`
 				select id from retrieval_embeddings
 				where unit_id = ${u.id}::uuid
@@ -123,7 +207,7 @@ export async function embedIndexRelease(
 			if (existing) {
 				reused++
 			} else {
-				toEmbed.push({ unitId: u.id, text: u.normalized_text, hash })
+				toEmbed.push({ unitId: u.id, text, hash })
 			}
 		}
 
@@ -187,6 +271,7 @@ export async function embedIndexRelease(
 		afterRef: {
 			modelId: provider.modelId,
 			modelVersion: provider.modelVersion,
+			embeddingInputVersion: EMBEDDING_INPUT_VERSION,
 			dimensions: provider.dimensions,
 			embeddingsCreated: created,
 			embeddingsReused: reused,

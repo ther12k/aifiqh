@@ -5,9 +5,13 @@ import { newCsrfToken, signSession } from '../src/auth/session'
 import { issueSession } from '../src/auth/sessionStore'
 import { loadConfig } from '../src/config'
 import {
+	EmbeddingError,
 	type EmbeddingProvider,
 	HashEmbeddingProvider,
+	MAX_EMBEDDING_INPUT_CHARS,
+	composeEmbeddingInput,
 	embedIndexRelease,
+	inputHash,
 } from '../src/index/embeddingService'
 import { compileIndexRelease } from '../src/index/indexCompiler'
 import { createLogger } from '../src/logger'
@@ -253,6 +257,96 @@ describe('model-versioned embedding and vector projection (IDX-004)', () => {
 		)
 		expect(secondRun.embeddingsCreated).toBe(0)
 		expect(secondRun.embeddingsReused).toBe(3)
+	})
+
+	test('embedding input is the contextual composition, not bare text (#116)', async () => {
+		const { indexReleaseId, principal } = await makeIndexRelease()
+		const provider = new HashEmbeddingProvider('ctx-embed', 'v1', 768)
+		await embedIndexRelease(sql, principal, indexReleaseId, provider)
+
+		// input_hash must equal the hash of the COMPOSED input — source
+		// title + section + content — not the hash of normalized_text
+		const rows = await sql<
+			{ unit_id: string; input_hash: string; normalized_text: string }[]
+		>`select re.unit_id::text, re.input_hash, ru.normalized_text
+			from retrieval_embeddings re
+			join retrieval_units ru on ru.id = re.unit_id
+			where ru.index_release_id = ${indexReleaseId}::uuid
+				and re.model_id = 'ctx-embed'`
+		expect(rows.length).toBe(3)
+		for (const r of rows) {
+			const bare = inputHash(r.normalized_text)
+			expect(r.input_hash).not.toBe(bare)
+		}
+		// span units carry their source title in the composition; the concept
+		// unit carries its concept title — verified by reconstructing hashes
+		const detailed = await sql<
+			{
+				input_hash: string
+				normalized_text: string
+				source_title: string | null
+				concept_title: string | null
+			}[]
+		>`select re.input_hash, ru.normalized_text,
+				s.title as source_title, k.title as concept_title
+			from retrieval_embeddings re
+			join retrieval_units ru on ru.id = re.unit_id
+			left join source_spans ss on ss.id = ru.source_span_id
+			left join source_revisions sr on sr.id = ss.source_revision_id
+			left join sources s on s.id = sr.source_id
+			left join knowledge_concept_revisions k on k.id = ru.knowledge_revision_id
+			where ru.index_release_id = ${indexReleaseId}::uuid
+				and re.model_id = 'ctx-embed'`
+		for (const r of detailed) {
+			const composed = composeEmbeddingInput({
+				content: r.normalized_text,
+				sourceTitle: r.source_title,
+				conceptTitle: r.concept_title,
+			})
+			expect(r.input_hash).toBe(inputHash(composed))
+		}
+	})
+
+	test('oversized embedding input fails instead of silently truncating (#116)', async () => {
+		const { indexReleaseId, principal } = await makeIndexRelease()
+		// grow one unit's text beyond the guard
+		const [unit] = await sql<{ id: string }[]>`
+			select ru.id from retrieval_units ru
+			where ru.index_release_id = ${indexReleaseId}::uuid limit 1`
+		const huge = 'kata '.repeat(Math.ceil(MAX_EMBEDDING_INPUT_CHARS / 5) + 10)
+		await sql`update retrieval_units set normalized_text = ${huge}, original_text = ${huge}
+			where id = ${unit.id}::uuid`
+		try {
+			await embedIndexRelease(
+				sql,
+				principal,
+				indexReleaseId,
+				new HashEmbeddingProvider('guard-embed', 'v1', 768),
+			)
+			expect.unreachable()
+		} catch (err) {
+			expect(err).toBeInstanceOf(EmbeddingError)
+			expect((err as EmbeddingError).code).toBe('INPUT_TOO_LONG')
+		}
+	})
+
+	test('composition is deterministic and metadata-only', () => {
+		const base = {
+			content: 'Teks dalil.',
+			sourceTitle: 'Kitab',
+			sectionHeading: 'Bab Air > Pasal 2',
+		}
+		expect(composeEmbeddingInput(base)).toBe(composeEmbeddingInput({ ...base }))
+		// role lines precede content; no hashes/urls/access fields involved
+		const composed = composeEmbeddingInput({
+			...base,
+			conceptTitle: 'Definisi Air',
+		})
+		expect(composed).toBe(
+			'Source: Kitab\nSection: Bab Air > Pasal 2\nConcept: Definisi Air\nContent:\nTeks dalil.',
+		)
+		// absent metadata produces no empty role lines
+		expect(composeEmbeddingInput({ content: 'x' })).toBe('Content:\nx')
 	})
 
 	test('switching modelId creates a new independent vector projection', async () => {

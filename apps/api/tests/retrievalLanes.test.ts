@@ -6,6 +6,7 @@ import { issueSession } from '../src/auth/sessionStore'
 import { loadConfig } from '../src/config'
 import {
 	HashEmbeddingProvider,
+	composeEmbeddingInput,
 	embedIndexRelease,
 } from '../src/index/embeddingService'
 import { compileIndexRelease } from '../src/index/indexCompiler'
@@ -399,7 +400,14 @@ describe('RAG-006: vector lane with model pinning and filtering', () => {
 		const provider = new HashEmbeddingProvider(f.modelId, '1', 768)
 		await embedIndexRelease(sql, f.principal, f.indexReleaseId, provider)
 
-		const [queryEmbedding] = await provider.embed([LEXICAL_TEXT])
+		// #116: the stored vectors embed the COMPOSED input (source title +
+		// content); the query side composes identically for the round trip
+		const [queryEmbedding] = await provider.embed([
+			composeEmbeddingInput({
+				content: LEXICAL_TEXT,
+				sourceTitle: 'Fiqih Air',
+			}),
+		])
 		const { candidates, filterReasons } = await runVectorLane(
 			sql,
 			f.principal,
@@ -412,7 +420,7 @@ describe('RAG-006: vector lane with model pinning and filtering', () => {
 		expect(top.originalText).toBe(LEXICAL_TEXT)
 		expect(top.matchMetadata.modelId).toBe(f.modelId)
 		expect(top.matchMetadata.modelVersion).toBe('1')
-		// identical text → identical hash vector → distance ~0, score ~1
+		// identical composed input → identical hash vector → distance ~0
 		expect(top.matchMetadata.distance as number).toBeLessThan(1e-6)
 		expect(top.score).toBeGreaterThan(0.999999)
 	})

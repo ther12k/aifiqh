@@ -206,6 +206,10 @@ import {
 import { planAndPersistQuery } from './retrieval/queryPlanner'
 import { HashRerankerProvider } from './retrieval/reranker'
 import { LaneError, type LexicalFilters } from './retrieval/retrievalLanes'
+import {
+	type ImportBatchInput,
+	validateAndRecordImport,
+} from './sources/importValidation'
 import { resolveSpan } from './sources/spanResolver'
 import { contentKey, getObject, headObject, putObject } from './storage/s3'
 import {
@@ -1375,6 +1379,99 @@ function sourceRoutes(deps: AppDeps) {
 					throw new HttpError(403, 'forbidden', result.reasonCode)
 				}
 				return { reviews: result.reviews }
+			})
+			// --- import validation gate (#118) ---
+			// A corpus import batch is validated against the six acceptance
+			// checks BEFORE it may enter the editorial queue; the run is
+			// persisted either way and a rejected report means the importer
+			// must not create revisions from it.
+			.post('/imports/validate', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('source:create')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				const src = (body.source ?? {}) as Record<string, unknown>
+				const prov = (body.provider ?? {}) as Record<string, unknown>
+				if (
+					typeof src.title !== 'string' ||
+					!src.title ||
+					typeof prov.name !== 'string' ||
+					!prov.name ||
+					!Array.isArray(body.records)
+				) {
+					ctx.set.status = 400
+					return {
+						error: 'validation_failed',
+						fields: ['source.title', 'provider.name', 'records'],
+					}
+				}
+				const records = (body.records as Record<string, unknown>[]).map(
+					(r) => ({
+						providerRecordId:
+							typeof r.providerRecordId === 'string' ? r.providerRecordId : '',
+						sourceLocator:
+							typeof r.sourceLocator === 'string' ? r.sourceLocator : null,
+						originalText:
+							typeof r.originalText === 'string' ? r.originalText : '',
+						translationText:
+							typeof r.translationText === 'string' ? r.translationText : null,
+						translator: typeof r.translator === 'string' ? r.translator : null,
+						grading: typeof r.grading === 'string' ? r.grading : null,
+					}),
+				)
+				const batch: ImportBatchInput = {
+					source: {
+						title: src.title,
+						author: typeof src.author === 'string' ? src.author : '',
+						sourceType:
+							typeof src.sourceType === 'string' ? src.sourceType : 'book',
+						language: typeof src.language === 'string' ? src.language : 'ar',
+						rightsStatus:
+							typeof src.rightsStatus === 'string'
+								? src.rightsStatus
+								: 'unknown',
+					},
+					provider: {
+						name: prov.name,
+						edition: typeof prov.edition === 'string' ? prov.edition : null,
+						acquisitionVersion:
+							typeof prov.acquisitionVersion === 'string'
+								? prov.acquisitionVersion
+								: null,
+					},
+					acquisitionMethod:
+						typeof body.acquisitionMethod === 'string'
+							? body.acquisitionMethod
+							: null,
+					policyReference:
+						typeof body.policyReference === 'string'
+							? body.policyReference
+							: null,
+					policyCheckedAt:
+						typeof body.policyCheckedAt === 'string'
+							? body.policyCheckedAt
+							: null,
+					expectedCount:
+						typeof body.expectedCount === 'number' ? body.expectedCount : null,
+					records,
+					withdrawnRecordIds: Array.isArray(body.withdrawnRecordIds)
+						? (body.withdrawnRecordIds as string[])
+						: undefined,
+					baselineRecords:
+						typeof body.baselineRecords === 'object' &&
+						body.baselineRecords !== null
+							? (body.baselineRecords as Record<string, string>)
+							: null,
+				}
+				const outcome = await validateAndRecordImport(sql, principal, batch)
+				// 422: the batch is well-formed but fails the import contract —
+				// it must not proceed to the review queue
+				ctx.set.status = outcome.ok ? 200 : 422
+				return {
+					runId: outcome.runId,
+					ok: outcome.ok,
+					report: outcome.report,
+				}
 			})
 			.get('/sources/:id/revisions/:revisionId/pages', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
