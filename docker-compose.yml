@@ -5,8 +5,6 @@ services:
       POSTGRES_USER: aifiqh
       POSTGRES_PASSWORD: aifiqh
       POSTGRES_DB: aifiqh
-    ports:
-      - '5434:5432'
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
@@ -21,9 +19,6 @@ services:
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - '9000:9000'
-      - '19001:9001'
     volumes:
       - minio-data:/data
     healthcheck:
@@ -47,10 +42,31 @@ services:
   oidc:
     build: ./docker/oidc-provider
     environment:
-      ISSUER: http://localhost:4011
+      ISSUER: http://oidc:4011
       PORT: '4011'
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      oidc:
+        condition: service_started
     ports:
-      - '4011:4011'
+      - '${APP_PORT:-8080}:3000'
+    environment:
+      PORT: '3000'
+      DATABASE_URL: postgres://aifiqh:aifiqh@db:5432/aifiqh
+      STORAGE_ENDPOINT: http://minio:9000
+      OIDC_ISSUER: http://oidc:4011
+      SESSION_SECRET: aifiqh-unified-single-port-secret-key-32chars
+      WEB_DIST_PATH: /app/apps/web/dist
 
 volumes:
   db-data:

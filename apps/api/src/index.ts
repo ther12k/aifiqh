@@ -1,3 +1,5 @@
+import { existsSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import { buildApp } from './app'
 import { createOidcClient } from './auth/oidc'
 import { config } from './config'
@@ -8,9 +10,43 @@ const cfg = config()
 const log = createLogger(cfg.logLevel, { service: 'api' })
 const app = buildApp({ cfg, log, sql: db(), oidc: createOidcClient(cfg) })
 
+const webDistPath =
+	process.env.WEB_DIST_PATH || join(import.meta.dir, '../../web/dist')
+
+const API_PREFIX_REGEX =
+	/^\/(auth|health|healthz|readyz|sources|studio|ops|eval|conversations|messages|answers|feedback|reviewer|imports|config|audit|ocr|retrieval|knowledge)(\/|$)/
+
+function serveStaticAsset(pathname: string): Response | null {
+	if (!existsSync(webDistPath)) return null
+	const rel = pathname.replace(/^\/+/, '')
+	if (rel) {
+		const filePath = join(webDistPath, rel)
+		if (existsSync(filePath) && statSync(filePath).isFile()) {
+			return new Response(Bun.file(filePath))
+		}
+	}
+	const indexPath = join(webDistPath, 'index.html')
+	if (existsSync(indexPath)) {
+		return new Response(Bun.file(indexPath), {
+			headers: { 'content-type': 'text/html; charset=utf-8' },
+		})
+	}
+	return null
+}
+
 const server = Bun.serve({
 	port: cfg.port,
-	fetch: (req) => app.handle(req),
+	async fetch(req) {
+		const url = new URL(req.url)
+		if (
+			!API_PREFIX_REGEX.test(url.pathname) &&
+			(req.method === 'GET' || req.method === 'HEAD')
+		) {
+			const staticRes = serveStaticAsset(url.pathname)
+			if (staticRes) return staticRes
+		}
+		return app.handle(req)
+	},
 })
 
 log.info('api started', { port: server.port, env: cfg.env })
