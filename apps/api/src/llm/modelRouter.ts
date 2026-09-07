@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { sep as pathSep, resolve as resolvePath } from 'node:path'
 import type { ModelProviderAdapter } from '@aifiqh/shared'
 import type { Sql } from '../db/client'
 import { FrontierModelAdapter } from './frontierAdapter'
@@ -27,9 +28,12 @@ export interface ChatModelConfig {
 
 /**
  * Resolve a secret reference to an actual key. Supported in-process:
- * env://NAME and file:///path. vault/aws-sm/gcp-sm refs need an external
- * resolver and return null here — the turn then uses the built-in composer
- * instead of failing.
+ * env://NAME and file:///path. `file://` is CONFINED to the directories
+ * listed in AIFIQH_SECRET_FILE_DIRS ([:;]-separated); with the variable
+ * unset, file:// is refused entirely — a compromised provider_secret_refs
+ * row must not turn the API into an arbitrary-file reader (#111).
+ * vault/aws-sm/gcp-sm refs need an external resolver and return null here —
+ * the turn then uses the built-in composer instead of failing.
  */
 export function resolveSecretRef(ref: string): string | null {
 	if (ref.startsWith('env://')) {
@@ -38,9 +42,19 @@ export function resolveSecretRef(ref: string): string | null {
 		return value && value.length > 0 ? value : null
 	}
 	if (ref.startsWith('file://')) {
+		const configured = (process.env.AIFIQH_SECRET_FILE_DIRS ?? '')
+			.split(/[:;]/)
+			.map((d) => d.trim())
+			.filter((d) => d.length > 0)
+		if (configured.length === 0) return null
+		const abs = resolvePath(ref.replace(/^file:\/\/+/, '/'))
+		const confined = configured.some((dir) => {
+			const root = resolvePath(dir)
+			return abs === root || abs.startsWith(root + pathSep)
+		})
+		if (!confined) return null
 		try {
-			const path = ref.replace(/^file:\/\/+/, '/')
-			const value = readFileSync(path, 'utf8').trim()
+			const value = readFileSync(abs, 'utf8').trim()
 			return value.length > 0 ? value : null
 		} catch {
 			return null
