@@ -110,7 +110,20 @@ export function ChatShell(props: {
 							</svg>
 						</span>
 						<div className="msg-body">
-							<MessageParagraphs text={state.streaming.text} />
+							{state.streaming.text ? (
+								<MessageParagraphs text={state.streaming.text} />
+							) : (
+								<div className="typing-row" aria-hidden="true">
+									<span className="typing-dots">
+										<span />
+										<span />
+										<span />
+									</span>
+									<span className="typing-label">
+										Menelusuri dalil dari korpus terverifikasi…
+									</span>
+								</div>
+							)}
 						</div>
 					</li>
 				) : null}

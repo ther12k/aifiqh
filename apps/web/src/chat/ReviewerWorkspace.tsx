@@ -65,6 +65,13 @@ export function ReviewerWorkspace({ permissions }: { permissions: string[] }) {
 	const [loading, setLoading] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	const [actionNotice, setActionNotice] = useState<string | null>(null)
+	/** inline reject/correct form for one claim at a time */
+	const [verdictForm, setVerdictForm] = useState<{
+		claimId: string
+		verdict: 'reject' | 'correct'
+		text: string
+		note: string
+	} | null>(null)
 
 	const loadQueue = useCallback(async () => {
 		try {
@@ -112,21 +119,10 @@ export function ReviewerWorkspace({ permissions }: { permissions: string[] }) {
 	async function submitVerdict(
 		claimId: string,
 		verdict: 'approve' | 'reject' | 'correct',
+		note = '',
+		correctedText = '',
 	) {
 		if (!detail || !canReview) return
-		let note = ''
-		let correctedText = ''
-
-		if (verdict === 'reject') {
-			note = (window.prompt('Alasan penolakan klaim (wajib):') ?? '').trim()
-			if (!note) return
-		} else if (verdict === 'correct') {
-			correctedText = (
-				window.prompt('Rumusan klaim yang benar (koreksi wajib):') ?? ''
-			).trim()
-			if (!correctedText) return
-			note = (window.prompt('Catatan koreksi (opsional):') ?? '').trim()
-		}
 
 		try {
 			const res = await fetch(
@@ -159,6 +155,7 @@ export function ReviewerWorkspace({ permissions }: { permissions: string[] }) {
 					: `Tinjauan tersimpan. Kasus regresi otomatis dicatat di set evaluasi (ID: ${data.evalCaseId?.slice(0, 8) ?? '—'}).`,
 			)
 			setTimeout(() => setActionNotice(null), 5000)
+			setVerdictForm(null)
 
 			// Reload current answer and queue
 			await loadDetail(detail.answerId)
@@ -183,6 +180,28 @@ export function ReviewerWorkspace({ permissions }: { permissions: string[] }) {
 				{/* Queue sidebar */}
 				<aside className="reviewer-queue">
 					<h3>Antrean Jawaban ({queue.length})</h3>
+					{queue.length > 0 && (
+						<div className="queue-progress" aria-hidden="true">
+							{(() => {
+								const total = queue.reduce((n, q) => n + q.claim_count, 0)
+								const done = queue.reduce(
+									(n, q) => n + q.reviewed_claim_count,
+									0,
+								)
+								const pct = total === 0 ? 0 : Math.round((done / total) * 100)
+								return (
+									<>
+										<div className="queue-progress-track">
+											<span style={{ width: `${pct}%` }} />
+										</div>
+										<small>
+											{done}/{total} klaim ditinjau · {pct}%
+										</small>
+									</>
+								)
+							})()}
+						</div>
+					)}
 					{queue.length === 0 ? (
 						<p className="empty-hint">Tidak ada jawaban dalam antrean.</p>
 					) : (
@@ -329,9 +348,19 @@ export function ReviewerWorkspace({ permissions }: { permissions: string[] }) {
 													</button>
 													<button
 														type="button"
-														className="btn-verdict btn-reject"
+														className={`btn-verdict btn-reject ${verdictForm?.claimId === claim.id && verdictForm.verdict === 'reject' ? 'btn-active' : ''}`}
 														onClick={() =>
-															void submitVerdict(claim.id, 'reject')
+															setVerdictForm(
+																verdictForm?.claimId === claim.id &&
+																	verdictForm.verdict === 'reject'
+																	? null
+																	: {
+																			claimId: claim.id,
+																			verdict: 'reject',
+																			text: '',
+																			note: '',
+																		},
+															)
 														}
 														data-testid={`btn-reject-${claim.id}`}
 													>
@@ -339,15 +368,106 @@ export function ReviewerWorkspace({ permissions }: { permissions: string[] }) {
 													</button>
 													<button
 														type="button"
-														className="btn-verdict btn-correct"
+														className={`btn-verdict btn-correct ${verdictForm?.claimId === claim.id && verdictForm.verdict === 'correct' ? 'btn-active' : ''}`}
 														onClick={() =>
-															void submitVerdict(claim.id, 'correct')
+															setVerdictForm(
+																verdictForm?.claimId === claim.id &&
+																	verdictForm.verdict === 'correct'
+																	? null
+																	: {
+																			claimId: claim.id,
+																			verdict: 'correct',
+																			text: '',
+																			note: '',
+																		},
+															)
 														}
 														data-testid={`btn-correct-${claim.id}`}
 													>
 														Koreksi
 													</button>
 												</div>
+
+												{/* inline reject/correct form — replaces window.prompt */}
+												{verdictForm?.claimId === claim.id && (
+													<form
+														className="verdict-form"
+														data-testid={`verdict-form-${claim.id}`}
+														onSubmit={(e) => {
+															e.preventDefault()
+															if (verdictForm.verdict === 'reject') {
+																if (!verdictForm.note.trim()) return
+																void submitVerdict(
+																	claim.id,
+																	'reject',
+																	verdictForm.note.trim(),
+																)
+															} else {
+																if (!verdictForm.text.trim()) return
+																void submitVerdict(
+																	claim.id,
+																	'correct',
+																	verdictForm.note.trim(),
+																	verdictForm.text.trim(),
+																)
+															}
+														}}
+													>
+														{verdictForm.verdict === 'correct' && (
+															<label>
+																Rumusan klaim yang benar
+																<textarea
+																	rows={3}
+																	required
+																	value={verdictForm.text}
+																	onChange={(e) =>
+																		setVerdictForm({
+																			...verdictForm,
+																			text: e.target.value,
+																		})
+																	}
+																	placeholder="Tuliskan rumusan klaim yang sesuai dengan dalil…"
+																/>
+															</label>
+														)}
+														<label>
+															{verdictForm.verdict === 'reject'
+																? 'Alasan penolakan (wajib)'
+																: 'Catatan koreksi (opsional)'}
+															<textarea
+																rows={2}
+																required={verdictForm.verdict === 'reject'}
+																value={verdictForm.note}
+																onChange={(e) =>
+																	setVerdictForm({
+																		...verdictForm,
+																		note: e.target.value,
+																	})
+																}
+																placeholder={
+																	verdictForm.verdict === 'reject'
+																		? 'Apa yang keliru dari klaim ini?'
+																		: 'Opsional — konteks koreksi…'
+																}
+															/>
+														</label>
+														<div className="verdict-form-actions">
+															<button
+																type="submit"
+																className="btn-verdict btn-approve"
+															>
+																Simpan Tinjauan
+															</button>
+															<button
+																type="button"
+																className="btn-verdict btn-correct"
+																onClick={() => setVerdictForm(null)}
+															>
+																Batal
+															</button>
+														</div>
+													</form>
+												)}
 											</div>
 
 											{/* Right: Cited evidence passages */}

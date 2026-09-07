@@ -34,13 +34,14 @@ function useHashRoute(): string {
 
 /* --- inline icons (no external icon deps) ------------------------------- */
 
-function BrandMark() {
+function BrandMark({ small }: { small?: boolean }) {
+	const size = small ? 24 : 38
 	// eight-point geometric star (rubʿ al-hizb motif) in emerald
 	return (
 		<svg
 			className="brand-mark"
-			width="38"
-			height="38"
+			width={size}
+			height={size}
 			viewBox="0 0 40 40"
 			fill="none"
 			aria-hidden="true"
@@ -178,6 +179,25 @@ const LANDING_FEATURES = [
 	},
 ]
 
+/** how an answer earns trust — mirrors the API verification contract */
+const LANDING_STEPS = [
+	{
+		n: '1',
+		title: 'Jawaban hanya dari korpus terkurasi',
+		desc: 'Setiap sumber melewati kurasi editorial sebelum boleh dikutip; teks di luar korpus tidak akan dijawab.',
+	},
+	{
+		n: '2',
+		title: 'Kutipan diperiksa terhadap sumber asli',
+		desc: 'Integritas kutipan diverifikasi otomatis — teks yang dikutip harus cocok dengan span sumber yang disetujui.',
+	},
+	{
+		n: '3',
+		title: 'Telaah ulama terpisah dari mesin',
+		desc: 'Keputusan keilmuan ditinjau manusia; status telaahnya selalu ditampilkan bersama jawaban.',
+	},
+]
+
 function Landing({ devLoginEnabled }: { devLoginEnabled: boolean }) {
 	return (
 		<section className="landing" aria-label="Pengantar AiFiqh">
@@ -225,6 +245,24 @@ function Landing({ devLoginEnabled }: { devLoginEnabled: boolean }) {
 					</li>
 				))}
 			</ul>
+			<section className="landing-steps" aria-label="Cara kerja verifikasi">
+				<h2 className="landing-steps-title">
+					Bagaimana sebuah jawaban mendapatkan kepercayaan
+				</h2>
+				<ol>
+					{LANDING_STEPS.map((s) => (
+						<li key={s.n}>
+							<span className="step-n" aria-hidden="true">
+								{s.n}
+							</span>
+							<div>
+								<b>{s.title}</b>
+								<p>{s.desc}</p>
+							</div>
+						</li>
+					))}
+				</ol>
+			</section>
 		</section>
 	)
 }
@@ -237,6 +275,49 @@ const SEARCH_ROUTES: Array<{ match: RegExp; hash: string }> = [
 	{ match: /dasbor|dashboard|kartu/i, hash: '#/studio-dashboard' },
 	{ match: /ops|operasional|status|health|sehat/i, hash: '#/ops' },
 ]
+
+/** the strongest role the permission set implies — for the identity chip */
+function roleLabel(permissions: string[]): string {
+	if (permissions.includes('config:manage')) return 'Admin'
+	if (permissions.includes('review:approve')) return 'Peninjau'
+	if (permissions.includes('knowledge:draft')) return 'Editor'
+	if (permissions.includes('knowledge:read')) return 'Pembaca'
+	return 'Pengguna'
+}
+
+function roleAccent(permissions: string[]): string {
+	if (permissions.includes('config:manage')) return 'accent-admin'
+	if (permissions.includes('review:approve')) return 'accent-reviewer'
+	if (permissions.includes('knowledge:draft')) return 'accent-editor'
+	return 'accent-reader'
+}
+
+/** small health pill for the topbar; shows the worst component status */
+function HealthPill({ health }: { health: Health | null }) {
+	if (!health) {
+		return (
+			<span className="health-pill hp-down" title="Status tidak diketahui">
+				<span className="hp-dot" aria-hidden="true" />
+				API?
+			</span>
+		)
+	}
+	const allOk = health.components.every((c) => c.status === 'healthy')
+	return (
+		<a
+			className={`health-pill ${allOk ? 'hp-ok' : 'hp-down'}`}
+			href="#/ops"
+			title={
+				allOk
+					? 'Semua komponen sehat'
+					: 'Ada komponen bermasalah — buka status operasional'
+			}
+		>
+			<span className="hp-dot" aria-hidden="true" />
+			{allOk ? 'Sehat' : 'Terdegradasi'}
+		</a>
+	)
+}
 
 export default function App() {
 	const route = useHashRoute()
@@ -352,11 +433,14 @@ export default function App() {
 				<div className="sidebar-foot">
 					{me ? (
 						<div className="session-chip">
-							<span className="avatar">
+							<span
+								className={`avatar ${roleAccent(me.permissions)}`}
+								aria-hidden="true"
+							>
 								{me.userId.slice(0, 2).toUpperCase()}
 							</span>
 							<span className="who">
-								<b>{me.userId.slice(0, 8)}</b>
+								<b>{roleLabel(me.permissions)}</b>
 								<span>
 									{me.tenantId
 										? `tenant ${me.tenantId.slice(0, 8)}`
@@ -385,6 +469,34 @@ export default function App() {
 			</aside>
 
 			<div className="app-main">
+				{/* compact navigation shown only on small screens (sidebar hidden) */}
+				<nav className="mobile-nav" aria-label="Navigasi utama (mobile)">
+					<a className="mobile-brand" href="#/">
+						<BrandMark small />
+						<span>AiFiqh</span>
+					</a>
+					<div className="mobile-links">
+						{NAV_SECTIONS.flatMap((s) => s.items).map((item) => (
+							<a
+								key={item.href}
+								href={item.href}
+								className={route === item.href.slice(1) ? 'active-mnav' : ''}
+							>
+								<NavIcon d={item.icon} />
+								<span>{item.label}</span>
+							</a>
+						))}
+					</div>
+					{me ? (
+						<button type="button" className="mobile-logout" onClick={logout}>
+							Keluar
+						</button>
+					) : (
+						<a className="mobile-logout" href="/auth/login">
+							Masuk
+						</a>
+					)}
+				</nav>
 				<header className="topbar">
 					<div className="topbar-search">
 						<SearchIcon />
@@ -397,13 +509,17 @@ export default function App() {
 						<kbd>⏎</kbd>
 					</div>
 					<div className="topbar-spacer" />
+					<HealthPill health={health} />
 					{me ? (
 						<div className="user-chip">
-							<span className="avatar">
+							<span
+								className={`avatar ${roleAccent(me.permissions)}`}
+								aria-hidden="true"
+							>
 								{me.userId.slice(0, 2).toUpperCase()}
 							</span>
 							<span className="who">
-								<b>{me.userId.slice(0, 8)}</b>
+								<b>{roleLabel(me.permissions)}</b>
 								<small>
 									{me.tenantId
 										? `Tenant ${me.tenantId.slice(0, 8)}`

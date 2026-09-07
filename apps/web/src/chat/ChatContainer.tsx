@@ -132,6 +132,160 @@ const VERIFY_LABELS: Record<string, string> = {
 		'DIPERSENGKAHAN: ada klaim yang ditolak/dikoreksi reviewer',
 }
 
+/** visual config for each verification layer badge */
+const VERIFY_BADGES: Array<{
+	key: keyof TurnVerification
+	label: string
+	icon: string
+	/** status → tone + short text; missing statuses fall back to neutral */
+	tones: Record<
+		string,
+		{ tone: 'ok' | 'warn' | 'danger' | 'neutral'; text: string }
+	>
+}> = [
+	{
+		key: 'citationIntegrity',
+		label: 'Integritas Kutipan',
+		icon: 'M6 3h9l4 4v14H6V3zm8 1v4h4M9 12h7M9 16h7',
+		tones: {
+			passed: { tone: 'ok', text: 'Kutipan cocok dengan sumber' },
+			failed: { tone: 'danger', text: 'Kutipan tidak cocok' },
+			not_applicable: { tone: 'neutral', text: 'Tanpa kutipan' },
+		},
+	},
+	{
+		key: 'claimSupport',
+		label: 'Dukungan Klaim',
+		icon: 'M4 12l5 5L20 6',
+		tones: {
+			automated_check_passed: {
+				tone: 'ok',
+				text: 'Pemeriksaan otomatis lulus',
+			},
+			automated_check_insufficient: {
+				tone: 'warn',
+				text: 'Perlu telaah ulama',
+			},
+			not_assessed: { tone: 'neutral', text: 'Tidak dinilai' },
+		},
+	},
+	{
+		key: 'scholarlyReview',
+		label: 'Telaah Ulama',
+		icon: 'M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z',
+		tones: {
+			not_reviewed: { tone: 'warn', text: 'Belum ditinjau ulama' },
+			scholar_reviewed: { tone: 'ok', text: 'Disetujui reviewer' },
+			scholar_contested: { tone: 'danger', text: 'Dipersengketakan' },
+		},
+	},
+]
+
+/** the three-layer trust row shown under every structured answer */
+function VerificationBadges({ v }: { v: TurnVerification }) {
+	return (
+		<ul
+			className="verify-badges"
+			data-testid="verify-badges"
+			aria-label="Status verifikasi jawaban"
+		>
+			{VERIFY_BADGES.map((b) => {
+				const status = String(v[b.key] ?? '')
+				const cfg = b.tones[status] ?? {
+					tone: 'neutral' as const,
+					text: status || '—',
+				}
+				return (
+					<li
+						key={b.key}
+						className={`verify-badge vb-${cfg.tone}`}
+						title={`${b.label}: ${VERIFY_LABELS[status] ?? status}`}
+					>
+						<svg
+							width="13"
+							height="13"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+							aria-hidden="true"
+						>
+							<path d={b.icon} />
+						</svg>
+						{cfg.text}
+					</li>
+				)
+			})}
+		</ul>
+	)
+}
+
+/** honest non-answer card: abstain / escalate / clarify get a distinct,
+ * explainable treatment instead of a raw "[Keputusan: …]" string */
+function AbstainCard({
+	decision,
+	rationale,
+	userOutcome,
+}: {
+	decision: string
+	rationale?: string
+	userOutcome?: string
+}) {
+	const cfg =
+		decision === 'escalate'
+			? {
+					icon: 'M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z',
+					title: 'Perlu telaah ulama',
+					bang: 'Pertanyaan ini menyangkut perbedaan pendapat yang membutuhkan peninjau manusia.',
+				}
+			: decision === 'needs_clarification'
+				? {
+						icon: 'M12 2a10 10 0 1 0 10 10h-10V2z',
+						title: 'Perlu perincian pertanyaan',
+						bang: 'Pertanyaan belum cukup spesifik untuk dijawab dengan dalil yang tepat.',
+					}
+				: {
+						icon: 'M12 2a10 10 0 1 0 10 10h-10V2z',
+						title: 'Belum dapat menjawab',
+						bang: 'Tidak ditemukan dalil yang memadai di korpus untuk pertanyaan ini.',
+					}
+	const outcome =
+		userOutcome === 'insufficient_evidence'
+			? 'Sistem memilih tidak menjawab daripada mengarang dalil.'
+			: undefined
+	return (
+		<div className="abstain-card" data-testid="abstain-card">
+			<div className="abstain-icon" aria-hidden="true">
+				<svg
+					width="20"
+					height="20"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					strokeWidth="1.8"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+					role="presentation"
+				>
+					<path d={cfg.icon} />
+				</svg>
+			</div>
+			<div className="abstain-body">
+				<b>{cfg.title}</b>
+				<p>{rationale ?? cfg.bang}</p>
+				{outcome && <p className="abstain-outcome">{outcome}</p>}
+				<p className="abstain-hint">
+					Coba perinci pertanyaan, atau jelajahi{' '}
+					<a href="#/sources">sumber yang tersedia</a> untuk melihat cakupan
+					korpus.
+				</p>
+			</div>
+		</div>
+	)
+}
+
 function csrfToken(): string {
 	const match = document.cookie.match(/(?:^|;\s*)aifiqh_csrf=([^;]+)/)
 	return match ? decodeURIComponent(match[1]) : ''
@@ -246,15 +400,17 @@ function AnswerCard({
 						<ol className="citation-list">
 							{answer.citations.map((c) => (
 								<li key={c.spanId} data-testid="citation-row">
-									<span className="citation-ordinal">[{c.ordinal}]</span>
+									<div className="citation-head">
+										<span className="citation-ordinal">#{c.ordinal}</span>
+										<button
+											type="button"
+											className="citation-report"
+											onClick={() => submitFeedback('citation_issue', c.spanId)}
+										>
+											Rujukan salah?
+										</button>
+									</div>
 									<MessageParagraphs text={c.quote} />
-									<button
-										type="button"
-										className="citation-report"
-										onClick={() => submitFeedback('citation_issue', c.spanId)}
-									>
-										Rujukan salah?
-									</button>
 								</li>
 							))}
 						</ol>
@@ -350,15 +506,18 @@ function AnswerCard({
 				</output>
 			)}
 			{answer.verification && (
-				<p className="verification-line" data-testid="verification-line">
-					{[
-						VERIFY_LABELS[answer.verification.citationIntegrity],
-						VERIFY_LABELS[answer.verification.claimSupport],
-						VERIFY_LABELS[answer.verification.scholarlyReview],
-					]
-						.filter(Boolean)
-						.join(' · ')}
-				</p>
+				<div className="verify-row">
+					<VerificationBadges v={answer.verification} />
+					<span className="verify-caption">
+						{[
+							VERIFY_LABELS[answer.verification.citationIntegrity],
+							VERIFY_LABELS[answer.verification.claimSupport],
+							VERIFY_LABELS[answer.verification.scholarlyReview],
+						]
+							.filter(Boolean)
+							.join(' · ')}
+					</span>
+				</div>
 			)}
 		</div>
 	)
@@ -381,6 +540,13 @@ function AssistantAvatar() {
 	)
 }
 
+/** non-answer turn info keyed by the client's assistant message id */
+interface TurnDecisionInfo {
+	decision: string
+	rationale?: string
+	userOutcome?: string
+}
+
 export function ChatContainer() {
 	const [conversationId, setConversationId] = useState<string | null>(null)
 	const [chatState, setChatState] = useState<ChatShellState>(EMPTY_CHAT_STATE)
@@ -389,6 +555,9 @@ export function ChatContainer() {
 	const [lastTurn, setLastTurn] = useState<TurnSummary | null>(null)
 	const [answersByMsg, setAnswersByMsg] = useState<
 		Record<string, StoredAnswer>
+	>({})
+	const [decisionsByMsg, setDecisionsByMsg] = useState<
+		Record<string, TurnDecisionInfo>
 	>({})
 
 	// Initialize or load conversation
@@ -520,7 +689,17 @@ export function ChatContainer() {
 					}
 				}
 			} else {
+				// non-answer turns keep the rationale for the AbstainCard;
+				// the raw text stays as a fallback in message content
 				assistantText = `[Keputusan: ${result.decision.decision}] ${result.decision.rationale ?? 'Tidak dapat menjawab.'}`
+				setDecisionsByMsg((prev) => ({
+					...prev,
+					[assistantMsgId]: {
+						decision: result.decision.decision,
+						rationale: result.decision.rationale,
+						userOutcome: result.verification?.userOutcome,
+					},
+				}))
 			}
 
 			const citations = result.answer
@@ -672,6 +851,21 @@ export function ChatContainer() {
 								<AssistantAvatar />
 								<div className="msg-body">
 									<AnswerCard answer={answer} messageId={m.id} />
+								</div>
+							</>
+						)
+					}
+					const decision = decisionsByMsg[m.id]
+					if (decision) {
+						return (
+							<>
+								<AssistantAvatar />
+								<div className="msg-body">
+									<AbstainCard
+										decision={decision.decision}
+										rationale={decision.rationale}
+										userOutcome={decision.userOutcome}
+									/>
 								</div>
 							</>
 						)
