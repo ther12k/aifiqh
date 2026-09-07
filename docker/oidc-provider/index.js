@@ -355,6 +355,11 @@ if (process.argv[2] === '--hash') {
 const handleProviderRequest = provider.callback()
 
 createServer((req, res) => {
+	if (ISSUER_PREFIX && req.url?.startsWith(ISSUER_PREFIX)) {
+		req.originalUrl = req.url
+		req.baseUrl = ISSUER_PREFIX
+		req.url = req.url.slice(ISSUER_PREFIX.length) || '/'
+	}
 	if (req.url?.includes('/interaction/')) {
 		handleInteraction(req, res).catch(() => {
 			send(res, 500, 'text/plain; charset=utf-8', 'internal error')

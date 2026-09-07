@@ -72,9 +72,8 @@ services:
       SESSION_SECRET: aifiqh-unified-single-port-secret-key-32chars
       WEB_DIST_PATH: /app/apps/web/dist
       PUBLIC_BASE_URL: http://localhost:${APP_PORT:-8080}
-      # email-only shortcut stays confined to local development; the OIDC
-      # flow with credential accounts is always available
-      AUTH_DEV_LOGIN_ENABLED: 'true'
+      # dev-login defaults to false everywhere unless overridden
+      AUTH_DEV_LOGIN_ENABLED: '${AUTH_DEV_LOGIN_ENABLED:-false}'
 
 volumes:
   db-data:

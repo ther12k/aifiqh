@@ -3,6 +3,9 @@
 # NOT used by deployments — Halotec et al. run the base compose only, with
 # every service reachable exclusively over the internal docker network.
 services:
+  app:
+    environment:
+      AUTH_DEV_LOGIN_ENABLED: 'true'
   db:
     ports:
       - '127.0.0.1:5434:5432'
