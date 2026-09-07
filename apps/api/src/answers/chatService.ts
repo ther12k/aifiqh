@@ -27,6 +27,7 @@ import {
 import { executeLanePlan } from '../retrieval/laneFusion'
 import { planAndPersistQuery } from '../retrieval/queryPlanner'
 import { HashRerankerProvider } from '../retrieval/reranker'
+import { evaluateAnswerClaimSupport } from '../validation/claimSupportScorer'
 import { type VerificationStatus, deriveVerification } from './answerStatus'
 import { finalizeGroundedAnswer } from './answerTraceService'
 import { generateGroundedAnswer } from './generationPipeline'
@@ -650,6 +651,16 @@ async function runTurn(
 		model: usedModel,
 	})
 
+	// middle verification layer (#109): does the cited evidence actually
+	// support the specific material claims (no polarity reversal / dropped conditions)?
+	const evidenceTexts: Record<string, string> = {}
+	for (const [id, item] of citable) {
+		evidenceTexts[id] = item.text
+	}
+	const claimSupportEval = generation.answer
+		? evaluateAnswerClaimSupport(generation.answer, evidenceTexts)
+		: { allSupported: true }
+
 	return {
 		conversationId,
 		userMessageId,
@@ -671,6 +682,7 @@ async function runTurn(
 			// the answer has no citable support at all
 			citationsOk: citations.length > 0,
 			citedCount: citations.length,
+			claimSupportOk: claimSupportEval.allSupported,
 		}),
 		citations,
 	}

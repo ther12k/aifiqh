@@ -62,6 +62,8 @@ export interface VerificationInput {
 	/** deterministic citation checks: no citation failed integrity */
 	citationsOk: boolean
 	citedCount: number
+	/** middle layer (#109): automated entailment check over (claim, passage) pairs */
+	claimSupportOk?: boolean
 	/** standing claim-review verdicts (#110) — answered turns only */
 	claimReviews?: {
 		standing: Array<{
@@ -123,11 +125,21 @@ export function deriveVerification(
 					: 'scholar_contested'
 		}
 	}
+	// claimSupport (#109): if automated entailment check failed, mark insufficient
+	// and downgrade userOutcome to needs_scholar_review
+	const claimSupport: ClaimSupport =
+		input.claimSupportOk === false
+			? 'automated_check_insufficient'
+			: 'automated_check_passed'
+
+	const userOutcome: UserOutcome =
+		input.claimSupportOk === false ? 'needs_scholar_review' : 'answered'
+
 	return {
 		...base,
 		scholarlyReview,
 		citationIntegrity: input.citationsOk ? 'passed' : 'failed',
-		claimSupport: 'automated_check_passed',
-		userOutcome: 'answered',
+		claimSupport,
+		userOutcome,
 	}
 }
