@@ -103,7 +103,7 @@ describe('outbound URL guard (SSRF, #111)', () => {
 describe('secret-ref confinement (#111)', () => {
 	test('file:// is refused entirely when no directories are configured', () => {
 		const prev = process.env.AIFIQH_SECRET_FILE_DIRS
-		delete process.env.AIFIQH_SECRET_FILE_DIRS
+		process.env.AIFIQH_SECRET_FILE_DIRS = undefined
 		expect(resolveSecretRef('file:///etc/passwd')).toBeNull()
 		expect(resolveSecretRef('file:///run/secrets/api_key')).toBeNull()
 		if (prev !== undefined) process.env.AIFIQH_SECRET_FILE_DIRS = prev
@@ -125,7 +125,7 @@ describe('secret-ref confinement (#111)', () => {
 		expect(resolveSecretRef('env://AIFIQH_ROUTER_TEST_KEY')).toBe(
 			'sk-test-value',
 		)
-		delete process.env.AIFIQH_ROUTER_TEST_KEY
+		process.env.AIFIQH_ROUTER_TEST_KEY = undefined
 		expect(resolveSecretRef('vault://prod/openai')).toBeNull()
 		expect(resolveSecretRef('gcp-sm://projects/x/secrets/y')).toBeNull()
 	})

@@ -43,7 +43,7 @@ async function main() {
 		setKey: 'fiqh-reviewed-benchmark-v1',
 	})
 
-	console.log(`✅ Successfully seeded benchmark suite!`)
+	console.log('✅ Successfully seeded benchmark suite!')
 	console.log(`   Set ID: ${result.setId}`)
 	console.log(`   Version ID: ${result.versionId}`)
 	console.log(`   Total Cases: ${result.caseCount}`)
