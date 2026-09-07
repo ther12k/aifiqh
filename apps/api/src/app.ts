@@ -314,6 +314,15 @@ export function buildApp(deps: AppDeps) {
 				ctx.set.status = err.status
 				return { error: err.code, reasonCode: err.reasonCode ?? err.code }
 			}
+			// no route matched (e.g. /config/.env probes): a plain 404 is the
+			// honest answer — not a 500 that logs noise on every probe
+			if (
+				err instanceof Error &&
+				(err.name === 'NotFoundError' || err.message === 'Not Found')
+			) {
+				ctx.set.status = 404
+				return { error: 'not_found' }
+			}
 			log.error('unhandled error', { error: err })
 			ctx.set.status = 500
 			return { error: 'internal_error' }

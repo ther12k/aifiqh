@@ -4,6 +4,7 @@
  * framework-independent. Login states and revocations live in PostgreSQL
  * (auth/sessionStore) so they survive restarts and work across instances.
  */
+import { createHash, randomBytes } from 'node:crypto'
 import { Elysia } from 'elysia'
 import type { Config } from '../config'
 import { type Sql, db } from '../db/client'
@@ -40,12 +41,17 @@ export interface AuthDeps {
 export function authPlugin(deps: AuthDeps) {
 	const { cfg, log, oidc, sql } = deps
 
-	return new Elysia({ name: 'auth' })
-		.get('/auth/dev-login', async ({ request, set }) => {
-			if (cfg.env === 'production') {
-				set.status = 404
-				return 'not found'
-			}
+	const routes = new Elysia({ name: 'auth' }).get('/auth/bootstrap', () => ({
+		// public: the shell uses this to decide whether the dev-login
+		// shortcut may be offered at all (false on any real deployment)
+		devLoginEnabled: cfg.devLoginEnabled,
+	}))
+
+	if (cfg.devLoginEnabled) {
+		// identity-proof shortcut for isolated development only; the route
+		// is NOT REGISTERED on real deployments (config.ts refuses to boot
+		// a production process with the flag on)
+		routes.get('/auth/dev-login', async ({ request, set }) => {
 			const url = new URL(request.url)
 			const email = url.searchParams.get('email') ?? 'admin@example.com'
 			const [user] = await sql<{ id: string; primary_email: string }[]>`
@@ -86,11 +92,20 @@ export function authPlugin(deps: AuthDeps) {
 			set.headers.location = redirect
 			set.status = 302
 		})
+	}
+
+	return routes
 		.get('/auth/login', async ({ set }) => {
 			const ep = await oidc.discovery()
 			const state = crypto.randomUUID()
 			const nonce = crypto.randomUUID()
-			await createLoginState(sql, state, nonce)
+			// PKCE (HARD-008): the verifier lives server-side with the state
+			// row; only the S256 challenge travels in the authorize URL
+			const codeVerifier = randomBytes(32).toString('base64url')
+			const codeChallenge = createHash('sha256')
+				.update(codeVerifier)
+				.digest('base64url')
+			await createLoginState(sql, state, nonce, codeVerifier)
 			const url = new URL(ep.authorization_endpoint)
 			url.searchParams.set('response_type', 'code')
 			url.searchParams.set('client_id', oidc.clientId)
@@ -98,6 +113,8 @@ export function authPlugin(deps: AuthDeps) {
 			url.searchParams.set('scope', 'openid email profile')
 			url.searchParams.set('state', state)
 			url.searchParams.set('nonce', nonce)
+			url.searchParams.set('code_challenge', codeChallenge)
+			url.searchParams.set('code_challenge_method', 'S256')
 			set.status = 302
 			set.headers.location = url.toString()
 		})
@@ -106,10 +123,10 @@ export function authPlugin(deps: AuthDeps) {
 				new URL(request.url).searchParams.entries(),
 			) as Record<string, string>
 			// single-use consume: replayed or expired states return nothing
-			const nonce = query.state
+			const state = query.state
 				? await consumeLoginState(sql, query.state)
 				: null
-			if (!nonce) {
+			if (!state) {
 				set.status = 400
 				return 'invalid state'
 			}
@@ -130,6 +147,7 @@ export function authPlugin(deps: AuthDeps) {
 						grant_type: 'authorization_code',
 						code: query.code,
 						redirect_uri: `${cfg.publicBaseUrl}/auth/callback`,
+						code_verifier: state.codeVerifier,
 					}),
 				})
 				if (!tokenRes.ok) throw new Error(`token endpoint ${tokenRes.status}`)
@@ -137,7 +155,8 @@ export function authPlugin(deps: AuthDeps) {
 				if (!tokens.id_token) throw new Error('no id_token')
 				const claims = await oidc.verifyIdToken(tokens.id_token)
 				// we always send a nonce; a missing or mismatched claim is a replay
-				if (claims.nonce !== nonce) throw new Error('nonce missing or mismatch')
+				if (claims.nonce !== state.nonce)
+					throw new Error('nonce missing or mismatch')
 				const user = await upsertIdentity(
 					sql,
 					cfg.oidcIssuer,

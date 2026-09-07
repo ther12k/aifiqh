@@ -2126,10 +2126,13 @@ describe('durable auth state (sessionStore / 0020)', () => {
 		expect(await isSessionRevoked(sql, crypto.randomUUID())).toBeTrue()
 	})
 
-	test('login states are single-use', async () => {
+	test('login states are single-use and carry the PKCE verifier', async () => {
 		const state = crypto.randomUUID()
-		await createLoginState(sql, state, 'nonce-1')
-		expect(await consumeLoginState(sql, state)).toBe('nonce-1')
+		await createLoginState(sql, state, 'nonce-1', 'verifier-1')
+		expect(await consumeLoginState(sql, state)).toEqual({
+			nonce: 'nonce-1',
+			codeVerifier: 'verifier-1',
+		})
 		// replay returns nothing
 		expect(await consumeLoginState(sql, state)).toBeNull()
 	})

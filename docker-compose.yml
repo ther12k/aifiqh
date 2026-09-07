@@ -44,6 +44,10 @@ services:
     environment:
       ISSUER: http://oidc:4011
       PORT: '4011'
+      EXTRA_REDIRECT_URIS: http://localhost:${APP_PORT:-8080}/auth/callback
+      # local-only plaintext credentials; production provisions
+      # passwordScrypt hashes via the deployment override instead
+      OIDC_ACCOUNTS: '[{"email":"admin@example.com","name":"Admin Alpha","password":"devpass-admin"},{"email":"editor@example.com","name":"Editor Alpha","password":"devpass-editor"},{"email":"reviewer@example.com","name":"Reviewer Alpha","password":"devpass-reviewer"},{"email":"reader@example.com","name":"Reader Alpha","password":"devpass-reader"}]'
 
   app:
     build:
@@ -67,6 +71,10 @@ services:
       OIDC_ISSUER: http://oidc:4011
       SESSION_SECRET: aifiqh-unified-single-port-secret-key-32chars
       WEB_DIST_PATH: /app/apps/web/dist
+      PUBLIC_BASE_URL: http://localhost:${APP_PORT:-8080}
+      # email-only shortcut stays confined to local development; the OIDC
+      # flow with credential accounts is always available
+      AUTH_DEV_LOGIN_ENABLED: 'true'
 
 volumes:
   db-data:

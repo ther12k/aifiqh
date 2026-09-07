@@ -1,0 +1,14 @@
+# Host-facing dev ports (bind mounts of the internal services) for working
+# on the repo from the host: bun run dev / bun test expect postgres on :5434.
+# NOT used by deployments — Halotec et al. run the base compose only, with
+# every service reachable exclusively over the internal docker network.
+services:
+  db:
+    ports:
+      - '127.0.0.1:5434:5432'
+  minio:
+    ports:
+      - '127.0.0.1:9000:9000'
+  oidc:
+    ports:
+      - '127.0.0.1:4011:4011'

@@ -2,12 +2,30 @@ import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildApp } from './app'
 import { createOidcClient } from './auth/oidc'
+import { revokeDevSessions } from './auth/sessionStore'
 import { config } from './config'
 import { closeDb, db } from './db/client'
 import { createLogger } from './logger'
 
 const cfg = config()
 const log = createLogger(cfg.logLevel, { service: 'api' })
+
+// Disabling the dev shortcut must also invalidate what it issued: every
+// session created through the email-only route is revoked server-side at
+// startup when the flag is off (HARD-007).
+if (!cfg.devLoginEnabled) {
+	try {
+		const revoked = await revokeDevSessions(db())
+		if (revoked > 0) log.warn('revoked dev-issued sessions', { revoked })
+	} catch (err) {
+		// a cold database (first boot before migrations) has no table yet;
+		// entrypoint migrates first, so this only guards odd startup orders
+		log.warn('dev-session revocation skipped', {
+			error: err instanceof Error ? err.message : 'unknown',
+		})
+	}
+}
+
 const app = buildApp({ cfg, log, sql: db(), oidc: createOidcClient(cfg) })
 
 const webDistPath =

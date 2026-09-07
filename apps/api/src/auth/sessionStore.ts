@@ -8,19 +8,32 @@ import type { Sql } from '../db/client'
 const LOGIN_STATE_TTL = '10 minutes'
 const PRUNE_OLDER_THAN = '1 day'
 
-interface LoginStateRow {
-	state: string
-	nonce: string
+/**
+ * Issuer recorded on sessions created through the email-only dev shortcut.
+ * When dev login is disabled these sessions are revoked wholesale at
+ * startup: disabling the endpoint must not leave previously issued
+ * privileged sessions usable.
+ */
+export const DEV_SESSION_ISSUER = 'dev-interaction'
+
+export async function revokeDevSessions(sql: Sql): Promise<number> {
+	const rows = await sql<{ n: string }[]>`
+		update auth_sessions set revoked_at = now()
+		where issuer = ${DEV_SESSION_ISSUER} and revoked_at is null
+		returning 1 as n
+	`
+	return rows.length
 }
 
 export async function createLoginState(
 	sql: Sql,
 	state: string,
 	nonce: string,
+	codeVerifier: string,
 ): Promise<void> {
 	await sql`
-		insert into auth_login_states (state, nonce, expires_at)
-		values (${state}::uuid, ${nonce}, now() + ${LOGIN_STATE_TTL}::interval)
+		insert into auth_login_states (state, nonce, code_verifier, expires_at)
+		values (${state}::uuid, ${nonce}, ${codeVerifier}, now() + ${LOGIN_STATE_TTL}::interval)
 	`
 	await sql`delete from auth_login_states where expires_at < now()`
 }
@@ -29,13 +42,14 @@ export async function createLoginState(
 export async function consumeLoginState(
 	sql: Sql,
 	state: string,
-): Promise<string | null> {
-	const rows = await sql<LoginStateRow[]>`
+): Promise<{ nonce: string; codeVerifier: string } | null> {
+	const rows = await sql<{ nonce: string; code_verifier: string }[]>`
 		delete from auth_login_states
 		where state = ${state}::uuid and expires_at >= now()
-		returning nonce
+		returning nonce, code_verifier
 	`
-	return rows[0]?.nonce ?? null
+	const row = rows[0]
+	return row ? { nonce: row.nonce, codeVerifier: row.code_verifier } : null
 }
 
 export interface IssuedSession {

@@ -178,7 +178,7 @@ const LANDING_FEATURES = [
 	},
 ]
 
-function Landing() {
+function Landing({ devLoginEnabled }: { devLoginEnabled: boolean }) {
 	return (
 		<section className="landing" aria-label="Pengantar AiFiqh">
 			<div className="landing-grid">
@@ -195,12 +195,14 @@ function Landing() {
 						<a className="btn-primary" href="/auth/login">
 							Mulai Bertanya
 						</a>
-						<a
-							className="btn-ghost"
-							href="/auth/dev-login?email=admin@example.com"
-						>
-							Masuk Cepat (Dev)
-						</a>
+						{devLoginEnabled && (
+							<a
+								className="btn-ghost"
+								href="/auth/dev-login?email=admin@example.com"
+							>
+								Masuk Cepat (Dev)
+							</a>
+						)}
 					</div>
 				</div>
 				<div className="landing-visual" aria-hidden="true">
@@ -241,6 +243,7 @@ export default function App() {
 	const [health, setHealth] = useState<Health | null>(null)
 	const [me, setMe] = useState<Me | null>(null)
 	const [meLoading, setMeLoading] = useState(true)
+	const [devLoginEnabled, setDevLoginEnabled] = useState(false)
 
 	useEffect(() => {
 		fetch('/health/components')
@@ -255,6 +258,17 @@ export default function App() {
 			.then(setMe)
 			.catch(() => setMe(null))
 			.finally(() => setMeLoading(false))
+	}, [])
+
+	// the server decides whether the email-only dev shortcut exists at all;
+	// real deployments answer false and the UI never renders its links
+	useEffect(() => {
+		fetch('/auth/bootstrap')
+			.then((r) => (r.ok ? r.json() : null))
+			.then((b: { devLoginEnabled?: boolean } | null) =>
+				setDevLoginEnabled(b?.devLoginEnabled === true),
+			)
+			.catch(() => setDevLoginEnabled(false))
 	}, [])
 
 	const permissions = me?.permissions ?? []
@@ -355,10 +369,12 @@ export default function App() {
 						</div>
 					) : (
 						<div className="login-links">
-							<a href="/auth/dev-login?email=admin@example.com">
-								<NavIcon d={ICON_PATHS.star} />
-								Masuk Cepat (Dev Admin)
-							</a>
+							{devLoginEnabled && (
+								<a href="/auth/dev-login?email=admin@example.com">
+									<NavIcon d={ICON_PATHS.star} />
+									Masuk Cepat (Dev Admin)
+								</a>
+							)}
 							<a href="/auth/login">
 								<NavIcon d={ICON_PATHS.logout} />
 								Masuk (OIDC)
@@ -516,7 +532,9 @@ export default function App() {
 						</section>
 					)}
 
-					{route === '/' && !meLoading && !me && <Landing />}
+					{route === '/' && !meLoading && !me && (
+						<Landing devLoginEnabled={devLoginEnabled} />
+					)}
 
 					<footer className="app-footer">
 						<span>AiFiqh — citation-first Islamic jurisprudence assistant</span>
@@ -527,10 +545,14 @@ export default function App() {
 							</span>
 						) : (
 							<span>
-								<a href="/auth/dev-login?email=admin@example.com">
-									Masuk Cepat (Dev Admin)
-								</a>
-								{' · '}
+								{devLoginEnabled && (
+									<>
+										<a href="/auth/dev-login?email=admin@example.com">
+											Masuk Cepat (Dev Admin)
+										</a>
+										{' · '}
+									</>
+								)}
 								<a href="/auth/login">Masuk (OIDC)</a>
 							</span>
 						)}

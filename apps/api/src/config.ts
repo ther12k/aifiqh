@@ -29,6 +29,12 @@ export interface Config {
 	sessionSecret: string
 	sessionTtlSeconds: number
 	publicBaseUrl: string
+	/**
+	 * Identity-proof shortcut for isolated dev/test only. An email query
+	 * param is an identifier, not proof of identity — this must never be
+	 * reachable on a deployment that accepts unauthenticated traffic.
+	 */
+	devLoginEnabled: boolean
 	logLevel: 'debug' | 'info' | 'warn' | 'error'
 }
 
@@ -37,6 +43,27 @@ let cached: Config | null = null
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 	const envName = (optional(env, 'APP_ENV', 'development') ||
 		'development') as Config['env']
+	// dev login defaults to ON for local development only and OFF for any
+	// deployment (APP_ENV=production); explicitly enabling it in production
+	// is a startup failure — an email query param is an identifier, not
+	// proof of identity (HARD-007)
+	const devLoginEnabled =
+		optional(
+			env,
+			'AUTH_DEV_LOGIN_ENABLED',
+			envName === 'production' ? 'false' : 'true',
+		) === 'true'
+	if (envName === 'production' && devLoginEnabled) {
+		throw new Error(
+			'AUTH_DEV_LOGIN_ENABLED=true is not allowed when APP_ENV=production: ' +
+				'email-only login bypasses identity proof. Use the OIDC flow.',
+		)
+	}
+	if (envName === 'production' && !env.SESSION_SECRET) {
+		throw new Error(
+			'SESSION_SECRET must be set explicitly when APP_ENV=production.',
+		)
+	}
 	return {
 		env: envName,
 		port: Number(optional(env, 'PORT', '3000')),
@@ -62,6 +89,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		),
 		sessionTtlSeconds: Number(optional(env, 'SESSION_TTL_SECONDS', '3600')),
 		publicBaseUrl: optional(env, 'PUBLIC_BASE_URL', 'http://localhost:3000'),
+		devLoginEnabled,
 		logLevel: optional(env, 'LOG_LEVEL', 'info') as Config['logLevel'],
 	}
 }
