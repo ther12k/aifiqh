@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { execSync } from 'node:child_process'
 import type { Principal } from '@aifiqh/shared'
 import postgres from 'postgres'
+import { buildAnswerForensics } from '../src/answers/answerTraceService'
 import { postUserTurn, startConversation } from '../src/answers/chatService'
 import {
 	captureEvidencePack,
@@ -387,6 +388,50 @@ describe('REL-HARD-004: database restore and answer replay drill', () => {
 				where cr.answer_id = ${answerId}::uuid and sr.status = 'deprecated'
 				limit 1`
 			expect(historicSpan.span_key).toBe('drill-a')
+		} finally {
+			await restored.end()
+		}
+	}, 120_000)
+
+	test('historical answer forensics survive the restore (#114)', async () => {
+		// capture the full explanation BEFORE the disaster
+		const origin = await buildAnswerForensics(sql, principal, answerId)
+		expect(origin.graph.pins.every((p) => p.present)).toBeTrue()
+		// the drill runs hermetic: the honest explanation is that the builtin
+		// composer produced the text — generation pins stay empty
+		expect(origin.graph.answer.provider).toBe('builtin-compose')
+
+		dumpDatabase('/tmp/restore_drill_forensics.dump')
+		psqlAdmin(`drop database if exists ${RESTORE_DB}`)
+		psqlAdmin(`create database ${RESTORE_DB}`)
+		restoreDatabase('/tmp/restore_drill_forensics.dump')
+		const restored = postgres(RESTORE_URL, { max: 5 })
+
+		try {
+			const after = await buildAnswerForensics(restored, principal, answerId)
+
+			// the ENTIRE explanation rebuilds identically from the restored
+			// store alone: response text (sections/claims/citations), evidence
+			// (manifest items), pinned retrieval stack, provenance chain
+			expect(after).toEqual(origin)
+
+			// and the explanation is actually complete — a forensic reader
+			// learns WHY this answer existed without touching the live system
+			expect(after.graph.sections.length).toBeGreaterThan(0)
+			expect(after.graph.manifest?.items.length).toBeGreaterThan(0)
+			expect(after.retrieval?.compilerVersion).toBe('index-compiler-v1')
+			expect(after.retrieval?.embeddingModel?.dimensions).toBe(768)
+			expect(after.retrieval?.knowledgeReleaseId).toBe(knowledgeReleaseId)
+			expect(after.generation).toBeNull() // builtin composer — recorded as such
+			const prov = after.provenance.find((p) => p.spanKey === 'drill-a')
+			expect(prov?.title).toBe('Kitab Drill')
+			expect(prov?.revisionStatus).toBe('active')
+			expect(prov?.revisionNumber).toBe(1)
+			// citation → span → revision identity is revision-specific: the
+			// chain resolves to THIS revision, not "whatever is latest"
+			expect(after.graph.citations[0].sourceRevisionId).toBe(
+				citationRef!.revisionId,
+			)
 		} finally {
 			await restored.end()
 		}

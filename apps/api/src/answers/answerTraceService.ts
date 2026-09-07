@@ -492,3 +492,206 @@ export async function getAnswerGraph(
 		pins,
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Answer forensics (#114): after a full restore, a historical answer must be
+// EXPLAINABLE from the restored database alone — what was answered, from
+// which evidence, under which prompt/model/retrieval configuration, and how
+// each citation traces back to an identifiable original publication.
+// The secret itself is nowhere in the chain (only its external reference).
+// ---------------------------------------------------------------------------
+
+export interface AnswerForensics {
+	graph: AnswerGraph
+	prompt: {
+		templateKey: string | null
+		version: number | null
+		body: string | null
+	} | null
+	generation: {
+		providerKey: string | null
+		providerType: string | null
+		baseUrl: string | null
+		secretRef: string | null
+		modelId: string | null
+		contextWindow: number | null
+	} | null
+	retrieval: {
+		compilerVersion: string | null
+		normalizationProfile: {
+			key: string
+			version: number
+			ruleset: unknown
+		} | null
+		embeddingModel: {
+			provider: string
+			modelId: string
+			version: string
+			dimensions: number
+		} | null
+		knowledgeReleaseId: string | null
+		indexReleaseId: string | null
+	} | null
+	provenance: Array<{
+		citationOrdinal: number
+		sourceId: string
+		title: string
+		author: string
+		edition: string | null
+		publisher: string | null
+		revisionNumber: number
+		revisionStatus: string
+		spanKey: string
+		acquisitionMethod: string | null
+		policyReference: string | null
+	}>
+}
+
+/** Assemble the full forensic explanation for one historical answer. */
+export async function buildAnswerForensics(
+	sql: Sql,
+	principal: Principal,
+	answerId: string,
+): Promise<AnswerForensics> {
+	const graph = await getAnswerGraph(sql, principal, answerId)
+
+	// the exact prompt body that produced the response (pinned version)
+	let prompt: AnswerForensics['prompt'] = null
+	if (graph.answer.promptVersionId) {
+		const [pv] = await sql<
+			{ template_key: string | null; version: number; body: string }[]
+		>`select pt.key as template_key, pv.version, pv.body
+			from prompt_versions pv
+			join prompt_templates pt on pt.id = pv.template_id
+			where pv.id = ${graph.answer.promptVersionId}::uuid`
+		if (pv)
+			prompt = {
+				templateKey: pv.template_key,
+				version: pv.version,
+				body: pv.body,
+			}
+	}
+
+	// what generated the text: provider identity + secret REFERENCE (never
+	// a key — none is stored anywhere). modelConfigId null (builtin composer)
+	// is itself the honest explanation: the deterministic composer ran.
+	let generation: AnswerForensics['generation'] = null
+	const [genRow] = await sql<
+		{
+			model_config_id: string | null
+			provider_key: string | null
+			provider_type: string | null
+			base_url: string | null
+			secret_ref: string | null
+			model_id: string | null
+			context_window: number | null
+		}[]
+	>`select mc.id as model_config_id, pc.key as provider_key,
+			pc.provider as provider_type, pc.base_url, psr.secret_ref,
+			mc.model_id, mc.context_window
+		from answers a
+		left join model_configs mc on mc.id = a.model_config_id
+		left join provider_configs pc on pc.id = mc.provider_config_id
+		left join provider_secret_refs psr on psr.provider_config_id = pc.id
+		where a.id = ${answerId}::uuid`
+	if (genRow?.model_config_id) {
+		generation = {
+			providerKey: genRow.provider_key,
+			providerType: genRow.provider_type,
+			baseUrl: genRow.base_url,
+			secretRef: genRow.secret_ref,
+			modelId: genRow.model_id,
+			contextWindow: genRow.context_window,
+		}
+	}
+
+	// the retrieval stack the evidence came from
+	let retrieval: AnswerForensics['retrieval'] = null
+	if (graph.trace?.indexReleaseId) {
+		const [row] = await sql<
+			{
+				compiler_version: string
+				np_key: string | null
+				np_version: number | null
+				np_ruleset: unknown
+				emb_provider: string | null
+				emb_model: string | null
+				emb_version: string | null
+				emb_dimensions: number | null
+				knowledge_release_id: string | null
+			}[]
+		>`select ic.compiler_version,
+				np.key as np_key, np.version as np_version, np.ruleset as np_ruleset,
+				em.provider as emb_provider, em.model_id as emb_model,
+				em.version as emb_version, em.dimensions as emb_dimensions,
+				ir.knowledge_release_id
+			from index_releases ir
+			join index_configurations ic on ic.id = ir.configuration_id
+			left join normalization_profiles np on np.id = ic.normalization_profile_id
+			left join embedding_models em on em.id = ic.embedding_model_id
+			where ir.id = ${graph.trace.indexReleaseId}::uuid`
+		if (row)
+			retrieval = {
+				compilerVersion: row.compiler_version,
+				normalizationProfile:
+					row.np_key && row.np_version !== null
+						? {
+								key: row.np_key,
+								version: row.np_version,
+								ruleset: row.np_ruleset,
+							}
+						: null,
+				embeddingModel:
+					row.emb_provider && row.emb_model
+						? {
+								provider: row.emb_provider,
+								modelId: row.emb_model,
+								version: row.emb_version ?? '',
+								dimensions: row.emb_dimensions ?? 0,
+							}
+						: null,
+				knowledgeReleaseId: row.knowledge_release_id,
+				indexReleaseId: graph.trace.indexReleaseId,
+			}
+	}
+
+	// each citation traces to the original publication + acquisition history
+	const provenance: AnswerForensics['provenance'] = []
+	for (const c of graph.citations) {
+		const [row] = await sql<
+			{
+				title: string
+				author: string
+				edition: string | null
+				publisher: string | null
+				revision_number: number
+				revision_status: string
+				span_key: string
+				acquisition_method: string | null
+				policy_reference: string | null
+			}[]
+		>`select s.title, s.author, s.edition, s.publisher,
+				sr.revision_number, sr.status as revision_status,
+				ss.span_key, s.acquisition_method, s.policy_reference
+			from source_spans ss
+			join source_revisions sr on sr.id = ss.source_revision_id
+			join sources s on s.id = sr.source_id
+			where ss.id = ${c.spanId}::uuid`
+		if (row)
+			provenance.push({
+				citationOrdinal: c.ordinal,
+				sourceId: c.sourceId,
+				title: row.title,
+				author: row.author,
+				edition: row.edition,
+				publisher: row.publisher,
+				revisionNumber: row.revision_number,
+				revisionStatus: row.revision_status,
+				spanKey: row.span_key,
+				acquisitionMethod: row.acquisition_method,
+				policyReference: row.policy_reference,
+			})
+	}
+
+	return { graph, prompt, generation, retrieval, provenance }
+}

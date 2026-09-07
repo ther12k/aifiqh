@@ -1,6 +1,12 @@
 import type { Principal } from '@aifiqh/shared'
 import type { Sql } from '../db/client'
+import type { EmbeddingProvider } from '../index/embeddingService'
+import {
+	classifyFilteredVectorSearch,
+	countFilteredUnits,
+} from '../retrieval/filteredSearch'
 import { type FusedCandidate, executeLanePlan } from '../retrieval/laneFusion'
+import type { RerankerProvider } from '../retrieval/reranker'
 import { HashRerankerProvider } from '../retrieval/reranker'
 
 /**
@@ -60,6 +66,13 @@ export interface CaseMetric {
 	topCandidates: Array<{ unitId: string; rank: number; fusedScore: number }>
 	/** rank of each expected-but-missed evidence pin stays explicit */
 	missingPins: ExpectedEvidencePin[]
+	/** set when the fused result was empty: corpus gap vs lane failure,
+	 * classified against the exact unit count — never left silent (#113) */
+	emptyResultClass?: {
+		verdict: string
+		reasonCode: string
+		matchingUnits: number
+	}
 }
 
 export interface RetrievalRunReport {
@@ -148,6 +161,15 @@ export interface RetrievalRunOptions {
 	k?: number
 	/** injectable lane executor (tests substitute a deterministic fake) */
 	execute?: typeof executeLanePlan
+	/** ladder variant label recorded in the run pins (#113) */
+	variant?: string
+	/** stage overrides for the executor: `null` explicitly switches a stage
+	 * OFF (baseline rung), a provider switches it on; absent keys keep the
+	 * runner default (deterministic hash reranker, no vector lane) */
+	executeExtra?: {
+		vectorProvider?: EmbeddingProvider | null
+		reranker?: RerankerProvider | null
+	}
 	now?: Date
 }
 
@@ -230,6 +252,17 @@ export async function runRetrievalEvaluation(
 		evidenceByCase.set(e.case_id, list)
 	}
 
+	const execute = options.execute ?? executeLanePlan
+	// stage resolution: default = deterministic hash reranker, no vector.
+	// executeExtra keys present switch stages explicitly (null = off) so
+	// the ladder's baseline rung really runs WITHOUT rerank/vector (#113)
+	const extra = options.executeExtra ?? {}
+	const reranker =
+		'reranker' in extra
+			? (extra.reranker ?? undefined)
+			: new HashRerankerProvider()
+	const vectorProvider = extra.vectorProvider ?? undefined
+
 	const [run] = await sql<{ id: string }[]>`
 		insert into evaluation_runs (set_version_id, mode, pins, status)
 		values (${options.setVersionId}::uuid, 'retrieval_only',
@@ -237,15 +270,15 @@ export async function runRetrievalEvaluation(
 				runnerVersion: EVAL_RETRIEVAL_RUNNER_VERSION,
 				indexReleaseId: options.indexReleaseId,
 				knowledgeReleaseId: options.knowledgeReleaseId ?? null,
-				rerankerModel: 'hash-rerank',
+				rerankerModel: reranker ? reranker.modelId : 'no-rerank',
+				vectorModel: vectorProvider
+					? `${vectorProvider.modelId}@${vectorProvider.modelVersion}`
+					: 'no-vector',
+				variant: options.variant ?? 'standard',
 				generation: 'not_invoked',
 				k,
 			} as never)}::jsonb, 'running')
 		returning id`
-
-	const execute = options.execute ?? executeLanePlan
-	// deterministic reranker: same fused list in, same order out
-	const reranker = new HashRerankerProvider()
 
 	const caseMetrics: CaseMetric[] = []
 	try {
@@ -255,6 +288,7 @@ export async function runRetrievalEvaluation(
 				query: c.query_text,
 				indexReleaseId: options.indexReleaseId,
 				reranker,
+				...(vectorProvider ? { vectorProvider } : {}),
 			})
 			const latencyMs = Date.now() - started
 			const fused = outcome.fused.candidates.slice(0, 50)
@@ -291,6 +325,29 @@ export async function runRetrievalEvaluation(
 				sourceSpanId: f.sourceSpanId,
 				knowledgeRevisionId: f.knowledgeRevisionId,
 			}))
+
+			// #113: an empty fused result is CLASSIFIED, never silently
+			// treated as "no evidence exists" — with no matching units it is
+			// a true corpus gap; with matching units the lanes failed
+			let emptyResultClass: CaseMetric['emptyResultClass']
+			if (fused.length === 0) {
+				const matching = await countFilteredUnits(
+					sql,
+					principal,
+					options.indexReleaseId,
+					{},
+				)
+				const check = classifyFilteredVectorSearch({
+					returned: 0,
+					matching,
+					requestedTopK: k,
+				})
+				emptyResultClass = {
+					verdict: check.verdict,
+					reasonCode: check.reasonCode,
+					matchingUnits: check.matchingUnits,
+				}
+			}
 
 			const matchedUnitIds: string[] = []
 			const hitRanks: number[] = []
@@ -334,6 +391,7 @@ export async function runRetrievalEvaluation(
 					fusedScore: round(f.fusedScore, 6),
 				})),
 				missingPins,
+				emptyResultClass,
 			}
 			caseMetrics.push(metric)
 
