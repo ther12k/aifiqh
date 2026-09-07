@@ -67,7 +67,9 @@ const ACCOUNTS = parseAccounts()
 function verifyPassword(account, supplied) {
 	if (typeof supplied !== 'string' || supplied.length === 0) return false
 	if (account.passwordScrypt) {
-		const [saltHex, hashHex] = account.passwordScrypt.split(':')
+		const parts = account.passwordScrypt.split(':')
+		const [saltHex, hashHex] =
+			parts.length === 3 ? [parts[1], parts[2]] : [parts[0], parts[1]]
 		if (!saltHex || !hashHex) return false
 		try {
 			const expected = Buffer.from(hashHex, 'hex')
