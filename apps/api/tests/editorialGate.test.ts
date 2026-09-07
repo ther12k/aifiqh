@@ -8,15 +8,15 @@
  * trigger matrix directly, then the API surface on top.
  */
 import { beforeAll, describe, expect, test } from 'bun:test'
+import type { Principal } from '@aifiqh/shared'
 import postgres from 'postgres'
 import { buildApp } from '../src/app'
 import { newCsrfToken, signSession } from '../src/auth/session'
 import { issueSession } from '../src/auth/sessionStore'
 import { loadConfig } from '../src/config'
-import { compileIndexRelease } from '../src/index/indexCompiler'
 import { scopedTransaction } from '../src/db/client'
+import { compileIndexRelease } from '../src/index/indexCompiler'
 import { createLogger } from '../src/logger'
-import type { Principal } from '@aifiqh/shared'
 import { ensureMigrations } from './dbBootstrap'
 
 const DB_URL =
@@ -253,7 +253,9 @@ describe('editorial approval gate — answer availability flips with approval', 
 			values (${src}::uuid, 1, 'pending_review') returning id`
 		await sql`insert into source_spans (source_revision_id, span_key, original_text)
 			values (${rev.id}::uuid, 'gate-flip-1', 'Riba diharamkan dalam Al-Quran.')`
-		const { kReleaseId } = await mkReleaseAndConfig(crypto.randomUUID().slice(0, 8))
+		const { kReleaseId } = await mkReleaseAndConfig(
+			crypto.randomUUID().slice(0, 8),
+		)
 		const principal: Principal = {
 			userId: adminId,
 			tenantId,
@@ -290,17 +292,20 @@ describe('editorial approval gate — review route', () => {
 			insert into source_revisions (source_id, revision_number, status)
 			values (${src}::uuid, 1, 'pending_review') returning id`
 		const res = await testApp.handle(
-			new Request(`http://localhost/sources/${src}/revisions/${rev.id}/review`, {
-				method: 'POST',
-				headers: {
-					...(await authHeaders(adminId, true)),
-					'content-type': 'application/json',
+			new Request(
+				`http://localhost/sources/${src}/revisions/${rev.id}/review`,
+				{
+					method: 'POST',
+					headers: {
+						...(await authHeaders(adminId, true)),
+						'content-type': 'application/json',
+					},
+					body: JSON.stringify({
+						decision: 'approve',
+						note: 'checked against Kemenag mushaf',
+					}),
 				},
-				body: JSON.stringify({
-					decision: 'approve',
-					note: 'checked against Kemenag mushaf',
-				}),
-			}),
+			),
 		)
 		expect(res.status).toBe(200)
 		expect(await res.json()).toEqual({
@@ -313,9 +318,12 @@ describe('editorial approval gate — review route', () => {
 		expect(row.status).toBe('active')
 
 		const history = await testApp.handle(
-			new Request(`http://localhost/sources/${src}/revisions/${rev.id}/reviews`, {
-				headers: await authHeaders(adminId),
-			}),
+			new Request(
+				`http://localhost/sources/${src}/revisions/${rev.id}/reviews`,
+				{
+					headers: await authHeaders(adminId),
+				},
+			),
 		)
 		const reviews = (await history.json()).reviews
 		expect(reviews).toHaveLength(1)
@@ -323,8 +331,11 @@ describe('editorial approval gate — review route', () => {
 		expect(reviews[0].note).toBe('checked against Kemenag mushaf')
 		expect(reviews[0].actor_id).toBe(adminId)
 
-		const [audit] = await scopedTransaction(sql, tenantId, (tx) =>
-			tx<{ action: string }[]>`
+		const [audit] = await scopedTransaction(
+			sql,
+			tenantId,
+			(tx) =>
+				tx<{ action: string }[]>`
 			select action from audit_events
 			where entity_id = ${rev.id}
 				and action = 'source.revision_reviewed' limit 1`,
@@ -338,36 +349,44 @@ describe('editorial approval gate — review route', () => {
 			insert into source_revisions (source_id, revision_number, status)
 			values (${src}::uuid, 1, 'pending_review') returning id`
 		const noNote = await testApp.handle(
-			new Request(`http://localhost/sources/${src}/revisions/${rev.id}/review`, {
-				method: 'POST',
-				headers: {
-					...(await authHeaders(adminId, true)),
-					'content-type': 'application/json',
+			new Request(
+				`http://localhost/sources/${src}/revisions/${rev.id}/review`,
+				{
+					method: 'POST',
+					headers: {
+						...(await authHeaders(adminId, true)),
+						'content-type': 'application/json',
+					},
+					body: JSON.stringify({ decision: 'reject' }),
 				},
-				body: JSON.stringify({ decision: 'reject' }),
-			}),
+			),
 		)
 		expect(noNote.status).toBe(400)
 		expect((await noNote.json()).fields).toContain('note')
 
 		const rejected = await testApp.handle(
-			new Request(`http://localhost/sources/${src}/revisions/${rev.id}/review`, {
-				method: 'POST',
-				headers: {
-					...(await authHeaders(adminId, true)),
-					'content-type': 'application/json',
+			new Request(
+				`http://localhost/sources/${src}/revisions/${rev.id}/review`,
+				{
+					method: 'POST',
+					headers: {
+						...(await authHeaders(adminId, true)),
+						'content-type': 'application/json',
+					},
+					body: JSON.stringify({
+						decision: 'reject',
+						note: 'halaman 18 gagal ekstraksi',
+					}),
 				},
-				body: JSON.stringify({
-					decision: 'reject',
-					note: 'halaman 18 gagal ekstraksi',
-				}),
-			}),
+			),
 		)
 		expect(rejected.status).toBe(200)
-		const [row] = await sql<{
-			status: string
-			deprecation_reason: string | null
-		}[]>`select status, deprecation_reason from source_revisions where id = ${rev.id}::uuid`
+		const [row] = await sql<
+			{
+				status: string
+				deprecation_reason: string | null
+			}[]
+		>`select status, deprecation_reason from source_revisions where id = ${rev.id}::uuid`
 		expect(row.status).toBe('deprecated')
 		expect(row.deprecation_reason).toBe('halaman 18 gagal ekstraksi')
 	})
@@ -378,38 +397,47 @@ describe('editorial approval gate — review route', () => {
 			insert into source_revisions (source_id, revision_number, status)
 			values (${src}::uuid, 1, 'pending_review') returning id`
 		const denied = await testApp.handle(
-			new Request(`http://localhost/sources/${src}/revisions/${rev.id}/review`, {
-				method: 'POST',
-				headers: {
-					...(await authHeaders(editorId, true)),
-					'content-type': 'application/json',
+			new Request(
+				`http://localhost/sources/${src}/revisions/${rev.id}/review`,
+				{
+					method: 'POST',
+					headers: {
+						...(await authHeaders(editorId, true)),
+						'content-type': 'application/json',
+					},
+					body: JSON.stringify({ decision: 'approve' }),
 				},
-				body: JSON.stringify({ decision: 'approve' }),
-			}),
+			),
 		)
 		expect(denied.status).toBe(403)
 
 		// approve as admin, then a second approval hits the invalid-state wall
 		const first = await testApp.handle(
-			new Request(`http://localhost/sources/${src}/revisions/${rev.id}/review`, {
-				method: 'POST',
-				headers: {
-					...(await authHeaders(adminId, true)),
-					'content-type': 'application/json',
+			new Request(
+				`http://localhost/sources/${src}/revisions/${rev.id}/review`,
+				{
+					method: 'POST',
+					headers: {
+						...(await authHeaders(adminId, true)),
+						'content-type': 'application/json',
+					},
+					body: JSON.stringify({ decision: 'approve' }),
 				},
-				body: JSON.stringify({ decision: 'approve' }),
-			}),
+			),
 		)
 		expect(first.status).toBe(200)
 		const second = await testApp.handle(
-			new Request(`http://localhost/sources/${src}/revisions/${rev.id}/review`, {
-				method: 'POST',
-				headers: {
-					...(await authHeaders(adminId, true)),
-					'content-type': 'application/json',
+			new Request(
+				`http://localhost/sources/${src}/revisions/${rev.id}/review`,
+				{
+					method: 'POST',
+					headers: {
+						...(await authHeaders(adminId, true)),
+						'content-type': 'application/json',
+					},
+					body: JSON.stringify({ decision: 'approve' }),
 				},
-				body: JSON.stringify({ decision: 'approve' }),
-			}),
+			),
 		)
 		expect(second.status).toBe(409)
 		expect((await second.json()).status).toBe('active')
@@ -421,14 +449,17 @@ describe('editorial approval gate — review route', () => {
 			insert into source_revisions (source_id, revision_number, status)
 			values (${src}::uuid, 1, 'pending_review') returning id`
 		const res = await testApp.handle(
-			new Request(`http://localhost/sources/${src}/revisions/${rev.id}/review`, {
-				method: 'POST',
-				headers: {
-					...(await authHeaders(adminId, false)),
-					'content-type': 'application/json',
+			new Request(
+				`http://localhost/sources/${src}/revisions/${rev.id}/review`,
+				{
+					method: 'POST',
+					headers: {
+						...(await authHeaders(adminId, false)),
+						'content-type': 'application/json',
+					},
+					body: JSON.stringify({ decision: 'approve' }),
 				},
-				body: JSON.stringify({ decision: 'approve' }),
-			}),
+			),
 		)
 		expect(res.status).toBe(403)
 		const [row] = await sql<{ status: string }[]>`

@@ -22,8 +22,8 @@ import { join } from 'node:path'
  * Usage: bun scripts/rehearse_migration.ts [connection-string]
  */
 import postgres from 'postgres'
-import { applyMigrations } from './migrate'
 import { approveTestRevision } from '../apps/api/tests/revisionSeed'
+import { applyMigrations } from './migrate'
 
 const URL_ = process.argv[2] ?? process.env.REHEARSAL_DB_URL ?? ''
 if (!URL_) {

@@ -1083,163 +1083,162 @@ function sourceRoutes(deps: AppDeps) {
 					return { error: 'invalid_state', status: result.status }
 				}
 				return { revisionId: ctx.params.revisionId, status: 'deprecated' }
-				})
-				// --- editorial approval gate (#108) ---
-				// A revision only becomes answerable through a recorded human
-				// decision. approve: pending_review → active. reject:
-				// pending_review → deprecated. retire: active → deprecated with
-				// a review trail. The DB trigger independently refuses any
-				// activation without the review row written below.
-				.post('/sources/:id/revisions/:revisionId/review', async (rawCtx) => {
-					const ctx = rawCtx as unknown as HandlerCtx
-					const principal = await ctx.requirePermission('review:approve')
-					ctx.requireCsrf()
-					const body = (ctx.body ?? {}) as Record<string, unknown>
-					const decision = body.decision
-					if (
-						decision !== 'approve' &&
-						decision !== 'reject' &&
-						decision !== 'retire'
-					) {
-						ctx.set.status = 400
-						return { error: 'validation_failed', fields: ['decision'] }
-					}
-					const note = typeof body.note === 'string' ? body.note.trim() : ''
-					// a rejection/retirement without a stated reason is an
-					// unexplainable editorial act — approvals may stand on the
-					// inspected evidence alone
-					if (decision !== 'approve' && !note) {
-						ctx.set.status = 400
-						return { error: 'validation_failed', fields: ['note'] }
-					}
-					const fromStatus =
-						decision === 'retire' ? 'active' : 'pending_review'
-					const toStatus = decision === 'approve' ? 'active' : 'deprecated'
-					const result = await scopedTransaction(
-						sql,
-						principal.tenantId,
-						async (tx) => {
-							const [src] = await tx<{ access_scope_id: string }[]>`
+			})
+			// --- editorial approval gate (#108) ---
+			// A revision only becomes answerable through a recorded human
+			// decision. approve: pending_review → active. reject:
+			// pending_review → deprecated. retire: active → deprecated with
+			// a review trail. The DB trigger independently refuses any
+			// activation without the review row written below.
+			.post('/sources/:id/revisions/:revisionId/review', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('review:approve')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				const decision = body.decision
+				if (
+					decision !== 'approve' &&
+					decision !== 'reject' &&
+					decision !== 'retire'
+				) {
+					ctx.set.status = 400
+					return { error: 'validation_failed', fields: ['decision'] }
+				}
+				const note = typeof body.note === 'string' ? body.note.trim() : ''
+				// a rejection/retirement without a stated reason is an
+				// unexplainable editorial act — approvals may stand on the
+				// inspected evidence alone
+				if (decision !== 'approve' && !note) {
+					ctx.set.status = 400
+					return { error: 'validation_failed', fields: ['note'] }
+				}
+				const fromStatus = decision === 'retire' ? 'active' : 'pending_review'
+				const toStatus = decision === 'approve' ? 'active' : 'deprecated'
+				const result = await scopedTransaction(
+					sql,
+					principal.tenantId,
+					async (tx) => {
+						const [src] = await tx<{ access_scope_id: string }[]>`
 							select access_scope_id from sources
 							where id = ${ctx.params.id}::uuid limit 1`
-							if (!src) return { code: 'not_found' as const }
-							const scopeDecision = await checkAccess(
-								tx,
-								principal,
-								'source:read',
-								src.access_scope_id,
-							)
-							if (!scopeDecision.allowed) {
-								return {
-									code: 'forbidden' as const,
-									reasonCode: scopeDecision.reasonCode,
-								}
+						if (!src) return { code: 'not_found' as const }
+						const scopeDecision = await checkAccess(
+							tx,
+							principal,
+							'source:read',
+							src.access_scope_id,
+						)
+						if (!scopeDecision.allowed) {
+							return {
+								code: 'forbidden' as const,
+								reasonCode: scopeDecision.reasonCode,
 							}
-							const [rev] = await tx<{ id: string; status: string }[]>`
+						}
+						const [rev] = await tx<{ id: string; status: string }[]>`
 							select id, status from source_revisions
 							where id = ${ctx.params.revisionId}::uuid
 								and source_id = ${ctx.params.id}::uuid limit 1`
-							if (!rev) return { code: 'not_found' as const }
-							if (rev.status !== fromStatus) {
-								return { code: 'invalid_state' as const, status: rev.status }
-							}
-							// the review row MUST land before the status update:
-							// the activation trigger looks for it
-							await tx`
+						if (!rev) return { code: 'not_found' as const }
+						if (rev.status !== fromStatus) {
+							return { code: 'invalid_state' as const, status: rev.status }
+						}
+						// the review row MUST land before the status update:
+						// the activation trigger looks for it
+						await tx`
 							insert into source_revision_reviews
 								(tenant_id, source_revision_id, decision, actor_type, actor_id, note)
 							values (${principal.tenantId}::uuid, ${rev.id}::uuid,
 								${decision}, 'user', ${principal.userId}, ${note || null})`
-							await tx`
+						await tx`
 							update source_revisions
 							set status = ${toStatus},
 								deprecation_reason = ${decision === 'approve' ? null : note}
 							where id = ${rev.id}::uuid`
-							await tx`
+						await tx`
 							insert into source_revision_status_events
 								(source_revision_id, from_status, to_status, actor_type, actor_id, reason)
 							values (${rev.id}::uuid, ${fromStatus}, ${toStatus}, 'user',
 								${principal.userId}, ${note || decision})`
-							await recordAuditInTx(tx, {
-								tenantId: principal.tenantId,
-								actorType: 'user',
-								actorId: principal.userId,
-								action: 'source.revision_reviewed',
-								entityType: 'source_revision',
-								entityId: rev.id,
-								beforeRef: { status: rev.status },
-								afterRef: { status: toStatus, decision, note },
-								traceId: ctx.traceId,
-							})
-							return { code: 'ok' as const }
-						},
-					)
-					if (result.code === 'not_found') {
-						ctx.set.status = 404
-						return { error: 'not_found' }
-					}
-					if (result.code === 'forbidden') {
-						throw new HttpError(403, 'forbidden', result.reasonCode)
-					}
-					if (result.code === 'invalid_state') {
-						ctx.set.status = 409
-						return { error: 'invalid_state', status: result.status }
-					}
-					return {
-						revisionId: ctx.params.revisionId,
-						decision,
-						status: toStatus,
-					}
-				})
-				.get('/sources/:id/revisions/:revisionId/reviews', async (rawCtx) => {
-					const ctx = rawCtx as unknown as HandlerCtx
-					const principal = await ctx.requirePermission('source:read')
-					const result = await scopedTransaction(
-						sql,
-						principal.tenantId,
-						async (tx) => {
-							const [src] = await tx<{ access_scope_id: string }[]>`
+						await recordAuditInTx(tx, {
+							tenantId: principal.tenantId,
+							actorType: 'user',
+							actorId: principal.userId,
+							action: 'source.revision_reviewed',
+							entityType: 'source_revision',
+							entityId: rev.id,
+							beforeRef: { status: rev.status },
+							afterRef: { status: toStatus, decision, note },
+							traceId: ctx.traceId,
+						})
+						return { code: 'ok' as const }
+					},
+				)
+				if (result.code === 'not_found') {
+					ctx.set.status = 404
+					return { error: 'not_found' }
+				}
+				if (result.code === 'forbidden') {
+					throw new HttpError(403, 'forbidden', result.reasonCode)
+				}
+				if (result.code === 'invalid_state') {
+					ctx.set.status = 409
+					return { error: 'invalid_state', status: result.status }
+				}
+				return {
+					revisionId: ctx.params.revisionId,
+					decision,
+					status: toStatus,
+				}
+			})
+			.get('/sources/:id/revisions/:revisionId/reviews', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('source:read')
+				const result = await scopedTransaction(
+					sql,
+					principal.tenantId,
+					async (tx) => {
+						const [src] = await tx<{ access_scope_id: string }[]>`
 							select access_scope_id from sources
 							where id = ${ctx.params.id}::uuid limit 1`
-							if (!src) return { code: 'not_found' as const }
-							const scopeDecision = await checkAccess(
-								tx,
-								principal,
-								'source:read',
-								src.access_scope_id,
-							)
-							if (!scopeDecision.allowed) {
-								return {
-									code: 'forbidden' as const,
-									reasonCode: scopeDecision.reasonCode,
-								}
+						if (!src) return { code: 'not_found' as const }
+						const scopeDecision = await checkAccess(
+							tx,
+							principal,
+							'source:read',
+							src.access_scope_id,
+						)
+						if (!scopeDecision.allowed) {
+							return {
+								code: 'forbidden' as const,
+								reasonCode: scopeDecision.reasonCode,
 							}
-							const reviews = await tx<
-								{
-									id: string
-									decision: string
-									actor_id: string | null
-									note: string | null
-									created_at: string
-								}[]
-							>`
+						}
+						const reviews = await tx<
+							{
+								id: string
+								decision: string
+								actor_id: string | null
+								note: string | null
+								created_at: string
+							}[]
+						>`
 							select id, decision, actor_id, note, created_at
 							from source_revision_reviews
 							where source_revision_id = ${ctx.params.revisionId}::uuid
 							order by created_at desc`
-							return { code: 'ok' as const, reviews }
-						},
-					)
-					if (result.code === 'not_found') {
-						ctx.set.status = 404
-						return { error: 'not_found' }
-					}
-					if (result.code === 'forbidden') {
-						throw new HttpError(403, 'forbidden', result.reasonCode)
-					}
-					return { reviews: result.reviews }
-				})
-				.get('/sources/:id/revisions/:revisionId/pages', async (rawCtx) => {
+						return { code: 'ok' as const, reviews }
+					},
+				)
+				if (result.code === 'not_found') {
+					ctx.set.status = 404
+					return { error: 'not_found' }
+				}
+				if (result.code === 'forbidden') {
+					throw new HttpError(403, 'forbidden', result.reasonCode)
+				}
+				return { reviews: result.reviews }
+			})
+			.get('/sources/:id/revisions/:revisionId/pages', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
 				const principal = await ctx.requirePermission('source:read')
 				const result = await scopedTransaction(
