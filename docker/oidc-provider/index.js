@@ -1,4 +1,5 @@
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 // Minimal OIDC provider used by the AiFiqh stack (PLAT-002).
 //
 // This is NOT a login simulator: identity requires proof of possession of
@@ -17,11 +18,11 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 // PKCE S256 is REQUIRED on the only client; the app signs the authorization
 // request with a challenge and proves possession at the token endpoint.
 import { createServer } from 'node:http'
-import { readFileSync } from 'node:fs'
 import Provider from 'oidc-provider'
 
 const ISSUER = process.env.ISSUER ?? 'http://localhost:4011'
 const PORT = Number(process.env.PORT ?? 4011)
+const ISSUER_PREFIX = new URL(ISSUER).pathname.replace(/\/$/, '')
 
 function parseAccounts() {
 	// file-based provisioning preferred on servers: keeps credential
@@ -160,7 +161,8 @@ const provider = new Provider(ISSUER, {
 	adapter: MemoryAdapter,
 	// custom login UI (credential check below) replaces devInteractions
 	interactions: {
-		url: (_ctx, interaction) => `/interaction/${interaction.uid}`,
+		url: (_ctx, interaction) =>
+			`${ISSUER_PREFIX}/interaction/${interaction.uid}`,
 	},
 	clients: [
 		{
@@ -231,7 +233,7 @@ function page(title, body) {
 function loginForm(uid, title, error, email = '') {
 	return page(
 		title,
-		`<form method="post" action="/interaction/${uid}/login" class="card">
+		`<form method="post" action="${ISSUER_PREFIX}/interaction/${uid}/login" class="card">
   <h1>Masuk AiFiqh</h1>
   ${error ? `<div class="error">${error}</div>` : ''}
   <label for="email">Email</label>
@@ -268,7 +270,7 @@ function send(res, status, contentType, body) {
 }
 
 async function handleInteraction(req, res) {
-	const match = req.url.match(/^\/interaction\/([A-Za-z0-9_-]+)/)
+	const match = req.url.match(/\/interaction\/([A-Za-z0-9_-]+)/)
 	if (!match) {
 		send(res, 404, 'text/plain; charset=utf-8', 'not found')
 		return
@@ -353,7 +355,7 @@ if (process.argv[2] === '--hash') {
 const handleProviderRequest = provider.callback()
 
 createServer((req, res) => {
-	if (req.url?.startsWith('/interaction/')) {
+	if (req.url?.includes('/interaction/')) {
 		handleInteraction(req, res).catch(() => {
 			send(res, 500, 'text/plain; charset=utf-8', 'internal error')
 		})
