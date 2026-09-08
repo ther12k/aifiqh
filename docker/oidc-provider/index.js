@@ -212,6 +212,33 @@ if (process.env.OIDC_TRUST_PROXY === 'true') {
 }
 
 function page(title, body) {
+	// split-panel login (Tafaqquh brand): emerald brand panel + form card
+	const brandPanel = `
+  <div class="brand-side">
+    <div class="brand-lockup">
+      <svg width="54" height="54" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+        <path d="M24 6c.4 3.1 1.8 5 4 6.6 3.1 2.2 5 4.6 5 8.4v3H15v-3c0-3.8 1.9-6.2 5-8.4 2.2-1.6 3.6-3.5 4-6.6z" fill="#fff"/>
+        <path d="M24 3.2a2.8 2.8 0 1 0 2.4 4.3 2.3 2.3 0 1 1-1.1-4.2c-.4-.07-.86-.1-1.3-.1z" fill="#e5c88a"/>
+        <path d="M10.5 24v-6.5M8.5 24h4M37.5 24v-6.5M35.5 24h4" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>
+        <rect x="13" y="25.5" width="22" height="2.4" rx="1.2" fill="#e5c88a"/>
+        <path d="M24 32.5c-2.6-2.1-5.8-3-9.5-3-1.4 0-2.7.14-3.9.4v11.6c1.2-.26 2.5-.4 3.9-.4 3.7 0 6.9.9 9.5 3 2.6-2.1 5.8-3 9.5-3 1.4 0 2.7.14 3.9.4V29.9c-1.2-.26-2.5-.4-3.9-.4-3.7 0-6.9.9-9.5 3z" stroke="#fff" stroke-width="2" fill="none" stroke-linejoin="round"/>
+        <path d="M24 32.5V44" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <div class="brand-name">Tafaqquh</div>
+        <div class="brand-tag">ILMU FIQIH, LEBIH MUDAH</div>
+      </div>
+    </div>
+    <h2>Pahami Fiqih melalui<br/>Dalil, Konteks, dan Sumber</h2>
+    <blockquote>“Bertanya tentang agama adalah jalan menuju kebaikan.”<span>— HR. Ibnu Majah</span></blockquote>
+    <ul class="brand-feats">
+      <li><span class="feat-dot">&#128214;</span>Bersumber pada Dalil</li>
+      <li><span class="feat-dot">&#9989;</span>Akurat &amp; Terpercaya</li>
+      <li><span class="feat-dot">&#128737;&#65039;</span>Mendukung Pembelajaran</li>
+      <li><span class="feat-dot">&#10084;&#65039;</span>Untuk Umat yang Lebih Baik</li>
+    </ul>
+    <div class="brand-foot">Islamic knowledge for a brighter tomorrow</div>
+  </div>`
 	return `<!doctype html>
 <html lang="id">
 <head>
@@ -219,16 +246,41 @@ function page(title, body) {
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${title}</title>
 <style>
-  body { font-family: system-ui, sans-serif; background: #f4f1ea; display: grid; place-items: center; min-height: 100vh; margin: 0; }
-  form, .card { background: #fff; border: 1px solid #e2ddd2; border-radius: 12px; padding: 2rem; width: min(360px, 90vw); box-shadow: 0 8px 24px rgba(0,0,0,.06); }
-  h1 { font-size: 1.1rem; margin: 0 0 1rem; }
-  label { display: block; font-size: .85rem; margin: .75rem 0 .25rem; color: #4a453a; }
-  input { width: 100%; box-sizing: border-box; padding: .6rem .7rem; border: 1px solid #d8d2c4; border-radius: 8px; font-size: 1rem; }
-  button { margin-top: 1.25rem; width: 100%; padding: .7rem; border: 0; border-radius: 8px; background: #146c43; color: #fff; font-size: 1rem; cursor: pointer; }
-  .error { background: #fdecec; color: #8a1f1f; border: 1px solid #f5c2c2; border-radius: 8px; padding: .6rem .75rem; font-size: .9rem; margin-bottom: .5rem; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #f6f9f7; display: grid; place-items: center; min-height: 100vh; margin: 0; padding: 20px; }
+  .shell { display: grid; grid-template-columns: 1fr 1fr; width: min(880px, 100%); border-radius: 20px; overflow: hidden; box-shadow: 0 20px 60px -18px rgba(15, 55, 42, .25); background: #fff; }
+  .brand-side { background: linear-gradient(170deg, #0f7a5c, #0a4c3a 70%, #093f31); color: #fff; padding: 40px 36px; display: flex; flex-direction: column; gap: 22px; }
+  .brand-lockup { display: flex; align-items: center; gap: 14px; }
+  .brand-name { font-size: 1.7rem; font-weight: 800; letter-spacing: -0.01em; }
+  .brand-tag { font-size: .66rem; letter-spacing: .22em; color: #bcd9cb; font-weight: 700; margin-top: 2px; }
+  .brand-side h2 { font-size: 1.5rem; line-height: 1.3; margin: 4px 0 0; font-weight: 700; }
+  .brand-side blockquote { margin: 0; font-style: italic; color: #d9ece2; font-size: .95rem; line-height: 1.6; border-left: 3px solid #2e8f6f; padding-left: 14px; }
+  .brand-side blockquote span { display: block; margin-top: 8px; font-style: normal; font-size: .78rem; color: #a9cdbb; }
+  .brand-feats { list-style: none; margin: auto 0 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; font-size: .82rem; color: #d9ece2; }
+  .brand-feats li { display: flex; align-items: center; gap: 8px; }
+  .feat-dot { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; background: rgba(255,255,255,.12); font-size: .85rem; flex: none; }
+  .brand-foot { font-size: .68rem; letter-spacing: .18em; text-transform: uppercase; color: #8fbfa8; border-top: 1px solid rgba(255,255,255,.14); padding-top: 14px; }
+  main { display: grid; place-items: center; padding: 40px 36px; }
+  form, .card { width: min(340px, 100%); }
+  h1 { font-size: 1.35rem; margin: 0 0 6px; color: #12251e; text-align: center; }
+  .sub { text-align: center; color: #6b7f76; font-size: .85rem; line-height: 1.5; margin: 0 0 22px; }
+  label { display: block; font-size: .8rem; font-weight: 700; margin: .9rem 0 .3rem; color: #37473f; }
+  input { width: 100%; padding: .68rem .8rem; border: 1px solid #d8e2dc; border-radius: 10px; font-size: .95rem; background: #fbfdfc; }
+  input:focus { outline: none; border-color: #0d6b4f; box-shadow: 0 0 0 3px rgba(13,107,79,.14); }
+  button { margin-top: 1.4rem; width: 100%; padding: .8rem; border: 0; border-radius: 10px; background: linear-gradient(160deg, #0f7a5c, #0a523c); color: #fff; font-size: 1rem; font-weight: 700; cursor: pointer; }
+  button:hover { filter: brightness(1.07); }
+  .error { background: #fdecec; color: #8a1f1f; border: 1px solid #f5c2c2; border-radius: 8px; padding: .6rem .75rem; font-size: .85rem; margin-bottom: .5rem; }
+  .note { margin-top: 20px; background: #eef7f2; border: 1px solid #d5e8de; border-radius: 10px; padding: .8rem .9rem; font-size: .78rem; color: #33544a; line-height: 1.55; display: flex; gap: 10px; }
+  .note b { display: block; margin-bottom: 2px; color: #0a523c; }
+  @media (max-width: 720px) { .shell { grid-template-columns: 1fr; } .brand-side { display: none; } }
 </style>
 </head>
-<body>${body}</body>
+<body>
+<div class="shell">
+  ${brandPanel}
+  <main>${body}</main>
+</div>
+</body>
 </html>`
 }
 
@@ -236,13 +288,15 @@ function loginForm(uid, title, error, email = '') {
 	return page(
 		title,
 		`<form method="post" action="${ISSUER_PREFIX}/interaction/${uid}/login" class="card">
-  <h1>Masuk AiFiqh</h1>
+  <h1>Selamat Datang Kembali</h1>
+  <p class="sub">Masuk ke akun Tafaqquh Anda untuk melanjutkan pembelajaran dan mendapatkan jawaban fiqih berbasis dalil.</p>
   ${error ? `<div class="error">${error}</div>` : ''}
   <label for="email">Email</label>
   <input id="email" name="email" type="email" autocomplete="username" required value="${email.replace(/"/g, '&quot;')}" />
-  <label for="password">Kata sandi</label>
+  <label for="password">Kata Sandi</label>
   <input id="password" name="password" type="password" autocomplete="current-password" required />
-  <button type="submit">Masuk</button>
+  <button type="submit">Masuk ke Tafaqquh</button>
+  <div class="note"><span aria-hidden="true">&#128737;&#65039;</span><span><b>Jawaban Berdasarkan Sumber Terpercaya</b>Setiap jawaban didasarkan pada dalil dari Al-Qur'an, Hadits, dan sumber terpercaya, dan dapat Anda verifikasi.</span></div>
 </form>`,
 	)
 }
@@ -286,7 +340,7 @@ async function handleInteraction(req, res) {
 				res,
 				200,
 				'text/html; charset=utf-8',
-				loginForm(uid, 'Masuk AiFiqh', null),
+				loginForm(uid, 'Masuk Tafaqquh', null),
 			)
 			void details
 		} catch {
@@ -305,7 +359,7 @@ async function handleInteraction(req, res) {
 				res,
 				401,
 				'text/html; charset=utf-8',
-				loginForm(uid, 'Masuk AiFiqh', 'Email atau kata sandi salah.', email),
+				loginForm(uid, 'Masuk Tafaqquh', 'Email atau kata sandi salah.', email),
 			)
 			return
 		}

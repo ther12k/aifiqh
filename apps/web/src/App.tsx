@@ -35,33 +35,50 @@ function useHashRoute(): string {
 /* --- inline icons (no external icon deps) ------------------------------- */
 
 function BrandMark({ small }: { small?: boolean }) {
-	const size = small ? 24 : 38
-	// eight-point geometric star (rubʿ al-hizb motif) in emerald
+	const size = small ? 26 : 40
+	// mosque dome with crescent above an open book — Tafaqquh motif
 	return (
 		<svg
 			className="brand-mark"
 			width={size}
 			height={size}
-			viewBox="0 0 40 40"
+			viewBox="0 0 48 48"
 			fill="none"
 			aria-hidden="true"
 		>
+			{/* dome */}
 			<path
-				d="M20 2 L24 12 L34 8 L30 18 L40 20 L30 22 L34 32 L24 28 L20 38 L16 28 L6 32 L10 22 L0 20 L10 18 L6 8 L16 12 Z"
-				fill="none"
-				stroke="#0e7a63"
-				strokeWidth="1.8"
+				d="M24 4c.4 3.1 1.8 5 4 6.6 3.1 2.2 5 4.6 5 8.4v3H15v-3c0-3.8 1.9-6.2 5-8.4 2.2-1.6 3.6-3.5 4-6.6z"
+				fill="#0d6b4f"
+			/>
+			{/* crescent finial */}
+			<path
+				d="M24 1.2a2.8 2.8 0 1 0 2.4 4.3 2.3 2.3 0 1 1-1.1-4.2c-.4-.07-.86-.1-1.3-.1z"
+				fill="#c99a4b"
+			/>
+			{/* minarets */}
+			<path
+				d="M10.5 22v-6.5M8.5 22h4M11 15.5h-1M37.5 22v-6.5M35.5 22h4M37 15.5h-1"
+				stroke="#0d6b4f"
+				strokeWidth="1.6"
+				strokeLinecap="round"
+			/>
+			{/* dome base band */}
+			<rect x="13" y="23.5" width="22" height="2.4" rx="1.2" fill="#c99a4b" />
+			{/* open book */}
+			<path
+				d="M24 30.5c-2.6-2.1-5.8-3-9.5-3-1.4 0-2.7.14-3.9.4v11.6c1.2-.26 2.5-.4 3.9-.4 3.7 0 6.9.9 9.5 3 2.6-2.1 5.8-3 9.5-3 1.4 0 2.7.14 3.9.4V27.9c-1.2-.26-2.5-.4-3.9-.4-3.7 0-6.9.9-9.5 3z"
+				stroke="#0d6b4f"
+				strokeWidth="2.2"
 				strokeLinejoin="round"
+				fill="#fff"
 			/>
-			<circle
-				cx="20"
-				cy="20"
-				r="6.5"
-				fill="none"
-				stroke="#0e7a63"
-				strokeWidth="1.8"
+			<path
+				d="M24 30.5V42"
+				stroke="#0d6b4f"
+				strokeWidth="2.2"
+				strokeLinecap="round"
 			/>
-			<circle cx="20" cy="20" r="2.2" fill="#0e7a63" />
 		</svg>
 	)
 }
@@ -125,9 +142,9 @@ const NAV_SECTIONS: Array<{
 	items: Array<{ href: string; label: string; icon: string }>
 }> = [
 	{
-		label: 'Menu',
+		label: 'Menu Utama',
 		items: [
-			{ href: '#/chat', label: 'Chatbot', icon: ICON_PATHS.chat },
+			{ href: '#/chat', label: 'Chat', icon: ICON_PATHS.chat },
 			{ href: '#/sources', label: 'Sumber', icon: ICON_PATHS.book },
 			{
 				href: '#/studio',
@@ -135,14 +152,14 @@ const NAV_SECTIONS: Array<{
 				icon: ICON_PATHS.edit,
 			},
 			{
-				href: '#/studio-dashboard',
-				label: 'Dashboard',
-				icon: ICON_PATHS.grid,
-			},
-			{
 				href: '#/reviewer',
 				label: 'Tinjauan Klaim',
 				icon: ICON_PATHS.shield,
+			},
+			{
+				href: '#/studio-dashboard',
+				label: 'Dashboard',
+				icon: ICON_PATHS.grid,
 			},
 		],
 	},
@@ -155,27 +172,116 @@ const NAV_SECTIONS: Array<{
 	},
 ]
 
-/** feature cards on the landing page (unauthenticated home) */
+/** hadith quote shown beside each page heading (real sources, per mockups) */
+const PAGE_QUOTES: Record<string, { text: string; source: string }> = {
+	'/sources': {
+		text: 'Menuntut ilmu adalah jalan menuju ketakwaan.',
+		source: 'HR. Ibnu Majah',
+	},
+	'/studio-dashboard': {
+		text: 'Bertanya tentang agama adalah jalan menuju kebaikan.',
+		source: 'HR. Ibnu Majah',
+	},
+	'/reviewer': {
+		text: 'Kebenaran ilmu lahir dari ketelitian dalam menelusuri sumbernya.',
+		source: 'Imam Al-Ghazali',
+	},
+	'/studio': {
+		text: 'Sebaik-baik manusia adalah yang paling bermanfaat bagi manusia lainnya.',
+		source: 'HR. Ahmad',
+	},
+	'/ops': {
+		text: 'Sebaik-baik usaha adalah yang mendatangkan manfaat bagi manusia.',
+		source: 'HR. Ahmad',
+	},
+}
+
+/** decorative mosque skyline for page headers (pure SVG, no assets) */
+function SkylineDecor() {
+	return (
+		<svg
+			className="page-decor"
+			viewBox="0 0 220 90"
+			fill="none"
+			aria-hidden="true"
+		>
+			{/* arch frame */}
+			<path
+				d="M110 88V46c0-20 14-32 32-32s32 12 32 32v42"
+				stroke="#cfe4da"
+				strokeWidth="10"
+				strokeLinecap="round"
+			/>
+			{/* central dome */}
+			<path d="M78 88V64c0-9 7-15 16-15s16 6 16 15v24" fill="#dcece4" />
+			<path
+				d="M94 44v-6"
+				stroke="#cfe4da"
+				strokeWidth="3"
+				strokeLinecap="round"
+			/>
+			{/* side minarets */}
+			<path
+				d="M52 88V58m-4 0h8M146 88V58m-4 0h8"
+				stroke="#cfe4da"
+				strokeWidth="5"
+				strokeLinecap="round"
+			/>
+			{/* palms */}
+			<path
+				d="M22 88V70m0 0c-5-2-9-1-12 2m12-2c5-2 9-1 12 2m-12-2c-1-4 0-7 2-9m-2 9c1-4 0-7-2-9"
+				stroke="#cfe4da"
+				strokeWidth="3"
+				strokeLinecap="round"
+			/>
+			<path
+				d="M196 88V72m0 0c-4-2-8-1-10 2m10-2c4-2 8-1 10 2"
+				stroke="#cfe4da"
+				strokeWidth="3"
+				strokeLinecap="round"
+			/>
+			{/* ground line */}
+			<path
+				d="M8 88h204"
+				stroke="#cfe4da"
+				strokeWidth="3"
+				strokeLinecap="round"
+			/>
+		</svg>
+	)
+}
+
+/** serif hadith quote block for page headers */
+function PageQuote({ quote }: { quote: { text: string; source: string } }) {
+	return (
+		<blockquote className="page-quote">
+			<p>“{quote.text}”</p>
+			<footer>— {quote.source}</footer>
+		</blockquote>
+	)
+}
+
+/** feature chips on the landing page (unauthenticated home) */
 const LANDING_FEATURES = [
 	{
-		icon: ICON_PATHS.check,
-		title: 'Berdasarkan Dalil',
+		icon: ICON_PATHS.book,
+		title: 'Bersumber pada Dalil',
 		desc: "Al-Qur'an & Hadis",
 	},
 	{
-		icon: ICON_PATHS.book,
-		title: 'Mudah Dipahami',
-		desc: 'Penjelasan sederhana',
+		icon: ICON_PATHS.check,
+		title: 'Akurat & Terpercaya',
+		desc: 'Kutipan diverifikasi',
 	},
 	{
 		icon: ICON_PATHS.shield,
-		title: 'Sumber Terpercaya',
-		desc: 'Referensi jelas',
+		title: 'Mendukung Pembelajaran',
+		desc: 'Telaah berlapis',
 	},
 	{
 		icon: ICON_PATHS.heart,
-		title: 'Gratis & Aman',
-		desc: 'Tanpa iklan',
+		title: 'Untuk Umat yang Lebih Baik',
+		desc: 'Gratis & tanpa iklan',
 	},
 ]
 
@@ -198,22 +304,100 @@ const LANDING_STEPS = [
 	},
 ]
 
+/** decorative arch illustration for the landing hero (pure SVG) */
+function LandingArch() {
+	return (
+		<div className="landing-visual" aria-hidden="true">
+			<svg
+				className="landing-arch-svg"
+				viewBox="0 0 300 360"
+				fill="none"
+				role="presentation"
+			>
+				<defs>
+					<linearGradient id="arch-g" x1="0" y1="0" x2="0" y2="1">
+						<stop offset="0" stopColor="#eaf4ef" />
+						<stop offset="1" stopColor="#d3e7dd" />
+					</linearGradient>
+				</defs>
+				{/* arch */}
+				<path
+					d="M40 348V160c0-66 49-110 110-110s110 44 110 110v188"
+					stroke="url(#arch-g)"
+					strokeWidth="26"
+				/>
+				{/* mosque inside the arch */}
+				<path
+					d="M150 120c-3 18-13 28-24 36-12 9-20 19-20 34v14h88v-14c0-15-8-25-20-34-11-8-21-18-24-36z"
+					fill="#0d6b4f"
+				/>
+				<path
+					d="M150 96v-14m0 0c4-4 4-10 0-14"
+					stroke="#c99a4b"
+					strokeWidth="4"
+					strokeLinecap="round"
+				/>
+				<rect x="96" y="206" width="108" height="8" rx="4" fill="#c99a4b" />
+				<path
+					d="M104 214v56m92-56v56"
+					stroke="#0d6b4f"
+					strokeWidth="6"
+					strokeLinecap="round"
+				/>
+				{/* book under the arch */}
+				<path
+					d="M150 300c-14-10-32-14-52-14-7 0-14 .6-20 2v34c6-1.4 13-2 20-2 20 0 38 4 52 14 14-10 32-14 52-14 7 0 14 .6 20 2v-34c-6-1.4-13-2-20-2-20 0-38 4-52 14z"
+					stroke="#0d6b4f"
+					strokeWidth="6"
+					fill="#fff"
+					strokeLinejoin="round"
+				/>
+				{/* ground */}
+				<path
+					d="M20 348h260"
+					stroke="#cfe4da"
+					strokeWidth="8"
+					strokeLinecap="round"
+				/>
+			</svg>
+			<div className="landing-quote">
+				“Bertanya tentang agama adalah jalan menuju kebaikan.”
+				<span>— HR. Ibnu Majah</span>
+			</div>
+		</div>
+	)
+}
+
 function Landing({ devLoginEnabled }: { devLoginEnabled: boolean }) {
 	return (
-		<section className="landing" aria-label="Pengantar AiFiqh">
+		<section className="landing" aria-label="Pengantar Tafaqquh">
 			<div className="landing-grid">
 				<div className="landing-copy">
-					<span className="landing-eyebrow">Bertanya • Belajar • Memahami</span>
+					<span className="landing-eyebrow">Tanya · Telusuri · Pahami</span>
 					<h1>
-						Teman Belajar Fiqih yang <em>Terpercaya</em>
+						Pahami Fiqih melalui <em>Dalil, Konteks, dan Sumber</em>
 					</h1>
 					<p>
-						Dapatkan jawaban berdasarkan dalil yang sahih, dari ulama yang
-						terpercaya, dengan penjelasan yang mudah dipahami.
+						Dapatkan jawaban berdasarkan dalil yang sahih, dari sumber yang
+						terpercaya, dengan penjelasan yang mudah dipahami — sebuah alat
+						untuk bertafaqquh, bukan pengganti ulama.
 					</p>
 					<div className="landing-cta">
 						<a className="btn-primary" href="/auth/login">
-							Mulai Bertanya
+							Mulai Belajar
+							<svg
+								width="16"
+								height="16"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2.2"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+								aria-hidden="true"
+							>
+								<path d="M5 12h14M13 6l6 6-6 6" />
+							</svg>
 						</a>
 						{devLoginEnabled && (
 							<a
@@ -224,27 +408,20 @@ function Landing({ devLoginEnabled }: { devLoginEnabled: boolean }) {
 							</a>
 						)}
 					</div>
+					<ul className="landing-features">
+						{LANDING_FEATURES.map((f) => (
+							<li key={f.title}>
+								<span className="feature-icon">
+									<NavIcon d={f.icon} />
+								</span>
+								<b>{f.title}</b>
+								<span className="feature-desc">{f.desc}</span>
+							</li>
+						))}
+					</ul>
 				</div>
-				<div className="landing-visual" aria-hidden="true">
-					<div className="landing-arch">
-						<div className="landing-quote">
-							“Ilmu adalah cahaya yang menuntun.”
-							<span>— Imam Al-Ghazali</span>
-						</div>
-					</div>
-				</div>
+				<LandingArch />
 			</div>
-			<ul className="landing-features">
-				{LANDING_FEATURES.map((f) => (
-					<li key={f.title}>
-						<span className="feature-icon">
-							<NavIcon d={f.icon} />
-						</span>
-						<b>{f.title}</b>
-						<span className="feature-desc">{f.desc}</span>
-					</li>
-				))}
-			</ul>
 			<section className="landing-steps" aria-label="Cara kerja verifikasi">
 				<h2 className="landing-steps-title">
 					Bagaimana sebuah jawaban mendapatkan kepercayaan
@@ -380,8 +557,8 @@ export default function App() {
 				<div className="sidebar-brand">
 					<BrandMark />
 					<div>
-						<div className="brand-name">AiFiqh</div>
-						<div className="brand-sub">Asisten Fiqih</div>
+						<div className="brand-name">Tafaqquh</div>
+						<div className="brand-sub">AI Fiqih Assistant</div>
 					</div>
 				</div>
 
@@ -408,20 +585,26 @@ export default function App() {
 					))}
 				</nav>
 
-				<div className="sidebar-card">
+				<div className="sidebar-quote" aria-hidden="true">
 					<svg
 						className="moon"
-						width="30"
-						height="30"
+						width="22"
+						height="22"
 						viewBox="0 0 24 24"
 						fill="none"
 						stroke="currentColor"
 						strokeWidth="1.6"
 						strokeLinecap="round"
-						aria-hidden="true"
+						role="presentation"
 					>
 						<path d={ICON_PATHS.moon} />
 					</svg>
+					<p className="sidebar-quote-text">
+						Cahaya Ilmu untuk Langkah yang Lebih Baik
+					</p>
+				</div>
+
+				<div className="sidebar-card">
 					<div className="sidebar-card-title">Kesehatan Sistem</div>
 					<p className="sidebar-card-text">
 						Pantau status komponen dan catatan kegagalan operasional secara
@@ -473,7 +656,7 @@ export default function App() {
 				<nav className="mobile-nav" aria-label="Navigasi utama (mobile)">
 					<a className="mobile-brand" href="#/">
 						<BrandMark small />
-						<span>AiFiqh</span>
+						<span>Tafaqquh</span>
 					</a>
 					<div className="mobile-links">
 						{NAV_SECTIONS.flatMap((s) => s.items).map((item) => (
@@ -540,32 +723,63 @@ export default function App() {
 				>
 					{route === '/sources' && (
 						<div className="page-head">
-							<h2>Sumber Pengetahuan</h2>
-							<p>
-								Kelola referensi kitab dan dokumen yang menjadi basis jawaban.
-							</p>
+							<div className="page-head-main">
+								<h2>Sumber Pengetahuan</h2>
+								<p>
+									Kelola referensi kitab dan dokumen yang menjadi basis jawaban.
+								</p>
+							</div>
+							<PageQuote quote={PAGE_QUOTES['/sources']} />
+							<SkylineDecor />
 						</div>
 					)}
 					{route === '/studio-dashboard' && (
 						<div className="page-head">
-							<h2>Dashboard Studio</h2>
-							<p>Ringkasan kesehatan sumber, pekerjaan terbuka, dan rilis.</p>
+							<div className="page-head-main">
+								<h2>Dashboard</h2>
+								<p>Ringkasan kesehatan sumber, pekerjaan terbuka, dan rilis.</p>
+							</div>
+							<PageQuote quote={PAGE_QUOTES['/studio-dashboard']} />
+							<SkylineDecor />
 						</div>
 					)}
 					{route === '/reviewer' && (
 						<div className="page-head">
-							<h2>Ruang Kerja Peninjau Ulama</h2>
-							<p>
-								Tinjau klaim jawaban dan rujukan dalil secara berdampingan.
-								Keputusan penolakan/koreksi otomatis dicatat sebagai kasus
-								regresi evaluasi.
-							</p>
+							<div className="page-head-main">
+								<h2>Tinjauan Klaim</h2>
+								<p>
+									Tinjau dan verifikasi jawaban AI untuk memastikan akurasi,
+									keandalan, dan kesesuaian dengan dalil.
+								</p>
+							</div>
+							<PageQuote quote={PAGE_QUOTES['/reviewer']} />
+							<SkylineDecor />
 						</div>
 					)}
 					{route === '/ops' && (
 						<div className="page-head">
-							<h2>Status Operasional</h2>
-							<p>Kesehatan komponen layanan dan catatan kegagalan terbaru.</p>
+							<div className="page-head-main">
+								<h2>Operations</h2>
+								<p>
+									Pantau status sistem, layanan, dan kesehatan infrastruktur
+									secara real-time.
+								</p>
+							</div>
+							<PageQuote quote={PAGE_QUOTES['/ops']} />
+							<SkylineDecor />
+						</div>
+					)}
+					{route === '/studio' && (
+						<div className="page-head">
+							<div className="page-head-main">
+								<h2>Knowledge Studio</h2>
+								<p>
+									Susun, kelola, dan kembangkan pengetahuan fiqih menjadi konten
+									yang akurat dan terpercaya.
+								</p>
+							</div>
+							<PageQuote quote={PAGE_QUOTES['/studio']} />
+							<SkylineDecor />
 						</div>
 					)}
 
@@ -646,25 +860,39 @@ export default function App() {
 					)}
 
 					<footer className="app-footer">
-						<span>AiFiqh — citation-first Islamic jurisprudence assistant</span>
-						{me ? (
+						<span className="footer-brand">
+							<BrandMark small />
 							<span>
-								Masuk sebagai {me.userId.slice(0, 8)} · Tenant{' '}
-								{me.tenantId?.slice(0, 8) ?? '—'}
+								<b>Tafaqquh</b>
+								<small>Pahami Fiqih melalui Dalil, Konteks, dan Sumber</small>
 							</span>
-						) : (
-							<span>
-								{devLoginEnabled && (
-									<>
-										<a href="/auth/dev-login?email=admin@example.com">
-											Masuk Cepat (Dev Admin)
-										</a>
-										{' · '}
-									</>
-								)}
-								<a href="/auth/login">Masuk (OIDC)</a>
-							</span>
-						)}
+						</span>
+						<nav className="footer-links" aria-label="Tautan footer">
+							<a href="#/sources">Sumber</a>
+							<a href="#/chat">Chat</a>
+							<a href="#/ops">Status</a>
+							{me ? null : <a href="/auth/login">Masuk</a>}
+						</nav>
+						<span className="footer-copy">
+							{me ? (
+								<>
+									Masuk sebagai {me.userId.slice(0, 8)} · Tenant{' '}
+									{me.tenantId?.slice(0, 8) ?? '—'}
+								</>
+							) : (
+								<>
+									{devLoginEnabled && (
+										<>
+											<a href="/auth/dev-login?email=admin@example.com">
+												Masuk Cepat (Dev Admin)
+											</a>
+											{' · '}
+										</>
+									)}
+									© {new Date().getFullYear()} Tafaqquh AI
+								</>
+							)}
+						</span>
 					</footer>
 				</main>
 			</div>

@@ -355,7 +355,7 @@ function AnswerCard({
 	async function share() {
 		if (typeof navigator.share === 'function') {
 			try {
-				await navigator.share({ title: 'Jawaban AiFiqh', text: answer.plain })
+				await navigator.share({ title: 'Jawaban Tafaqquh', text: answer.plain })
 				return
 			} catch {
 				// dismissed by the user — fall through to copy
@@ -391,7 +391,7 @@ function AnswerCard({
 						aria-expanded={citationsOpen}
 						onClick={() => setCitationsOpen((v) => !v)}
 					>
-						{`Bukti yang dikutip (${answer.citations.length})`}
+						{`Sumber Rujukan (${answer.citations.length})`}
 						<span className="toggle-caret" aria-hidden="true">
 							{citationsOpen ? '‹' : '›'}
 						</span>
@@ -523,7 +523,7 @@ function AnswerCard({
 	)
 }
 
-/** assistant avatar: the AiFiqh star, on every assistant row */
+/** assistant avatar: the Tafaqquh dome mark, on every assistant row */
 function AssistantAvatar() {
 	return (
 		<span className="msg-avatar" aria-hidden="true">
@@ -1166,6 +1166,10 @@ export function ChatContainer() {
 							{activeTitle}
 						</span>
 					</div>
+					<span className="chat-tagline">
+						Tanyakan Pertanyaan Fiqih Anda, Dapatkan Jawaban dengan Dalil yang
+						Jelas
+					</span>
 					<button
 						type="button"
 						className="btn-top-new"
