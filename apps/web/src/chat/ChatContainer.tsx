@@ -1211,8 +1211,9 @@ export function ChatContainer() {
 							onSubmit={handleSubmit}
 							onCancel={handleCancel}
 							emptyState={
-								<div className="chat-greeting">
-									<span className="greet-icon" aria-hidden="true">
+									<div className="chat-greeting">
+										<span className="chat-greeting-kicker">TAFAQQUH · RUANG BELAJAR FIQIH</span>
+										<span className="greet-icon" aria-hidden="true">
 										<svg
 											width="26"
 											height="26"
@@ -1224,11 +1225,16 @@ export function ChatContainer() {
 										</svg>
 									</span>
 									<h3>Assalamu&rsquo;alaikum</h3>
-									<p>
-										Ada yang ingin Anda tanyakan seputar fiqih? Jawaban disusun
-										hanya dari Al-Qur&rsquo;an dan Hadits yang terverifikasi.
-									</p>
-								</div>
+										<p>
+											Ada yang ingin Anda tanyakan seputar fiqih? Jawaban disusun
+											hanya dari Al-Qur&rsquo;an dan Hadits yang terverifikasi.
+										</p>
+										<div className="chat-trust-points" aria-label="Jaminan jawaban">
+											<span>✓ Dalil bersumber</span>
+											<span>✓ Kutipan diverifikasi</span>
+											<span>✓ Bukan pengganti ulama</span>
+										</div>
+									</div>
 							}
 							composerExtra={
 								remainingFollowUps.length > 0 ? (

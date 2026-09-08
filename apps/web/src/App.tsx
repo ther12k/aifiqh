@@ -473,6 +473,51 @@ function Landing({
 	)
 }
 
+function PublicLanding({
+	devLoginEnabled,
+	authenticated,
+}: {
+	devLoginEnabled: boolean
+	authenticated: boolean
+}) {
+	return (
+		<div className="public-site">
+			<header className="public-header">
+				<a className="public-brand" href="#/" aria-label="Tafaqquh beranda">
+					<BrandMark small />
+					<span>
+						<strong>Tafaqquh</strong>
+						<small>AI Fiqih Assistant</small>
+					</span>
+				</a>
+				<nav className="public-nav" aria-label="Navigasi publik">
+					<a href="#/sources">Sumber</a>
+					<a href="#/chat">Cara kerja</a>
+					<a href="#/health">Status</a>
+					{authenticated ? (
+						<a className="public-nav-cta" href="#/chat">Buka aplikasi</a>
+					) : (
+						<a className="public-nav-cta" href="/auth/login">Masuk</a>
+					)}
+				</nav>
+			</header>
+			<main>
+				<Landing
+					devLoginEnabled={devLoginEnabled}
+					authenticated={authenticated}
+				/>
+			</main>
+			<footer className="public-footer">
+				<span>© {new Date().getFullYear()} Tafaqquh AI</span>
+				<span>Pahami Fiqih melalui Dalil, Konteks, dan Sumber</span>
+				{!authenticated && devLoginEnabled ? (
+					<a href="/auth/dev-login?email=admin@example.com">Masuk Cepat (Dev)</a>
+				) : null}
+			</footer>
+		</div>
+	)
+}
+
 /** quick-jump keywords for the topbar search (real routes only) */
 const SEARCH_ROUTES: Array<{ match: RegExp; hash: string }> = [
 	{ match: /chat|tanya|fiqih|jawab/i, hash: '#/chat' },
@@ -723,8 +768,17 @@ export default function App() {
 		}
 	}
 
-	return (
-		<div className="app-layout">
+		if (route === '/') {
+			return (
+				<PublicLanding
+					devLoginEnabled={devLoginEnabled}
+					authenticated={Boolean(me)}
+				/>
+			)
+		}
+
+		return (
+			<div className="app-layout">
 			<aside className="sidebar">
 				<div className="sidebar-brand">
 					<BrandMark />
@@ -1051,12 +1105,7 @@ export default function App() {
 						</>
 					)}
 
-					{route === '/' && (
-						<Landing
-							devLoginEnabled={devLoginEnabled}
-							authenticated={Boolean(me)}
-						/>
-					)}
+
 
 					<footer className="app-footer">
 						<span className="footer-brand">
