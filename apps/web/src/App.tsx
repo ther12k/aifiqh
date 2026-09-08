@@ -495,9 +495,13 @@ function PublicLanding({
 					<a href="#/chat">Cara kerja</a>
 					<a href="#/health">Status</a>
 					{authenticated ? (
-						<a className="public-nav-cta" href="#/chat">Buka aplikasi</a>
+						<a className="public-nav-cta" href="#/chat">
+							Buka aplikasi
+						</a>
 					) : (
-						<a className="public-nav-cta" href="/auth/login">Masuk</a>
+						<a className="public-nav-cta" href="/auth/login">
+							Masuk
+						</a>
 					)}
 				</nav>
 			</header>
@@ -511,7 +515,9 @@ function PublicLanding({
 				<span>© {new Date().getFullYear()} Tafaqquh AI</span>
 				<span>Pahami Fiqih melalui Dalil, Konteks, dan Sumber</span>
 				{!authenticated && devLoginEnabled ? (
-					<a href="/auth/dev-login?email=admin@example.com">Masuk Cepat (Dev)</a>
+					<a href="/auth/dev-login?email=admin@example.com">
+						Masuk Cepat (Dev)
+					</a>
 				) : null}
 			</footer>
 		</div>
@@ -768,17 +774,17 @@ export default function App() {
 		}
 	}
 
-		if (route === '/') {
-			return (
-				<PublicLanding
-					devLoginEnabled={devLoginEnabled}
-					authenticated={Boolean(me)}
-				/>
-			)
-		}
-
+	if (route === '/') {
 		return (
-			<div className="app-layout">
+			<PublicLanding
+				devLoginEnabled={devLoginEnabled}
+				authenticated={Boolean(me)}
+			/>
+		)
+	}
+
+	return (
+		<div className="app-layout">
 			<aside className="sidebar">
 				<div className="sidebar-brand">
 					<BrandMark />
@@ -1104,8 +1110,6 @@ export default function App() {
 							/>
 						</>
 					)}
-
-
 
 					<footer className="app-footer">
 						<span className="footer-brand">

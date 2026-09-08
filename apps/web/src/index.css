@@ -1353,7 +1353,11 @@ body {
 	padding: 44px 30px 28px;
 	max-width: 640px;
 	width: min(640px, calc(100% - 32px));
-	background: linear-gradient(145deg, rgba(233,244,238,.84), rgba(255,255,255,.96));
+	background: linear-gradient(
+		145deg,
+		rgba(233, 244, 238, 0.84),
+		rgba(255, 255, 255, 0.96)
+	);
 	border: 1px solid var(--primary-border);
 	border-radius: 24px;
 	box-shadow: var(--shadow-sm);
@@ -2748,9 +2752,11 @@ h2 {
 /* Public landing owns its own canvas, separate from workspace chrome. */
 .public-site {
 	min-height: 100vh;
-	background:
-		radial-gradient(circle at 82% 18%, rgba(201, 154, 75, 0.1), transparent 28%),
-		linear-gradient(180deg, #fbfdfb 0%, var(--bg) 72%);
+	background: radial-gradient(
+			circle at 82% 18%,
+			rgba(201, 154, 75, 0.1),
+			transparent 28%
+		), linear-gradient(180deg, #fbfdfb 0%, var(--bg) 72%);
 }
 
 .public-header {
@@ -2776,7 +2782,10 @@ h2 {
 	display: block;
 }
 
-.public-brand strong { font-size: 20px; color: var(--primary-strong); }
+.public-brand strong {
+	font-size: 20px;
+	color: var(--primary-strong);
+}
 .public-brand small {
 	font-size: 10px;
 	letter-spacing: .12em;
@@ -2784,16 +2793,31 @@ h2 {
 	color: var(--text-muted);
 }
 
-.public-nav { display: flex; align-items: center; gap: 24px; }
-.public-nav a { color: var(--text-muted); text-decoration: none; font-size: 13px; font-weight: 600; }
-.public-nav a:hover { color: var(--primary-strong); }
+.public-nav {
+	display: flex;
+	align-items: center;
+	gap: 24px;
+}
+.public-nav a {
+	color: var(--text-muted);
+	text-decoration: none;
+	font-size: 13px;
+	font-weight: 600;
+}
+.public-nav a:hover {
+	color: var(--primary-strong);
+}
 .public-nav .public-nav-cta {
 	padding: 9px 16px;
 	border-radius: 999px;
 	background: var(--primary);
 	color: #fff;
 }
-.public-site .landing { max-width: 1220px; margin: 0 auto; padding: 38px 34px 56px; }
+.public-site .landing {
+	max-width: 1220px;
+	margin: 0 auto;
+	padding: 38px 34px 56px;
+}
 .public-footer {
 	max-width: 1152px;
 	margin: 0 auto;
@@ -2805,7 +2829,9 @@ h2 {
 	color: var(--text-faint);
 	font-size: 12px;
 }
-.public-footer a { color: var(--primary); }
+.public-footer a {
+	color: var(--primary);
+}
 
 /* ==========================================================================
    Landing page (unauthenticated home) — AiFiqh reference hero
@@ -3069,10 +3095,19 @@ h2 {
 }
 
 @media (max-width: 700px) {
-	.public-header { padding: 16px 18px; }
-	.public-nav a:not(.public-nav-cta) { display: none; }
-	.public-site .landing { padding: 24px 18px 38px; }
-	.public-footer { padding: 18px; flex-direction: column; }
+	.public-header {
+		padding: 16px 18px;
+	}
+	.public-nav a:not(.public-nav-cta) {
+		display: none;
+	}
+	.public-site .landing {
+		padding: 24px 18px 38px;
+	}
+	.public-footer {
+		padding: 18px;
+		flex-direction: column;
+	}
 }
 
 @media (max-width: 1020px) {
