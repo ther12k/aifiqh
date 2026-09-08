@@ -40,13 +40,20 @@ function serveStaticAsset(pathname: string): Response | null {
 	if (rel) {
 		const filePath = join(webDistPath, rel)
 		if (existsSync(filePath) && statSync(filePath).isFile()) {
-			return new Response(Bun.file(filePath))
+			// content-hashed bundles are safe to cache forever
+			return new Response(Bun.file(filePath), {
+				headers: { 'cache-control': 'public, max-age=31536000, immutable' },
+			})
 		}
 	}
 	const indexPath = join(webDistPath, 'index.html')
 	if (existsSync(indexPath)) {
+		// index.html must revalidate or a cached copy keeps serving old bundles
 		return new Response(Bun.file(indexPath), {
-			headers: { 'content-type': 'text/html; charset=utf-8' },
+			headers: {
+				'content-type': 'text/html; charset=utf-8',
+				'cache-control': 'no-cache',
+			},
 		})
 	}
 	return null

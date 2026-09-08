@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ChatContainer } from './chat/ChatContainer'
 import { ReviewerWorkspace } from './chat/ReviewerWorkspace'
 import { ConceptEditor } from './knowledge/ConceptEditor'
@@ -167,7 +167,7 @@ const NAV_SECTIONS: Array<{
 		label: 'Sistem',
 		items: [
 			{ href: '#/ops', label: 'Operations', icon: ICON_PATHS.activity },
-			{ href: '#/', label: 'Health', icon: ICON_PATHS.pulse },
+			{ href: '#/health', label: 'Health', icon: ICON_PATHS.pulse },
 		],
 	},
 ]
@@ -193,6 +193,10 @@ const PAGE_QUOTES: Record<string, { text: string; source: string }> = {
 	'/ops': {
 		text: 'Sebaik-baik usaha adalah yang mendatangkan manfaat bagi manusia.',
 		source: 'HR. Ahmad',
+	},
+	'/health': {
+		text: 'Sesungguhnya Allah menyukai apabila seseorang bekerja, ia melakukannya dengan itqan (profesional dan sempurna).',
+		source: 'HR. Al-Baihaqi',
 	},
 }
 
@@ -368,7 +372,13 @@ function LandingArch() {
 	)
 }
 
-function Landing({ devLoginEnabled }: { devLoginEnabled: boolean }) {
+function Landing({
+	devLoginEnabled,
+	authenticated,
+}: {
+	devLoginEnabled: boolean
+	authenticated?: boolean
+}) {
 	return (
 		<section className="landing" aria-label="Pengantar Tafaqquh">
 			<div className="landing-grid">
@@ -383,23 +393,42 @@ function Landing({ devLoginEnabled }: { devLoginEnabled: boolean }) {
 						untuk bertafaqquh, bukan pengganti ulama.
 					</p>
 					<div className="landing-cta">
-						<a className="btn-primary" href="/auth/login">
-							Mulai Belajar
-							<svg
-								width="16"
-								height="16"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2.2"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-								aria-hidden="true"
-							>
-								<path d="M5 12h14M13 6l6 6-6 6" />
-							</svg>
-						</a>
-						{devLoginEnabled && (
+						{authenticated ? (
+							<a className="btn-primary" href="#/chat">
+								Buka Aplikasi
+								<svg
+									width="16"
+									height="16"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2.2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									aria-hidden="true"
+								>
+									<path d="M5 12h14M13 6l6 6-6 6" />
+								</svg>
+							</a>
+						) : (
+							<a className="btn-primary" href="/auth/login">
+								Mulai Belajar
+								<svg
+									width="16"
+									height="16"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2.2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									aria-hidden="true"
+								>
+									<path d="M5 12h14M13 6l6 6-6 6" />
+								</svg>
+							</a>
+						)}
+						{!authenticated && devLoginEnabled && (
 							<a
 								className="btn-ghost"
 								href="/auth/dev-login?email=admin@example.com"
@@ -510,20 +539,148 @@ function HealthPill({ health }: { health: Health | null }) {
 	)
 }
 
+/** mockup-style system health page: banner, stat cards, component table */
+function HealthPage({
+	health,
+	updatedAt,
+	onRefresh,
+}: {
+	health: Health | null
+	updatedAt: Date | null
+	onRefresh: () => void
+}) {
+	const comps = health?.components ?? []
+	const okCount = comps.filter((c) => c.status === 'healthy').length
+	const badCount = comps.length - okCount
+	const allOk = comps.length > 0 && badCount === 0
+
+	if (!health) {
+		return (
+			<section aria-label="Kesehatan sistem" className="health-page">
+				<p className="gate-note">
+					Status sistem tidak dapat dimuat —{' '}
+					<button type="button" className="link-btn" onClick={onRefresh}>
+						coba perbarui
+					</button>
+					.
+				</p>
+			</section>
+		)
+	}
+
+	return (
+		<section aria-label="Kesehatan sistem" className="health-page">
+			<div className={`health-banner ${allOk ? 'is-ok' : 'is-warn'}`}>
+				<span className="health-banner-icon" aria-hidden="true">
+					<NavIcon d={allOk ? ICON_PATHS.check : ICON_PATHS.activity} />
+				</span>
+				<div className="health-banner-text">
+					<h3>
+						{allOk
+							? 'Semua sistem berjalan normal'
+							: 'Ada komponen yang perlu perhatian'}
+					</h3>
+					<p>
+						{allOk
+							? 'Alhamdulillah, seluruh layanan platform berfungsi dengan baik.'
+							: `${badCount} komponen tidak sehat — periksa daftar komponen di bawah.`}
+					</p>
+				</div>
+				<div className="health-banner-side">
+					<span className="health-updated">
+						<span className="hp-dot" aria-hidden="true" />
+						{updatedAt
+							? `Diperbarui ${updatedAt.toLocaleTimeString('id-ID')}`
+							: 'Memuat…'}
+					</span>
+					<button type="button" className="btn-refresh" onClick={onRefresh}>
+						<NavIcon d={ICON_PATHS.pulse} />
+						Perbarui Sekarang
+					</button>
+				</div>
+			</div>
+
+			<div className="health-stats">
+				<div className="stat-card">
+					<span className="stat-icon is-ok" aria-hidden="true">
+						<NavIcon d={ICON_PATHS.shield} />
+					</span>
+					<div>
+						<span className="stat-label">Komponen Sehat</span>
+						<b className="stat-value">{okCount}</b>
+					</div>
+				</div>
+				<div className="stat-card">
+					<span className="stat-icon is-warn" aria-hidden="true">
+						<NavIcon d={ICON_PATHS.activity} />
+					</span>
+					<div>
+						<span className="stat-label">Perlu Perhatian</span>
+						<b className="stat-value">{badCount}</b>
+					</div>
+				</div>
+				<div className="stat-card">
+					<span className="stat-icon" aria-hidden="true">
+						<NavIcon d={ICON_PATHS.grid} />
+					</span>
+					<div>
+						<span className="stat-label">Total Komponen</span>
+						<b className="stat-value">{comps.length}</b>
+					</div>
+				</div>
+			</div>
+
+			<div className="health-grid">
+				<div className="health-table-card">
+					<h4>Daftar Komponen</h4>
+					<p>Status setiap komponen platform saat ini.</p>
+					<ul className="health-table">
+						{comps.map((c) => (
+							<li key={c.component}>
+								<span className="health-comp-name">{c.component}</span>
+								<span
+									className={`badge ${c.status === 'healthy' ? 'badge-ok' : 'badge-danger'}`}
+								>
+									{c.status}
+								</span>
+							</li>
+						))}
+					</ul>
+				</div>
+				<aside className="health-quote-card">
+					<p>
+						“Sesungguhnya Allah menyukai apabila seseorang melakukan suatu
+						pekerjaan, ia melakukannya dengan itqan (profesional dan sempurna).”
+					</p>
+					<footer>— HR. Al-Baihaqi</footer>
+				</aside>
+			</div>
+		</section>
+	)
+}
+
 export default function App() {
 	const route = useHashRoute()
 	const [health, setHealth] = useState<Health | null>(null)
+	const [healthUpdated, setHealthUpdated] = useState<Date | null>(null)
 	const [me, setMe] = useState<Me | null>(null)
 	const [meLoading, setMeLoading] = useState(true)
 	const [devLoginEnabled, setDevLoginEnabled] = useState(false)
 	const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
-	useEffect(() => {
+	const loadHealth = useCallback(() => {
 		fetch('/health/components')
 			.then((r) => r.json())
-			.then(setHealth)
+			.then((h) => {
+				setHealth(h)
+				setHealthUpdated(new Date())
+			})
 			.catch(() => setHealth(null))
 	}, [])
+
+	useEffect(() => {
+		loadHealth()
+	}, [loadHealth])
 
 	useEffect(() => {
 		fetch('/auth/me')
@@ -774,8 +931,13 @@ export default function App() {
 					{route === '/studio-dashboard' && (
 						<div className="page-head">
 							<div className="page-head-main">
-								<h2>Dashboard</h2>
-								<p>Ringkasan kesehatan sumber, pekerjaan terbuka, dan rilis.</p>
+								<h2>
+									Assalamu’alaikum, {me ? roleLabel(permissions) : 'Pengguna'}
+								</h2>
+								<p>
+									Berikut ringkasan kesehatan sumber, pekerjaan terbuka, dan
+									rilis pengetahuan hari ini.
+								</p>
 							</div>
 							<PageQuote quote={PAGE_QUOTES['/studio-dashboard']} />
 							<SkylineDecor />
@@ -868,33 +1030,32 @@ export default function App() {
 							</p>
 						))}
 
-					{route === '/' && (me || meLoading) && (
-						<section>
+					{route === '/health' && (
+						<>
 							<div className="page-head">
-								<h2>Service health</h2>
-								<p>Kesehatan komponen platform saat ini.</p>
+								<div className="page-head-main">
+									<h2>Health</h2>
+									<p>
+										Pantau status sistem, layanan, dan kesehatan infrastruktur
+										secara real-time.
+									</p>
+								</div>
+								<PageQuote quote={PAGE_QUOTES['/health']} />
+								<SkylineDecor />
 							</div>
-							{health ? (
-								<ul className="health-list">
-									{health.components.map((c) => (
-										<li key={c.component}>
-											<span>{c.component}</span>
-											<span
-												className={`badge ${c.status === 'healthy' ? 'badge-ok' : 'badge-danger'}`}
-											>
-												{c.status}
-											</span>
-										</li>
-									))}
-								</ul>
-							) : (
-								<p className="gate-note">API unreachable</p>
-							)}
-						</section>
+							<HealthPage
+								health={health}
+								updatedAt={healthUpdated}
+								onRefresh={loadHealth}
+							/>
+						</>
 					)}
 
-					{route === '/' && !meLoading && !me && (
-						<Landing devLoginEnabled={devLoginEnabled} />
+					{route === '/' && (
+						<Landing
+							devLoginEnabled={devLoginEnabled}
+							authenticated={Boolean(me)}
+						/>
 					)}
 
 					<footer className="app-footer">

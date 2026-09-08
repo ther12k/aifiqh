@@ -3496,6 +3496,288 @@ h2 {
 }
 
 /* ==========================================================================
+   Health page — status banner, stat cards, component table (mockup ref)
+   ========================================================================== */
+.health-page {
+	display: grid;
+	gap: 18px;
+}
+
+.health-banner {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-lg);
+	padding: 18px 20px;
+	box-shadow: var(--shadow-sm);
+}
+
+.health-banner.is-ok {
+	border-color: var(--primary-border);
+	background: linear-gradient(160deg, #f4faf7, #ecf6f1);
+}
+
+.health-banner.is-warn {
+	border-color: #efd8b8;
+	background: linear-gradient(160deg, #fdf8ee, #faefdc);
+}
+
+.health-banner-icon {
+	flex: none;
+	width: 44px;
+	height: 44px;
+	display: grid;
+	place-items: center;
+	border-radius: 50%;
+	background: var(--ok);
+	color: #fff;
+}
+
+.health-banner.is-warn .health-banner-icon {
+	background: var(--warn);
+}
+
+.health-banner-icon svg {
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	background: none;
+}
+
+.health-banner-text {
+	flex: 1;
+	min-width: 0;
+}
+
+.health-banner-text h3 {
+	margin: 0 0 2px;
+	font-size: 17px;
+	color: var(--text);
+}
+
+.health-banner-text p {
+	margin: 0;
+	font-size: 13.5px;
+	color: var(--text-muted);
+}
+
+.health-banner-side {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	flex: none;
+}
+
+.health-updated {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	font-size: 12.5px;
+	color: var(--text-muted);
+	white-space: nowrap;
+}
+
+.btn-refresh {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	border: 1px solid var(--primary-border);
+	background: var(--surface);
+	color: var(--primary-strong);
+	font: inherit;
+	font-size: 13px;
+	font-weight: 700;
+	padding: 9px 14px;
+	border-radius: 10px;
+	cursor: pointer;
+	transition: background 0.15s ease;
+	white-space: nowrap;
+}
+
+.btn-refresh:hover {
+	background: var(--primary-tint);
+}
+
+.btn-refresh svg {
+	width: 16px;
+	height: 16px;
+	padding: 0;
+	background: none;
+}
+
+.link-btn {
+	border: none;
+	background: none;
+	color: var(--primary);
+	font: inherit;
+	font-weight: 700;
+	cursor: pointer;
+	padding: 0;
+	text-decoration: underline;
+}
+
+.health-stats {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 14px;
+}
+
+.stat-card {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-lg);
+	padding: 16px 18px;
+	box-shadow: var(--shadow-sm);
+}
+
+.stat-icon {
+	flex: none;
+	width: 42px;
+	height: 42px;
+	display: grid;
+	place-items: center;
+	border-radius: 50%;
+	background: var(--primary-tint);
+	color: var(--primary);
+}
+
+.stat-icon.is-ok {
+	background: var(--ok-soft);
+	color: var(--ok);
+}
+
+.stat-icon.is-warn {
+	background: var(--warn-soft);
+	color: var(--warn);
+}
+
+.stat-icon svg {
+	width: 20px;
+	height: 20px;
+	padding: 0;
+	background: none;
+}
+
+.stat-label {
+	display: block;
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
+.stat-value {
+	display: block;
+	font-size: 24px;
+	font-weight: 800;
+	color: var(--text);
+	line-height: 1.15;
+}
+
+.health-grid {
+	display: grid;
+	grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+	gap: 14px;
+	align-items: start;
+}
+
+.health-table-card {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-lg);
+	padding: 18px 20px;
+	box-shadow: var(--shadow-sm);
+}
+
+.health-table-card h4 {
+	margin: 0 0 2px;
+	font-size: 15.5px;
+	color: var(--text);
+}
+
+.health-table-card > p {
+	margin: 0 0 10px;
+	font-size: 12.5px;
+	color: var(--text-muted);
+}
+
+.health-table {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.health-table li {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 11px 2px;
+	border-top: 1px solid var(--border-soft);
+}
+
+.health-comp-name {
+	font-weight: 600;
+	font-size: 14px;
+	color: var(--text);
+}
+
+.health-quote-card {
+	background: var(--primary-soft);
+	border: 1px solid var(--primary-border);
+	border-radius: var(--r-lg);
+	padding: 22px 20px;
+}
+
+.health-quote-card p {
+	margin: 0;
+	font-family: var(--font-quote);
+	font-style: italic;
+	font-size: 15px;
+	line-height: 1.6;
+	color: var(--primary-strong);
+}
+
+.health-quote-card footer {
+	margin-top: 10px;
+	font-size: 12.5px;
+	font-weight: 700;
+	color: var(--primary);
+}
+
+/* --- Sources header stats (computed from the real list) ------------------ */
+.source-stats {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	gap: 12px;
+	margin-bottom: 14px;
+}
+
+.source-stat {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-lg);
+	padding: 14px 16px;
+	box-shadow: var(--shadow-sm);
+}
+
+.source-stat b {
+	display: block;
+	font-size: 22px;
+	font-weight: 800;
+	color: var(--primary-strong);
+	line-height: 1.15;
+}
+
+.source-stat span {
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
+/* ==========================================================================
    Responsive — compact mobile navigation replaces the sidebar under 900px
    ========================================================================== */
 .mobile-nav {
@@ -3697,6 +3979,26 @@ h2 {
 	}
 
 	.claim-card-columns {
+		grid-template-columns: 1fr;
+	}
+
+	/* health page stacks on small screens */
+	.health-banner {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+
+	.health-banner-side {
+		width: 100%;
+		justify-content: space-between;
+	}
+
+	.health-stats,
+	.source-stats {
+		grid-template-columns: 1fr 1fr;
+	}
+
+	.health-grid {
 		grid-template-columns: 1fr;
 	}
 
