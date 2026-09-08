@@ -120,8 +120,11 @@ async function assertConversationAccess(
 	conversationId: string,
 ): Promise<void> {
 	const [row] = await sql<{ id: string }[]>`
-		select id from conversations
-		where id = ${conversationId}::uuid and tenant_id = ${principal.tenantId}::uuid`
+		select c.id from conversations c
+		join conversation_members cm on cm.conversation_id = c.id
+		where c.id = ${conversationId}::uuid
+			and c.tenant_id = ${principal.tenantId}::uuid
+			and cm.user_id = ${principal.userId}::uuid`
 	if (!row)
 		throw new ChatError(
 			'CONVERSATION_NOT_FOUND',
@@ -255,7 +258,7 @@ async function composeFromEvidence(
 			{
 				kind: 'direct_answer',
 				markdown: ordered.length
-					? ordered.map((i) => i.text).join(' ')
+					? ordered.map((i) => i.text).join('\n\n')
 					: 'Tidak ada bukti yang cukup untuk menjawab.',
 				claimIds: claims.map((c) => c.id),
 			},
@@ -719,7 +722,87 @@ export interface ConversationView {
 		answerId: string | null
 		traceId: string | null
 		answerStatus: string | null
+		answer?: {
+			id: string
+			status: string
+			provider: string | null
+			model: string | null
+			sections: Array<{ kind: string; markdown: string }>
+			citations: TurnCitation[]
+			verification: VerificationStatus
+		} | null
+		decision?: {
+			decision: string
+			rationale?: string
+			userOutcome?: string
+		} | null
 	}>
+}
+
+export interface ConversationListItem {
+	id: string
+	title: string | null
+	createdAt: string
+	updatedAt: string
+	snippet: string | null
+	messageCount: number
+}
+
+export async function listConversations(
+	sql: Sql,
+	principal: Principal,
+): Promise<ConversationListItem[]> {
+	const rows = await sql<
+		{
+			id: string
+			title: string | null
+			created_at: string
+			updated_at: string
+			snippet: string | null
+			message_count: number
+		}[]
+	>`
+		select
+			c.id,
+			c.title,
+			c.created_at::text as created_at,
+			coalesce(
+				(select m.created_at::text from messages m where m.conversation_id = c.id order by m.ordinal desc limit 1),
+				c.created_at::text
+			) as updated_at,
+			coalesce(
+				(select m.content from messages m where m.conversation_id = c.id and m.role = 'user' order by m.ordinal asc limit 1),
+				(select m.content from messages m where m.conversation_id = c.id order by m.ordinal asc limit 1)
+			) as snippet,
+			(select count(*)::int from messages m where m.conversation_id = c.id) as message_count
+		from conversations c
+		join conversation_members cm on cm.conversation_id = c.id
+		where c.tenant_id = ${principal.tenantId}::uuid and cm.user_id = ${principal.userId}::uuid
+		order by coalesce(
+			(select m.created_at from messages m where m.conversation_id = c.id order by m.ordinal desc limit 1),
+			c.created_at
+		) desc
+		limit 50
+	`
+	return rows.map((r) => ({
+		id: r.id,
+		title: r.title,
+		createdAt: r.created_at,
+		updatedAt: r.updated_at,
+		snippet: r.snippet ? r.snippet.slice(0, 100) : null,
+		messageCount: r.message_count,
+	}))
+}
+
+export async function deleteConversation(
+	sql: Sql,
+	principal: Principal,
+	conversationId: string,
+): Promise<{ deleted: boolean }> {
+	await assertConversationAccess(sql, principal, conversationId)
+	await sql`delete from conversation_members
+		where conversation_id = ${conversationId}::uuid and user_id = ${principal.userId}::uuid`
+	return { deleted: true }
 }
 
 export async function getConversation(
@@ -746,17 +829,165 @@ export async function getConversation(
 		from messages m left join answers a on a.id = m.answer_id
 		where m.conversation_id = ${conversationId}::uuid
 		order by m.ordinal`
+
+	const answerIds = messages
+		.map((m) => m.answer_id)
+		.filter((id): id is string => id !== null)
+
+	const traceIds = messages
+		.map((m) => m.trace_id)
+		.filter((id): id is string => id !== null)
+
+	const sectionsByAnswer = new Map<
+		string,
+		Array<{ kind: string; markdown: string }>
+	>()
+	if (answerIds.length > 0) {
+		const secRows = await sql<
+			{ answer_id: string; kind: string; content: string }[]
+		>`select answer_id, kind, content
+			from answer_sections
+			where answer_id = any(${answerIds}::uuid[])
+			order by ordinal asc`
+		for (const s of secRows) {
+			const list = sectionsByAnswer.get(s.answer_id) ?? []
+			list.push({ kind: s.kind, markdown: s.content })
+			sectionsByAnswer.set(s.answer_id, list)
+		}
+	}
+
+	const citationsByAnswer = new Map<string, TurnCitation[]>()
+	if (answerIds.length > 0) {
+		const citRows = await sql<
+			{
+				answer_id: string
+				ordinal: number
+				source_id: string
+				source_revision_id: string
+				span_id: string
+				quote: string | null
+			}[]
+		>`select answer_id, ordinal, source_id, source_revision_id, span_id, quote
+			from citations
+			where answer_id = any(${answerIds}::uuid[])
+			order by ordinal asc`
+		for (const c of citRows) {
+			const list = citationsByAnswer.get(c.answer_id) ?? []
+			list.push({
+				ordinal: c.ordinal,
+				sourceId: c.source_id,
+				sourceRevisionId: c.source_revision_id,
+				spanId: c.span_id,
+				quote: c.quote ?? '',
+			})
+			citationsByAnswer.set(c.answer_id, list)
+		}
+	}
+
+	const decisionsByTrace = new Map<
+		string,
+		{ decision: string; rationale: string; assessmentStatus: string }
+	>()
+	if (traceIds.length > 0) {
+		const decRows = await sql<
+			{
+				trace_id: string
+				decision: string
+				rationale: string
+				assessment_status: string | null
+			}[]
+		>`select trace_id, decision, rationale, assessment_status
+			from response_decisions
+			where trace_id = any(${traceIds}::uuid[])`
+		for (const d of decRows) {
+			decisionsByTrace.set(d.trace_id, {
+				decision: d.decision,
+				rationale: d.rationale,
+				assessmentStatus: d.assessment_status ?? 'sufficient',
+			})
+		}
+	}
+
+	const answerRows =
+		answerIds.length > 0
+			? await sql<
+					{
+						id: string
+						trace_id: string
+						status: string
+						provider: string | null
+						model: string | null
+					}[]
+				>`select id, trace_id, status, provider, model
+			from answers
+			where id = any(${answerIds}::uuid[])`
+			: []
+	const answersById = new Map(answerRows.map((a) => [a.id, a]))
+
 	return {
 		conversationId: conversation.id,
 		title: conversation.title,
-		messages: messages.map((m) => ({
-			id: m.id,
-			ordinal: m.ordinal,
-			role: m.role,
-			content: m.content,
-			answerId: m.answer_id,
-			traceId: m.trace_id,
-			answerStatus: m.answer_status,
-		})),
+		messages: messages.map((m) => {
+			const ans = m.answer_id ? answersById.get(m.answer_id) : null
+			const dec = m.trace_id ? decisionsByTrace.get(m.trace_id) : null
+			const sections = m.answer_id
+				? (sectionsByAnswer.get(m.answer_id) ?? [])
+				: []
+			const citations = m.answer_id
+				? (citationsByAnswer.get(m.answer_id) ?? [])
+				: []
+
+			let answerData = null
+			if (ans && (ans.status === 'answered' || sections.length > 0)) {
+				answerData = {
+					id: ans.id,
+					status: ans.status,
+					provider: ans.provider,
+					model: ans.model,
+					sections,
+					citations,
+					verification: deriveVerification({
+						status: 'answered',
+						decision: {
+							decision: (dec?.decision ??
+								'answer') as ResponseDecisionOutcome['decision'],
+							rationale: dec?.rationale ?? '',
+							languageConstraints: [],
+							assessmentStatus: (dec?.assessmentStatus ??
+								'sufficient') as ResponseDecisionOutcome['assessmentStatus'],
+						},
+						assessment: null,
+						citationsOk: citations.length > 0,
+						citedCount: citations.length,
+					}),
+				}
+			}
+
+			let decisionData = null
+			if (dec) {
+				decisionData = {
+					decision: dec.decision,
+					rationale: dec.rationale,
+					userOutcome:
+						dec.decision === 'escalate'
+							? 'needs_scholar_review'
+							: dec.decision === 'abstain'
+								? 'insufficient_evidence'
+								: 'answered',
+				}
+			}
+
+			return {
+				id: m.id,
+				ordinal: m.ordinal,
+				role: m.role,
+				content: m.content,
+				answerId: m.answer_id,
+				traceId: m.trace_id,
+				answerStatus: m.answer_status,
+				answer: answerData,
+				decision: decisionData,
+			}
+		}),
 	}
 }

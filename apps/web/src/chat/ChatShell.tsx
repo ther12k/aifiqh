@@ -24,19 +24,36 @@ import {
 const DIRECTION_ATTR = { rtl: 'rtl' as const, ltr: 'ltr' as const }
 
 export function MessageParagraphs({ text }: { text: string }) {
+	const paragraphs = toParagraphs(text)
 	return (
 		<>
-			{toParagraphs(text).map((p) => (
-				<p
-					// a paragraph's own text is its stable identity (segments are
-					// never reordered or edited in place)
-					key={p.text}
-					dir={DIRECTION_ATTR[p.direction]}
-					lang={p.direction === 'rtl' ? 'ar' : 'id'}
-				>
-					{p.text}
-				</p>
-			))}
+			{paragraphs.map((p, idx) => {
+				const isRtl = p.direction === 'rtl'
+				const isTitle =
+					!isRtl &&
+					((p.text.startsWith('[') && p.text.includes(']')) ||
+						/^\[(Hadits|QS|Surat|Ayat|Kaidah|Dalil)/i.test(p.text))
+				const isTranslation = !isRtl && /^Artinya\s*:/i.test(p.text)
+
+				const className = isRtl
+					? 'dalil-arabic'
+					: isTitle
+						? 'dalil-title'
+						: isTranslation
+							? 'dalil-translation'
+							: undefined
+
+				return (
+					<p
+						key={`${idx}-${p.text.slice(0, 32)}`}
+						dir={DIRECTION_ATTR[p.direction]}
+						lang={isRtl ? 'ar' : 'id'}
+						className={className}
+					>
+						{p.text}
+					</p>
+				)
+			})}
 		</>
 	)
 }

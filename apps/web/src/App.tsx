@@ -535,16 +535,9 @@ export default function App() {
 					)}
 				</header>
 
-				<main className="app-content">
-					{route === '/chat' && (
-						<div className="page-head">
-							<h2>Chatbot</h2>
-							<p>
-								Tanya jawab fiqih dengan jawaban berbasis kutipan dalil — setiap
-								klaim terhubung ke sumbernya.
-							</p>
-						</div>
-					)}
+				<main
+					className={`app-content ${route === '/chat' ? 'app-content-chat' : ''}`}
+				>
 					{route === '/sources' && (
 						<div className="page-head">
 							<h2>Sumber Pengetahuan</h2>

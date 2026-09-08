@@ -547,8 +547,42 @@ interface TurnDecisionInfo {
 	userOutcome?: string
 }
 
+export interface ConversationListItem {
+	id: string
+	title: string | null
+	createdAt: string
+	updatedAt: string
+	snippet: string | null
+	messageCount: number
+}
+
+function formatRelativeTime(isoStr: string): string {
+	try {
+		const d = new Date(isoStr)
+		if (Number.isNaN(d.getTime())) return ''
+		const now = new Date()
+		const diffMs = now.getTime() - d.getTime()
+		const diffMins = Math.floor(diffMs / 60000)
+		if (diffMins < 1) return 'Baru saja'
+		if (diffMins < 60) return `${diffMins} mnt lalu`
+		const diffHours = Math.floor(diffMins / 60)
+		if (diffHours < 24) return `${diffHours} jam lalu`
+		const diffDays = Math.floor(diffHours / 24)
+		if (diffDays === 1) return 'Kemarin'
+		if (diffDays < 7) return `${diffDays} hr lalu`
+		return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
+	} catch {
+		return ''
+	}
+}
+
 export function ChatContainer() {
 	const [conversationId, setConversationId] = useState<string | null>(null)
+	const [conversations, setConversations] = useState<ConversationListItem[]>([])
+	const [conversationsLoading, setConversationsLoading] = useState(false)
+	const [historyOpen, setHistoryOpen] = useState(
+		typeof window !== 'undefined' ? window.innerWidth > 900 : true,
+	)
 	const [chatState, setChatState] = useState<ChatShellState>(EMPTY_CHAT_STATE)
 	const [draft, setDraft] = useState('')
 	const [loading, setLoading] = useState(true)
@@ -560,26 +594,215 @@ export function ChatContainer() {
 		Record<string, TurnDecisionInfo>
 	>({})
 
-	// Initialize or load conversation
+	async function refreshConversations() {
+		try {
+			setConversationsLoading(true)
+			const res = await fetch('/conversations', {
+				headers: { 'x-csrf-token': getCsrfToken() },
+			})
+			if (res.ok) {
+				const list = (await res.json()) as ConversationListItem[]
+				setConversations(list)
+			}
+		} catch {
+			// ignore fetch failure
+		} finally {
+			setConversationsLoading(false)
+		}
+	}
+
+	async function loadConversation(id: string) {
+		setLoading(true)
+		try {
+			const res = await fetch(`/conversations/${id}`, {
+				headers: { 'x-csrf-token': getCsrfToken() },
+			})
+			if (!res.ok) throw new Error(`Gagal memuat percakapan (${res.status})`)
+			const data = (await res.json()) as {
+				conversationId: string
+				title: string | null
+				messages: Array<{
+					id: string
+					ordinal: number
+					role: 'user' | 'assistant' | 'system'
+					content: string
+					answerId: string | null
+					traceId: string | null
+					answerStatus: string | null
+					answer?: {
+						id: string
+						status: string
+						provider: string | null
+						model: string | null
+						sections: Array<{ kind: string; markdown: string }>
+						citations: TurnCitation[]
+						verification: TurnVerification
+					} | null
+					decision?: {
+						decision: string
+						rationale?: string
+						userOutcome?: string
+					} | null
+				}>
+			}
+
+			setConversationId(data.conversationId)
+			const loadedAnswers: Record<string, StoredAnswer> = {}
+			const loadedDecisions: Record<string, TurnDecisionInfo> = {}
+			const msgs: Array<{
+				id: string
+				role: 'user' | 'assistant' | 'system'
+				content: string
+				answerId?: string | null
+				traceId?: string | null
+				answerStatus?: string | null
+			}> = []
+
+			for (const m of data.messages) {
+				msgs.push({
+					id: m.id,
+					role: m.role,
+					content: m.content,
+					answerId: m.answerId,
+					traceId: m.traceId,
+					answerStatus: m.answerStatus,
+				})
+
+				if (m.role === 'assistant') {
+					if (m.answer?.sections && m.answer.sections.length > 0) {
+						const sections: AnswerSection[] = []
+						for (const s of m.answer.sections) {
+							const text = stripUnsafeHtml(s.markdown)
+							if (text) sections.push({ kind: s.kind, text })
+						}
+						loadedAnswers[m.id] = {
+							serverMessageId: m.answer.id,
+							sections,
+							plain: sections.map((s) => s.text).join('\n\n'),
+							citations: m.answer.citations ?? [],
+							verification: m.answer.verification ?? {
+								answerStatus: m.answer.status,
+								citationIntegrity: 'passed',
+								claimSupport: 'automated_check_passed',
+								scholarlyReview: 'not_reviewed',
+								userOutcome: 'answered',
+							},
+						}
+					} else if (m.decision) {
+						loadedDecisions[m.id] = {
+							decision: m.decision.decision,
+							rationale: m.decision.rationale,
+							userOutcome: m.decision.userOutcome,
+						}
+					}
+				}
+			}
+
+			setAnswersByMsg(loadedAnswers)
+			setDecisionsByMsg(loadedDecisions)
+			setChatState({
+				messages: msgs,
+				streaming: null,
+				phase: 'idle',
+				activeRequestId: null,
+				errorMessage: null,
+			})
+		} catch (err: unknown) {
+			setChatState((prev) =>
+				failStreaming(
+					prev,
+					err instanceof Error ? err.message : 'Gagal memuat percakapan',
+				),
+			)
+		} finally {
+			setLoading(false)
+		}
+	}
+
+	async function startNewConversation() {
+		setLoading(true)
+		try {
+			const res = await fetch('/conversations', {
+				method: 'POST',
+				headers: {
+					'content-type': 'application/json',
+					'x-csrf-token': getCsrfToken(),
+				},
+				body: JSON.stringify({ title: 'Percakapan Fiqih' }),
+			})
+			if (!res.ok) throw new Error(`Gagal memulai percakapan (${res.status})`)
+			const data = (await res.json()) as { conversationId: string }
+			setConversationId(data.conversationId)
+			setChatState(EMPTY_CHAT_STATE)
+			setAnswersByMsg({})
+			setDecisionsByMsg({})
+			setLastTurn(null)
+			void refreshConversations()
+		} catch (err: unknown) {
+			setChatState((prev) =>
+				failStreaming(
+					prev,
+					err instanceof Error ? err.message : 'Gagal memulai percakapan',
+				),
+			)
+		} finally {
+			setLoading(false)
+		}
+	}
+
+	async function handleDeleteConversation(e: React.MouseEvent, id: string) {
+		e.stopPropagation()
+		if (!confirm('Hapus percakapan ini dari riwayat?')) return
+		try {
+			const res = await fetch(`/conversations/${id}`, {
+				method: 'DELETE',
+				headers: { 'x-csrf-token': getCsrfToken() },
+			})
+			if (res.ok) {
+				setConversations((prev) => prev.filter((c) => c.id !== id))
+				if (conversationId === id) {
+					void startNewConversation()
+				}
+			}
+		} catch {
+			// ignore error
+		}
+	}
+
+	// Initialize: load existing conversation list, pick latest or create new
+	// biome-ignore lint/correctness/useExhaustiveDependencies: initial mount only
 	useEffect(() => {
 		let cancelled = false
 		async function initConv() {
 			try {
-				const res = await fetch('/conversations', {
-					method: 'POST',
-					headers: {
-						'content-type': 'application/json',
-						'x-csrf-token': getCsrfToken(),
-					},
-					body: JSON.stringify({ title: 'Percakapan Fiqih' }),
+				const resList = await fetch('/conversations', {
+					headers: { 'x-csrf-token': getCsrfToken() },
 				})
-				if (!res.ok) {
-					throw new Error(`Gagal memulai percakapan (${res.status})`)
+				let list: ConversationListItem[] = []
+				if (resList.ok) {
+					list = (await resList.json()) as ConversationListItem[]
+					if (!cancelled) setConversations(list)
 				}
-				const data = (await res.json()) as { conversationId: string }
-				if (!cancelled) {
-					setConversationId(data.conversationId)
-					setLoading(false)
+				if (list.length > 0) {
+					if (!cancelled) await loadConversation(list[0].id)
+				} else {
+					const resNew = await fetch('/conversations', {
+						method: 'POST',
+						headers: {
+							'content-type': 'application/json',
+							'x-csrf-token': getCsrfToken(),
+						},
+						body: JSON.stringify({ title: 'Percakapan Fiqih' }),
+					})
+					if (!resNew.ok) {
+						throw new Error(`Gagal memulai percakapan (${resNew.status})`)
+					}
+					const data = (await resNew.json()) as { conversationId: string }
+					if (!cancelled) {
+						setConversationId(data.conversationId)
+						setLoading(false)
+						void refreshConversations()
+					}
 				}
 			} catch (err: unknown) {
 				if (!cancelled) {
@@ -738,6 +961,9 @@ export function ChatContainer() {
 					},
 				],
 			}))
+
+			// refresh conversation list so recent turn is reflected in snippet
+			void refreshConversations()
 		} catch (err: unknown) {
 			setChatState((prev) =>
 				failStreaming(
@@ -759,14 +985,6 @@ export function ChatContainer() {
 		}))
 	}
 
-	if (loading) {
-		return (
-			<div className="chat-loading" data-testid="chat-loading">
-				Memulai sesi percakapan fiqih...
-			</div>
-		)
-	}
-
 	/** follow-ups not already asked this session (fill the composer) */
 	const remainingFollowUps = FOLLOW_UPS.filter(
 		(q) =>
@@ -783,103 +1001,300 @@ export function ChatContainer() {
 		? `Keputusan ${lastTurn.decision} · ${lastTurn.claims} klaim · ${lastTurn.citations} rujukan`
 		: null
 
+	const activeConv = conversations.find((c) => c.id === conversationId)
+	const activeTitle = activeConv?.snippet
+		? activeConv.snippet.length > 55
+			? `${activeConv.snippet.slice(0, 55)}…`
+			: activeConv.snippet
+		: activeConv?.title || 'Percakapan Fiqih'
+
 	return (
-		<div className="chat-wrap">
-			<ChatShell
-				state={chatState}
-				draft={draft}
-				onDraftChange={(val) => {
-					if (chatState.phase === 'error') {
-						setChatState((prev) => clearError(prev))
-					}
-					setDraft(val)
-				}}
-				onSubmit={handleSubmit}
-				onCancel={handleCancel}
-				emptyState={
-					<div className="chat-greeting">
-						<span className="greet-icon" aria-hidden="true">
-							<svg
-								width="26"
-								height="26"
-								viewBox="0 0 24 24"
-								fill="currentColor"
-								aria-hidden="true"
+		<div className="chat-layout">
+			{/* Chat History Sidebar */}
+			<aside
+				className={`chat-history-sidebar ${historyOpen ? 'is-open' : 'is-collapsed'}`}
+				aria-label="Riwayat percakapan"
+			>
+				<div className="history-header">
+					<button
+						type="button"
+						className="btn-new-chat"
+						onClick={() => void startNewConversation()}
+					>
+						<svg
+							width="15"
+							height="15"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2.2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+							aria-hidden="true"
+						>
+							<path d="M12 5v14M5 12h14" />
+						</svg>
+						Chat Baru
+					</button>
+					<button
+						type="button"
+						className="btn-close-history"
+						onClick={() => setHistoryOpen(false)}
+						title="Sembunyikan riwayat"
+						aria-label="Sembunyikan riwayat"
+					>
+						<svg
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+							aria-hidden="true"
+						>
+							<path d="M19 12H5M12 19l-7-7 7-7" />
+						</svg>
+					</button>
+				</div>
+
+				<div className="history-content">
+					<div className="history-section-title">Riwayat Percakapan</div>
+					{conversationsLoading && conversations.length === 0 ? (
+						<div className="history-empty">Memuat riwayat…</div>
+					) : conversations.length === 0 ? (
+						<div className="history-empty">Belum ada riwayat percakapan.</div>
+					) : (
+						<ul className="history-list">
+							{conversations.map((c) => {
+								const isCurrent = c.id === conversationId
+								const label = c.snippet || c.title || 'Percakapan Baru'
+								return (
+									<li
+										key={c.id}
+										className={`history-item ${isCurrent ? 'active' : ''}`}
+									>
+										<button
+											type="button"
+											className="history-item-btn"
+											onClick={() => {
+												if (c.id !== conversationId) {
+													void loadConversation(c.id)
+												}
+											}}
+											title={label}
+										>
+											<svg
+												className="history-item-icon"
+												width="14"
+												height="14"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												strokeWidth="1.8"
+												strokeLinecap="round"
+												strokeLinejoin="round"
+												aria-hidden="true"
+											>
+												<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+											</svg>
+											<span className="history-item-text">
+												<span className="history-item-title">{label}</span>
+												<span className="history-item-meta">
+													{formatRelativeTime(c.updatedAt)}
+												</span>
+											</span>
+										</button>
+										<button
+											type="button"
+											className="history-item-delete"
+											title="Hapus percakapan"
+											aria-label="Hapus percakapan"
+											onClick={(e) => void handleDeleteConversation(e, c.id)}
+										>
+											<svg
+												width="13"
+												height="13"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												strokeWidth="1.8"
+												strokeLinecap="round"
+												strokeLinejoin="round"
+												aria-hidden="true"
+											>
+												<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+											</svg>
+										</button>
+									</li>
+								)
+							})}
+						</ul>
+					)}
+				</div>
+			</aside>
+
+			{/* Main Chat Area */}
+			<div className="chat-main-area">
+				<div className="chat-top-bar">
+					<div className="chat-top-left">
+						{!historyOpen && (
+							<button
+								type="button"
+								className="btn-toggle-sidebar"
+								onClick={() => setHistoryOpen(true)}
+								title="Buka riwayat percakapan"
 							>
-								<path d="M12 2l2.4 5.3 5.6.8-4 4 1 5.9L12 15.6 6.9 18l1-5.9-4-4 5.6-.8L12 2z" />
-							</svg>
-						</span>
-						<h3>Assalamu&rsquo;alaikum</h3>
-						<p>
-							Ada yang ingin Anda tanyakan seputar fiqih? Jawaban disusun hanya
-							dari Al-Qur&rsquo;an dan Hadits yang terverifikasi.
-						</p>
-					</div>
-				}
-				composerExtra={
-					remainingFollowUps.length > 0 ? (
-						<div className="chip-row composer-chips">
-							{remainingFollowUps.slice(0, 3).map((q) => (
-								<button
-									key={q}
-									type="button"
-									className="chip"
-									onClick={() => setDraft(q)}
+								<svg
+									width="16"
+									height="16"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									aria-hidden="true"
 								>
-									{q}
-								</button>
-							))}
-						</div>
-					) : null
-				}
-				composerNote={
-					<div className="composer-meta">
-						{statusLine ? <span>{statusLine}</span> : null}
-						{modelLine ? <span className="model-line">{modelLine}</span> : null}
-						<span>
-							Jawaban berbasis Al-Qur&rsquo;an &amp; Hadits Arba&rsquo;in —
-							verifikasi ke kitab asli untuk keputusan formal.
+									<path d="M3 3h18v18H3z M9 3v18" />
+								</svg>
+								<span>Riwayat</span>
+							</button>
+						)}
+						<span className="chat-top-title" title={activeTitle}>
+							{activeTitle}
 						</span>
 					</div>
-				}
-				renderMessage={(m) => {
-					if (m.role !== 'assistant') return null
-					const answer = answersByMsg[m.id]
-					if (answer) {
-						return (
-							<>
-								<AssistantAvatar />
-								<div className="msg-body">
-									<AnswerCard answer={answer} messageId={m.id} />
+					<button
+						type="button"
+						className="btn-top-new"
+						onClick={() => void startNewConversation()}
+						title="Mulai percakapan baru"
+					>
+						<svg
+							width="13"
+							height="13"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2.2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+							aria-hidden="true"
+						>
+							<path d="M12 5v14M5 12h14" />
+						</svg>
+						<span>Chat Baru</span>
+					</button>
+				</div>
+
+				<div className="chat-scroll-frame">
+					{loading && chatState.messages.length === 0 ? (
+						<div className="chat-loading" data-testid="chat-loading">
+							Memulai sesi percakapan fiqih...
+						</div>
+					) : (
+						<ChatShell
+							state={chatState}
+							draft={draft}
+							onDraftChange={(val) => {
+								if (chatState.phase === 'error') {
+									setChatState((prev) => clearError(prev))
+								}
+								setDraft(val)
+							}}
+							onSubmit={handleSubmit}
+							onCancel={handleCancel}
+							emptyState={
+								<div className="chat-greeting">
+									<span className="greet-icon" aria-hidden="true">
+										<svg
+											width="26"
+											height="26"
+											viewBox="0 0 24 24"
+											fill="currentColor"
+											aria-hidden="true"
+										>
+											<path d="M12 2l2.4 5.3 5.6.8-4 4 1 5.9L12 15.6 6.9 18l1-5.9-4-4 5.6-.8L12 2z" />
+										</svg>
+									</span>
+									<h3>Assalamu&rsquo;alaikum</h3>
+									<p>
+										Ada yang ingin Anda tanyakan seputar fiqih? Jawaban disusun
+										hanya dari Al-Qur&rsquo;an dan Hadits yang terverifikasi.
+									</p>
 								</div>
-							</>
-						)
-					}
-					const decision = decisionsByMsg[m.id]
-					if (decision) {
-						return (
-							<>
-								<AssistantAvatar />
-								<div className="msg-body">
-									<AbstainCard
-										decision={decision.decision}
-										rationale={decision.rationale}
-										userOutcome={decision.userOutcome}
-									/>
+							}
+							composerExtra={
+								remainingFollowUps.length > 0 ? (
+									<div className="chip-row composer-chips">
+										{remainingFollowUps.slice(0, 3).map((q) => (
+											<button
+												key={q}
+												type="button"
+												className="chip"
+												onClick={() => setDraft(q)}
+											>
+												{q}
+											</button>
+										))}
+									</div>
+								) : null
+							}
+							composerNote={
+								<div className="composer-meta">
+									{statusLine ? <span>{statusLine}</span> : null}
+									{modelLine ? (
+										<span className="model-line">{modelLine}</span>
+									) : null}
+									<span>
+										Jawaban berbasis Al-Qur&rsquo;an &amp; Hadits Arba&rsquo;in
+										— verifikasi ke kitab asli untuk keputusan formal.
+									</span>
 								</div>
-							</>
-						)
-					}
-					return (
-						<>
-							<AssistantAvatar />
-							<div className="msg-body">
-								<MessageParagraphs text={m.content} />
-							</div>
-						</>
-					)
-				}}
-			/>
+							}
+							renderMessage={(m) => {
+								if (m.role !== 'assistant') return null
+								const answer = answersByMsg[m.id]
+								if (answer) {
+									return (
+										<>
+											<AssistantAvatar />
+											<div className="msg-body">
+												<AnswerCard answer={answer} messageId={m.id} />
+											</div>
+										</>
+									)
+								}
+								const decision = decisionsByMsg[m.id]
+								if (decision) {
+									return (
+										<>
+											<AssistantAvatar />
+											<div className="msg-body">
+												<AbstainCard
+													decision={decision.decision}
+													rationale={decision.rationale}
+													userOutcome={decision.userOutcome}
+												/>
+											</div>
+										</>
+									)
+								}
+								return (
+									<>
+										<AssistantAvatar />
+										<div className="msg-body">
+											<MessageParagraphs text={m.content} />
+										</div>
+									</>
+								)
+							}}
+						/>
+					)}
+				</div>
+			</div>
 		</div>
 	)
 }

@@ -73,11 +73,24 @@ export interface ParagraphSegment {
 }
 
 /**
- * Split a message into direction-tagged paragraphs. Splitting is on
- * newlines only — the text is never reworded, reordered or translated.
+ * Split a message into direction-tagged paragraphs.
+ * Also gracefully separates title markers, Arabic calligraphy passages,
+ * and translation blocks ("Artinya: ...") so each segment gets its
+ * natural direction, proper typography, and callout treatment.
  */
 export function toParagraphs(text: string): ParagraphSegment[] {
-	return text
+	const normalized = text
+		// Break before Arabic text when preceded by bracketed title: [Title] Arabic
+		.replace(/(\[[^\]]+\])\s*([(\[\"\'«“\s]*[\u0600-\u06FF])/g, '$1\n$2')
+		// Break before "Artinya:" translation marker if glued to preceding text
+		.replace(/([^\n])\s*(Artinya\s*:)/gi, '$1\n$2')
+		// Break before subsequent bracketed references: ... [Hadits...] or ... [QS...]
+		.replace(
+			/([^\n])\s*(\[(?:Hadits|QS|Surat|Ayat|Kaidah|Dalil)[^\]]*\])/gi,
+			'$1\n\n$2',
+		)
+
+	return normalized
 		.split(/\n+/)
 		.map((p) => p.trim())
 		.filter((p) => p.length > 0)

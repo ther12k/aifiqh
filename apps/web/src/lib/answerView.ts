@@ -59,7 +59,7 @@ export function sectionLabel(kind: AnswerSectionKind): string {
 	return SECTION_LABELS[kind]
 }
 
-/** Strip every HTML tag/entity — answers render as plain text only. */
+/** Strip every HTML tag/entity — answers render as plain text only, preserving line breaks. */
 export function stripUnsafeHtml(text: string): string {
 	return (
 		text
@@ -70,7 +70,14 @@ export function stripUnsafeHtml(text: string): string {
 			)
 			.replace(/<[^>]*>/g, ' ')
 			.replace(/&[a-zA-Z]+;|&#\d+;/g, ' ')
-			.replace(/\s+/g, ' ')
+			.replace(/\r\n/g, '\n')
+			.replace(/\r/g, '\n')
+			// collapse horizontal whitespace (spaces & tabs)
+			.replace(/[^\S\n]+/g, ' ')
+			.split('\n')
+			.map((line) => line.trim())
+			.join('\n')
+			.replace(/\n{3,}/g, '\n\n')
 			.trim()
 	)
 }

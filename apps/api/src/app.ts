@@ -12,7 +12,9 @@ import {
 } from './answers/answerTraceService'
 import {
 	ChatError,
+	deleteConversation,
 	getConversation,
+	listConversations,
 	postUserTurn,
 	retryLastTurn,
 	startConversation,
@@ -2271,6 +2273,13 @@ function sourceRoutes(deps: AppDeps) {
 					ctx.traceId,
 				)
 			})
+			.get('/conversations', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				return await scopedTransaction(sql, principal.tenantId, (tx) =>
+					listConversations(tx, principal),
+				)
+			})
 			.post('/conversations', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
 				const principal = await ctx.requirePermission('knowledge:read')
@@ -2335,6 +2344,22 @@ function sourceRoutes(deps: AppDeps) {
 				try {
 					return await scopedTransaction(sql, principal.tenantId, (tx) =>
 						getConversation(tx, principal, ctx.params.id),
+					)
+				} catch (err) {
+					if (err instanceof ChatError) {
+						ctx.set.status = 404
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.delete('/conversations/:id', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				ctx.requireCsrf()
+				try {
+					return await scopedTransaction(sql, principal.tenantId, (tx) =>
+						deleteConversation(tx, principal, ctx.params.id),
 					)
 				} catch (err) {
 					if (err instanceof ChatError) {

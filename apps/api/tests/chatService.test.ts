@@ -364,6 +364,43 @@ describe('CHAT-001: conversation + per-turn grounded answers', () => {
 		const viewBody = await view.json()
 		expect(viewBody.messages).toHaveLength(2)
 		expect(viewBody.messages[1].answerStatus).toBe('draft')
+		expect(viewBody.messages[1].answer).toBeTruthy()
+		expect(viewBody.messages[1].answer.sections.length).toBeGreaterThan(0)
+		expect(viewBody.messages[1].answer.citations.length).toBeGreaterThan(0)
+
+		// list conversations endpoint
+		const listRes = await testApp.handle(
+			new Request('http://localhost/conversations', {
+				headers: auth,
+			}),
+		)
+		expect(listRes.status).toBe(200)
+		const listBody = await listRes.json()
+		expect(Array.isArray(listBody)).toBeTrue()
+		const item = listBody.find((c: { id: string }) => c.id === conversationId)
+		expect(item).toBeTruthy()
+		expect(item.title).toBe('HTTP chat')
+		expect(item.snippet).toContain('kura-kura')
+		expect(item.messageCount).toBe(2)
+
+		// delete conversation removes it from the user list
+		const delRes = await testApp.handle(
+			new Request(`http://localhost/conversations/${conversationId}`, {
+				method: 'DELETE',
+				headers: auth,
+			}),
+		)
+		expect(delRes.status).toBe(200)
+		const delBody = await delRes.json()
+		expect(delBody.deleted).toBeTrue()
+
+		// after delete, accessing it returns 404
+		const deletedGet = await testApp.handle(
+			new Request(`http://localhost/conversations/${conversationId}`, {
+				headers: auth,
+			}),
+		)
+		expect(deletedGet.status).toBe(404)
 
 		// foreign principal (with a resolvable session) is denied per tenant
 		const [other] = await sql<{ id: string }[]>`
