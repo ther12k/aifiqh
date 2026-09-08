@@ -39,6 +39,9 @@ export function SourceViewer({
 	initialHighlightSpanIds = [],
 }: SourceViewerProps) {
 	const [spans, setSpans] = useState<ViewerSpan[]>([])
+	const [loadState, setLoadState] = useState<
+		{ kind: 'loading' } | { kind: 'ready' } | { kind: 'error'; message: string }
+	>({ kind: 'loading' })
 	const [pageFilter, setPageFilter] = useState<number | null>(null)
 	const [query, setQuery] = useState('')
 	const [selection, setSelection] = useState<SelectionRange | null>(null)
@@ -51,20 +54,44 @@ export function SourceViewer({
 	const [attaching, setAttaching] = useState(false)
 
 	useEffect(() => {
-		fetch(`/sources/${sourceId}/revisions/${revisionId}/spans`)
-			.then((r) => (r.ok ? r.json() : []))
-			.then((rows: Array<Record<string, unknown>>) => {
+		const controller = new AbortController()
+		setLoadState({ kind: 'loading' })
+		setSpans([])
+
+		fetch(`/sources/${sourceId}/revisions/${revisionId}/spans`, {
+			signal: controller.signal,
+		})
+			.then(async (r) => {
+				if (!r.ok) throw new Error(`HTTP_${r.status}`)
+				return (await r.json()) as Array<Record<string, unknown>>
+			})
+			.then((rows) => {
 				setSpans(
 					rows.map((r) => ({
 						id: String(r.id),
 						spanKey: String(r.span_key),
 						originalText: String(r.original_text),
+						correctedText:
+							typeof r.corrected_text === 'string'
+								? r.corrected_text
+								: typeof r.correctedText === 'string'
+									? r.correctedText
+									: null,
 						pageNumber: (r.page_number as number | null) ?? null,
 						sectionOrdinal: (r.ordinal as number | null) ?? null,
 					})),
 				)
+				setLoadState({ kind: 'ready' })
 			})
-			.catch(() => setSpans([]))
+			.catch((error: unknown) => {
+				if (error instanceof DOMException && error.name === 'AbortError') return
+				setLoadState({
+					kind: 'error',
+					message: 'Sumber gagal dimuat. Coba muat ulang halaman.',
+				})
+			})
+
+		return () => controller.abort()
 	}, [sourceId, revisionId])
 
 	const highlightIds = useMemo(
@@ -95,6 +122,10 @@ export function SourceViewer({
 					spans.map((s) => s.pageNumber).filter((p): p is number => p !== null),
 				),
 			].sort((a, b) => a - b),
+		[spans],
+	)
+	const hasCorrectedText = useMemo(
+		() => spans.some((span) => Boolean(span.correctedText)),
 		[spans],
 	)
 
@@ -193,15 +224,33 @@ export function SourceViewer({
 						onChange={() => setTextMode('corrected')}
 					/>
 					Teks terkoreksi
+					{!hasCorrectedText && ' (belum tersedia)'}
 				</label>
 			</fieldset>
+
+			{loadState.kind === 'loading' && (
+				<output data-testid="viewer-loading">Memuat potongan sumber…</output>
+			)}
+			{loadState.kind === 'error' && (
+				<p role="alert" data-testid="viewer-load-error">
+					{loadState.message}
+				</p>
+			)}
+			{loadState.kind === 'ready' && spans.length === 0 && (
+				<p data-testid="viewer-empty">
+					Belum ada potongan teks untuk revisi sumber ini.
+				</p>
+			)}
 
 			<ol data-testid="viewer-spans">
 				{visible.map((span) => {
 					const isSelected = selectedIds.has(span.id)
 					const isHighlighted = highlightIds.includes(span.id)
 					const text = displayedText(
-						{ rawOcr: span.originalText, corrected: span.originalText },
+						{
+							rawOcr: span.originalText,
+							corrected: span.correctedText ?? null,
+						},
 						textMode,
 					)
 					return (

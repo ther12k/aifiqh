@@ -105,5 +105,8 @@ describe('source viewer with exact-span selection (STU-002)', () => {
 		expect(html).toContain('mode-raw')
 		expect(html).toContain('mode-corrected')
 		expect(html).toContain('viewer-spans')
+		expect(html).toContain('viewer-loading')
+		expect(html).toContain('Teks terkoreksi')
+		expect(html).toContain('belum tersedia')
 	})
 })

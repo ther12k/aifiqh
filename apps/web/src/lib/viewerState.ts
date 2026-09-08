@@ -8,6 +8,7 @@ export interface ViewerSpan {
 	id: string
 	spanKey: string
 	originalText: string
+	correctedText?: string | null
 	pageNumber: number | null
 	sectionOrdinal: number | null
 }

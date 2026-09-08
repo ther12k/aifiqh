@@ -453,6 +453,20 @@ const SEARCH_ROUTES: Array<{ match: RegExp; hash: string }> = [
 	{ match: /ops|operasional|status|health|sehat/i, hash: '#/ops' },
 ]
 
+/** Normalize a hash route before comparing it with a navigation destination. */
+export function routePath(route: string): string {
+	const path = route.split(/[?#]/, 1)[0].replace(/\/+$/, '')
+	return path || '/'
+}
+
+export function isNavItemActive(route: string, href: string): boolean {
+	const current = routePath(route)
+	const target = routePath(href.replace(/^#/, ''))
+	return target === '/'
+		? current === '/'
+		: current === target || current.startsWith(`${target}/`)
+}
+
 /** the strongest role the permission set implies — for the identity chip */
 function roleLabel(permissions: string[]): string {
 	if (permissions.includes('config:manage')) return 'Admin'
@@ -502,6 +516,7 @@ export default function App() {
 	const [me, setMe] = useState<Me | null>(null)
 	const [meLoading, setMeLoading] = useState(true)
 	const [devLoginEnabled, setDevLoginEnabled] = useState(false)
+	const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
 	useEffect(() => {
 		fetch('/health/components')
@@ -575,7 +590,9 @@ export default function App() {
 								<a
 									key={item.href}
 									href={item.href}
-									className={route === item.href.slice(1) ? 'active-nav' : ''}
+									className={
+										isNavItemActive(route, item.href) ? 'active-nav' : ''
+									}
 								>
 									<NavIcon d={item.icon} />
 									{item.label}
@@ -658,18 +675,16 @@ export default function App() {
 						<BrandMark small />
 						<span>Tafaqquh</span>
 					</a>
-					<div className="mobile-links">
-						{NAV_SECTIONS.flatMap((s) => s.items).map((item) => (
-							<a
-								key={item.href}
-								href={item.href}
-								className={route === item.href.slice(1) ? 'active-mnav' : ''}
-							>
-								<NavIcon d={item.icon} />
-								<span>{item.label}</span>
-							</a>
-						))}
-					</div>
+					<button
+						type="button"
+						className="mobile-menu-toggle"
+						aria-expanded={mobileMenuOpen}
+						aria-controls="mobile-route-menu"
+						onClick={() => setMobileMenuOpen((open) => !open)}
+					>
+						<span aria-hidden="true">☰</span>
+						<span>Menu</span>
+					</button>
 					{me ? (
 						<button type="button" className="mobile-logout" onClick={logout}>
 							Keluar
@@ -679,6 +694,29 @@ export default function App() {
 							Masuk
 						</a>
 					)}
+					<div
+						id="mobile-route-menu"
+						className={`mobile-links ${mobileMenuOpen ? 'is-open' : ''}`}
+					>
+						{NAV_SECTIONS.map((section) => (
+							<div className="mobile-link-group" key={section.label}>
+								<span className="mobile-link-group-label">{section.label}</span>
+								{section.items.map((item) => (
+									<a
+										key={item.href}
+										href={item.href}
+										className={
+											isNavItemActive(route, item.href) ? 'active-mnav' : ''
+										}
+										onClick={() => setMobileMenuOpen(false)}
+									>
+										<NavIcon d={item.icon} />
+										<span>{item.label}</span>
+									</a>
+								))}
+							</div>
+						))}
+					</div>
 				</nav>
 				<header className="topbar">
 					<div className="topbar-search">
