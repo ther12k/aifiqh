@@ -12,7 +12,7 @@ import { StudioDashboardContainer } from './studio/StudioDashboardContainer'
 
 export { isNavItemActive, routePath } from './lib/routes'
 
-import { isNavItemActive } from './lib/routes'
+import { authGuardDecision, isNavItemActive } from './lib/routes'
 
 interface Health {
 	status: string
@@ -810,6 +810,12 @@ export default function App() {
 			.catch(() => setDevLoginEnabled(false))
 	}, [])
 
+	useEffect(() => {
+		if (authGuardDecision(route, !meLoading, Boolean(me)) === 'redirect') {
+			window.location.replace('/auth/login')
+		}
+	}, [route, meLoading, me])
+
 	const permissions = me?.permissions ?? []
 
 	async function logout() {
@@ -840,6 +846,16 @@ export default function App() {
 				authenticated={Boolean(me)}
 			/>
 		)
+	}
+
+	// Protected routes never render the guest app shell. While /auth/me is in
+	// flight we wait, then the effect above sends anonymous visitors to OIDC.
+	const authDecision = authGuardDecision(route, !meLoading, Boolean(me))
+	if (authDecision === 'loading') {
+		return <output className="gate-note">Memeriksa sesi…</output>
+	}
+	if (authDecision === 'redirect') {
+		return <output className="gate-note">Mengalihkan ke halaman masuk…</output>
 	}
 
 	// chat gets its own workspace shell: one sidebar (nav + history) and a
@@ -1047,12 +1063,6 @@ export default function App() {
 							</div>
 							<PageQuote quote={PAGE_QUOTES['/studio']} />
 						</div>
-					)}
-
-					{route === '/chat' && !meLoading && !me && (
-						<p className="gate-note">
-							<a href="/auth/login">Masuk</a> untuk memulai percakapan fiqih.
-						</p>
 					)}
 
 					{route === '/sources' && <SourceRegistry permissions={permissions} />}
