@@ -819,7 +819,8 @@ export default function App() {
 			method: 'POST',
 			headers: { 'x-csrf-token': csrf },
 		})
-		window.location.reload()
+		// back to the public landing, not a reload of the protected route
+		window.location.href = '/'
 	}
 
 	function onSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
