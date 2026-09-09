@@ -207,6 +207,31 @@ describe('CHAT-001: conversation + per-turn grounded answers', () => {
 		}
 	})
 
+	test('AI-002: every turn reports how it was generated (no silent fallback)', async () => {
+		const f = await setupFixture()
+		const conv = await startConversation(sql, f.principal, 'gen-meta')
+
+		// tests run with AIFIQH_CHAT_MODEL=off — the deterministic composer
+		// must say so explicitly instead of degrading silently
+		const turn = await postUserTurn(sql, f.principal, {
+			conversationId: conv.conversationId,
+			content: 'hukum makan siamang',
+			indexReleaseId: f.releaseId,
+		})
+		expect(turn.status).toBe('answered')
+		expect(turn.generation.mode).toBe('deterministic_rag')
+		expect(turn.generation.provider).toBe('builtin-compose')
+		expect(turn.generation.model).toBe('compose-from-evidence')
+		expect(turn.generation.fallbackReason).toBe('kill_switch')
+
+		// the conversation view derives the same metadata from the stored
+		// provider so LOADED answers stay distinguishable too
+		const view = await getConversation(sql, f.principal, conv.conversationId)
+		const answered = view.messages.find((m) => m.answer)
+		expect(answered?.answer?.generation.mode).toBe('deterministic_rag')
+		expect(answered?.answer?.generation.provider).toBe('builtin-compose')
+	})
+
 	test('prior messages cannot supply uncited facts — turns cite only their own manifest', async () => {
 		const f = await setupFixture()
 		const conv = await startConversation(sql, f.principal, 'isolation')

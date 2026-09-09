@@ -3,6 +3,10 @@ import { recordAuditInTx } from '../audit/audit'
 import type { Sql } from '../db/client'
 import { HashEmbeddingProvider } from '../index/embeddingService'
 import { DefaultModelGateway } from '../llm/gateway'
+import {
+	type ChatModelResolution,
+	resolveChatModelDiagnostics,
+} from '../llm/modelRouter'
 import { resolveChatModelConfig } from '../llm/modelRouter'
 import {
 	type ResponseDecisionOutcome,
@@ -82,6 +86,63 @@ export interface TurnResult {
 	/** canonical citations for this turn — the UI's evidence panel reads
 	 * these (span-scoped, quote verified at finalize) */
 	citations: TurnCitation[]
+	/** AI-002: how this turn was generated, with an explicit reason when
+	 * the LLM path did not run — no silent fallback */
+	generation: GenerationMetadata
+}
+
+/** how a turn's answer text was produced */
+export type GenerationMode = 'llm_rag' | 'deterministic_rag'
+
+/**
+ * Why the LLM path did not produce the answer (null when it did). Codes
+ * are stable API surface — the UI maps them to plain language.
+ */
+export type GenerationFallbackReason =
+	| 'model_not_configured'
+	| 'secret_unavailable'
+	| 'ambiguous_model_config'
+	| 'kill_switch'
+	| 'provider_error'
+	| 'invalid_output'
+	| 'citation_validation_failed'
+
+export interface GenerationMetadata {
+	mode: GenerationMode
+	provider: string
+	model: string
+	fallbackReason: GenerationFallbackReason | null
+}
+
+/** resolution diagnostic → user-visible fallback reason */
+function resolutionFallbackReason(
+	reason: ChatModelResolution,
+): GenerationFallbackReason {
+	switch (reason) {
+		case 'secret_unavailable':
+			return 'secret_unavailable'
+		case 'ambiguous':
+			return 'ambiguous_model_config'
+		case 'kill_switch':
+			return 'kill_switch'
+		default:
+			// not_configured / disabled_or_empty / resolved-unreachable
+			return 'model_not_configured'
+	}
+}
+
+/** pipeline failure issue codes → the fallback reason the turn reports */
+function fallbackReasonFromGeneration(
+	issues: ReadonlyArray<{ code: string }>,
+): GenerationFallbackReason {
+	const codes = new Set(issues.map((i) => i.code))
+	if (codes.has('GATEWAY_ERROR') || codes.has('INCOMPLETE_GENERATION')) {
+		return 'provider_error'
+	}
+	if (codes.has('UNKNOWN_EVIDENCE_ID') || codes.has('QUOTE_MISMATCH')) {
+		return 'citation_validation_failed'
+	}
+	return 'invalid_output'
 }
 
 export interface TurnCitation {
@@ -421,6 +482,13 @@ async function runTurn(
 				citedCount: 0,
 			}),
 			citations: [],
+			// abstention is a decision, not a fallback — no generation ran
+			generation: {
+				mode: 'deterministic_rag',
+				provider: '',
+				model: '',
+				fallbackReason: null,
+			},
 		}
 	}
 
@@ -496,6 +564,13 @@ async function runTurn(
 				citedCount: 0,
 			}),
 			citations: [],
+			// abstention/escalation is a decision, not a fallback
+			generation: {
+				mode: 'deterministic_rag',
+				provider: '',
+				model: '',
+				fallbackReason: null,
+			},
 		}
 	}
 
@@ -531,8 +606,12 @@ async function runTurn(
 		spanId: string
 		quote: string
 	}> = []
+	// AI-002: why the LLM path did not produce the answer (null when it did)
+	let fallbackReason: GenerationFallbackReason | null = null
 
-	const model = await resolveChatModelConfig(sql)
+	const modelDiag = await resolveChatModelDiagnostics(sql)
+	const model = modelDiag.config
+	if (!model) fallbackReason = resolutionFallbackReason(modelDiag.reason)
 	if (model) {
 		const gateway = new DefaultModelGateway()
 		gateway.registerProvider(model.adapter)
@@ -565,6 +644,7 @@ async function runTurn(
 		if (generation.status === 'generated' && generation.answer) {
 			usedProvider = model.providerKey
 			usedModel = generation.pinned?.modelId || model.modelId
+			fallbackReason = null
 			// citations follow the model's claim links — quotes stay verbatim
 			// unit text read from the pinned release, never model prose
 			const citedIds: string[] = []
@@ -590,7 +670,8 @@ async function runTurn(
 				.filter((c): c is NonNullable<typeof c> => c !== null)
 		} else {
 			// model output failed grounding/validation — fall back, never
-			// surface an ungrounded draft
+			// surface an ungrounded draft; record WHY for diagnostics
+			fallbackReason = fallbackReasonFromGeneration(generation.issues)
 			generation = null
 		}
 	}
@@ -647,6 +728,12 @@ async function runTurn(
 				citedCount: 0,
 			}),
 			citations: [],
+			generation: {
+				mode: 'deterministic_rag',
+				provider: '',
+				model: '',
+				fallbackReason,
+			},
 		}
 	}
 
@@ -694,6 +781,14 @@ async function runTurn(
 			claimSupportOk: claimSupportEval.allSupported,
 		}),
 		citations,
+		generation: {
+			mode:
+				usedProvider === 'builtin-compose' ? 'deterministic_rag' : 'llm_rag',
+			provider: usedProvider,
+			model: usedModel,
+			fallbackReason:
+				usedProvider === 'builtin-compose' ? fallbackReason : null,
+		},
 	}
 }
 
@@ -738,6 +833,9 @@ export interface ConversationView {
 			sections: Array<{ kind: string; markdown: string }>
 			citations: TurnCitation[]
 			verification: VerificationStatus
+			/** AI-003: how this answer was generated (mode derived from the
+			 * stored provider; exact fallback reasons live on the turn only) */
+			generation: GenerationMetadata
 		} | null
 		decision?: {
 			decision: string
@@ -980,6 +1078,17 @@ export async function getConversation(
 						citationsOk: citations.length > 0,
 						citedCount: citations.length,
 					}),
+					generation: {
+						mode:
+							ans.provider && ans.provider !== 'builtin-compose'
+								? ('llm_rag' as const)
+								: ('deterministic_rag' as const),
+						provider: ans.provider ?? '',
+						model: ans.model ?? '',
+						// exact fallback reasons are live-turn surface only until
+						// OPS-AI-001 persists them per answer
+						fallbackReason: null,
+					},
 				}
 			}
 

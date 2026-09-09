@@ -72,16 +72,37 @@ interface ResolvedRow {
 }
 
 /**
- * Resolve the chat model: the chat-production alias wins; without an
- * alias, a single enabled provider that has models is accepted (dev
- * convenience). Disabled providers or unresolvable secrets → null.
+ * Why a chat model is (not) usable — AI-002: no silent fallback. Every
+ * `null` from resolveChatModelConfig carries an explicit reason so turns,
+ * logs, and ops dashboards can distinguish "AI never configured" from
+ * "configured but the secret stopped resolving".
  */
-export async function resolveChatModelConfig(
+export type ChatModelResolution =
+	| 'resolved'
+	| 'kill_switch'
+	| 'not_configured'
+	| 'disabled_or_empty'
+	| 'ambiguous'
+	| 'secret_unavailable'
+
+export interface ChatModelDiagnostics {
+	config: ChatModelConfig | null
+	reason: ChatModelResolution
+}
+
+/**
+ * Resolve the chat model WITH an explicit reason when it fails (AI-002).
+ * The resolution order and rules are identical to resolveChatModelConfig —
+ * that function is a thin wrapper over this one.
+ */
+export async function resolveChatModelDiagnostics(
 	sql: Sql,
-): Promise<ChatModelConfig | null> {
+): Promise<ChatModelDiagnostics> {
 	// explicit kill-switch: tests (and any environment that must stay
 	// hermetic/offline) force the deterministic built-in composer
-	if (process.env.AIFIQH_CHAT_MODEL === 'off') return null
+	if (process.env.AIFIQH_CHAT_MODEL === 'off') {
+		return { config: null, reason: 'kill_switch' }
+	}
 
 	const aliasTarget = await sql<
 		{ target_type: string; target_id: string }[]
@@ -112,14 +133,16 @@ export async function resolveChatModelConfig(
 			order by pc.key, mc.model_id`
 		if (!direct && new Set(rows.map((r) => r.provider_key)).size > 1) {
 			// ambiguous without an explicit alias — do not guess
-			return null
+			return { config: null, reason: 'ambiguous' }
 		}
 	}
 
 	const row = rows[0]
-	if (!row) return null
+	if (!row) return { config: null, reason: 'not_configured' }
 	const apiKey = row.secret_ref ? resolveSecretRef(row.secret_ref) : null
-	if (row.secret_ref && !apiKey) return null
+	if (row.secret_ref && !apiKey) {
+		return { config: null, reason: 'secret_unavailable' }
+	}
 
 	const providerKey = row.provider_key
 	const adapter: ModelProviderAdapter =
@@ -138,10 +161,20 @@ export async function resolveChatModelConfig(
 				})
 
 	return {
-		providerKey,
-		providerType: row.provider_type,
-		modelId: row.model_id,
-		adapter,
-		secretSource: row.secret_ref ?? 'no-secret-ref',
+		config: {
+			providerKey,
+			providerType: row.provider_type,
+			modelId: row.model_id,
+			adapter,
+			secretSource: row.secret_ref ?? 'no-secret-ref',
+		},
+		reason: 'resolved',
 	}
+}
+
+/** Resolve the chat model, or null with the reason recorded separately. */
+export async function resolveChatModelConfig(
+	sql: Sql,
+): Promise<ChatModelConfig | null> {
+	return (await resolveChatModelDiagnostics(sql)).config
 }

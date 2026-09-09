@@ -28,6 +28,10 @@ import {
 	saveConversationOrganization,
 	toggleConversationPin,
 } from '../lib/conversationOrganization'
+import {
+	type GenerationMetadata,
+	generationBadge,
+} from '../lib/generationBadge'
 import { searchRouteFor } from '../lib/routes'
 import { threadTimeLabel, withDayDividers } from '../lib/threadView'
 import { ChatShell, MessageParagraphs } from './ChatShell'
@@ -73,6 +77,8 @@ interface StoredAnswer {
 	citations: TurnCitation[]
 	/** layered verification status from the API */
 	verification: TurnVerification
+	/** AI-003: how this answer was generated (absent on pre-AI-002 rows) */
+	generation?: GenerationMetadata | null
 }
 
 /** citation row from the turn API (span-scoped, quote verified) */
@@ -349,9 +355,12 @@ function csrfToken(): string {
 function AnswerCard({
 	answer,
 	messageId,
+	isOperator = false,
 }: {
 	answer: StoredAnswer
 	messageId: string
+	/** ops:read holders get the provider/model line (AI-003) */
+	isOperator?: boolean
 }) {
 	const [expanded, setExpanded] = useState(false)
 	const [citationsOpen, setCitationsOpen] = useState(false)
@@ -387,6 +396,8 @@ function AnswerCard({
 	const extra = answer.sections.filter(
 		(s) => s.kind !== 'direct_answer' && s.kind !== 'evidence',
 	)
+	// AI-003: never hide whether the LLM path actually ran
+	const genBadge = generationBadge(answer.generation, isOperator)
 
 	async function copyPlain() {
 		try {
@@ -412,6 +423,19 @@ function AnswerCard({
 
 	return (
 		<div className="answer-card">
+			{genBadge && (
+				<div className="gen-badge-row">
+					<span
+						className={`gen-badge gen-badge-${genBadge.tone}`}
+						title={genBadge.title}
+					>
+						{genBadge.label}
+					</span>
+					{genBadge.detail && (
+						<span className="gen-badge-detail">{genBadge.detail}</span>
+					)}
+				</div>
+			)}
 			{direct.map((s) => (
 				<MessageParagraphs
 					key={`d-${s.kind}-${s.text.slice(0, 24)}`}
@@ -803,6 +827,7 @@ export function ChatContainer({
 						sections: Array<{ kind: string; markdown: string }>
 						citations: TurnCitation[]
 						verification: TurnVerification
+						generation?: GenerationMetadata | null
 					} | null
 					decision?: {
 						decision: string
@@ -855,6 +880,7 @@ export function ChatContainer({
 								scholarlyReview: 'not_reviewed',
 								userOutcome: 'answered',
 							},
+							generation: m.answer.generation ?? null,
 						}
 					} else if (m.decision) {
 						loadedDecisions[m.id] = {
@@ -1039,6 +1065,7 @@ export function ChatContainer({
 				model?: string
 				citations?: TurnCitation[]
 				verification?: TurnVerification
+				generation?: GenerationMetadata
 				decision: { decision: string; rationale?: string }
 				answer: {
 					sections: Array<{ kind: string; markdown: string }>
@@ -1082,6 +1109,7 @@ export function ChatContainer({
 							scholarlyReview: 'not_reviewed',
 							userOutcome: 'answered',
 						},
+						generation: result.generation ?? null,
 					}
 				}
 			} else {
@@ -1563,7 +1591,11 @@ export function ChatContainer({
 											<AssistantAvatar />
 											<div className="msg-body">
 												{head}
-												<AnswerCard answer={answer} messageId={m.id} />
+												<AnswerCard
+													answer={answer}
+													messageId={m.id}
+													isOperator={permissions.includes('ops:read')}
+												/>
 											</div>
 										</>
 									)

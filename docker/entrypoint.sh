@@ -24,6 +24,15 @@ bun scripts/migrate.ts
 echo "==> Seeding database..."
 bun scripts/seed.ts || true
 
+# AI-001: production must not deploy silently with the AI path off.
+# Configuration itself stays an EXPLICIT deployment step
+# (scripts/configure_model.ts — never run blindly on boot), but when the
+# deployment declares the model as required, verification gates startup.
+if [ "${AIFIQH_REQUIRE_CHAT_MODEL}" = "true" ]; then
+  echo "==> Verifying chat model configuration (AIFIQH_REQUIRE_CHAT_MODEL=true)..."
+  bun scripts/verify_model_config.ts
+fi
+
 # Start unified server (serves both API and Web SPA on a single port)
 echo "==> Starting AiFiqh Unified Server on port ${PORT:-3000}..."
 exec bun apps/api/src/index.ts

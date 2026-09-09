@@ -5112,3 +5112,44 @@ h2 {
 		align-items: flex-start;
 	}
 }
+
+/* ==========================================================================
+   Generation-mode badge (AI-003): AI + Sumber vs Sumber saja
+   ========================================================================== */
+.gen-badge-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 8px;
+	flex-wrap: wrap;
+}
+
+.gen-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font-size: 11px;
+	font-weight: 700;
+	padding: 3px 10px;
+	border-radius: 999px;
+	border: 1px solid transparent;
+	cursor: help;
+}
+
+.gen-badge-ai {
+	background: var(--primary-soft);
+	border-color: var(--primary-border);
+	color: var(--primary-strong);
+}
+
+.gen-badge-sources {
+	background: var(--surface-subtle, #eef4f0);
+	border-color: var(--border);
+	color: var(--text-muted);
+}
+
+.gen-badge-detail {
+	font-size: 10.5px;
+	color: var(--text-faint);
+	font-family: ui-monospace, monospace;
+}

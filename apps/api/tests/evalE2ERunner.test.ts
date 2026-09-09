@@ -128,6 +128,12 @@ function turn(overrides: Partial<TurnResult>): TurnResult {
 			userOutcome: 'insufficient_evidence',
 		},
 		citations: [],
+		generation: {
+			mode: 'deterministic_rag',
+			provider: '',
+			model: '',
+			fallbackReason: null,
+		},
 		...overrides,
 	}
 }
