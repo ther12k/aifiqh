@@ -400,17 +400,45 @@ function AnswerCard({
 						<ol className="citation-list">
 							{answer.citations.map((c) => (
 								<li key={c.spanId} data-testid="citation-row">
-									<div className="citation-head">
-										<span className="citation-ordinal">#{c.ordinal}</span>
-										<button
-											type="button"
-											className="citation-report"
-											onClick={() => submitFeedback('citation_issue', c.spanId)}
-										>
-											Rujukan salah?
-										</button>
+									<span className="citation-ordinal" aria-hidden="true">
+										{c.ordinal}
+									</span>
+									<div className="citation-body">
+										<div className="citation-head">
+											<button
+												type="button"
+												className="citation-report"
+												onClick={() =>
+													submitFeedback('citation_issue', c.spanId)
+												}
+											>
+												Rujukan salah?
+											</button>
+											<a
+												className="citation-open"
+												href={`#/sources/${c.sourceId}/revisions/${c.sourceRevisionId}?span=${c.spanId}`}
+												title="Buka pada revisi terkunci di Sumber"
+											>
+												<span className="sr-only">
+													{`Buka sumber ${c.ordinal} pada viewer`}
+												</span>
+												<svg
+													width="13"
+													height="13"
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													strokeWidth="2"
+													strokeLinecap="round"
+													strokeLinejoin="round"
+													aria-hidden="true"
+												>
+													<path d="M14 5h5v5M19 5l-8 8M9 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3" />
+												</svg>
+											</a>
+										</div>
+										<MessageParagraphs text={c.quote} />
 									</div>
-									<MessageParagraphs text={c.quote} />
 								</li>
 							))}
 						</ol>
@@ -1166,10 +1194,7 @@ export function ChatContainer() {
 							{activeTitle}
 						</span>
 					</div>
-					<span className="chat-tagline">
-						Tanyakan Pertanyaan Fiqih Anda, Dapatkan Jawaban dengan Dalil yang
-						Jelas
-					</span>
+					<span className="chat-tagline">Tanyakan Pertanyaan Fiqih Anda,</span>
 					<button
 						type="button"
 						className="btn-top-new"

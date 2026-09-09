@@ -265,111 +265,201 @@ function PageQuote({ quote }: { quote: { text: string; source: string } }) {
 	)
 }
 
-/** feature chips on the landing page (unauthenticated home) */
-const LANDING_FEATURES = [
+/** small icon features under the hero copy (reference landing) */
+const LANDING_MINI_FEATURES = [
+	{ icon: ICON_PATHS.shield, title: 'Berbasis Dalil Terverifikasi' },
+	{ icon: ICON_PATHS.book, title: 'Dari Sumber Terpercaya' },
+	{ icon: ICON_PATHS.heart, title: 'Mendukung Pembelajaran' },
+	{ icon: ICON_PATHS.star, title: 'Untuk Umat yang Lebih Baik' },
+]
+
+/** five product cards under the hero — every link is a real route */
+const LANDING_CARDS = [
 	{
-		icon: ICON_PATHS.book,
-		title: 'Bersumber pada Dalil',
-		desc: "Al-Qur'an & Hadis",
+		icon: ICON_PATHS.chat,
+		title: 'Chat Berbasis Dalil',
+		desc: 'Tanyakan pertanyaan fiqih apa saja dan dapatkan jawaban yang jelas dengan rujukan dari Al-Qur’an, Hadits, dan kitab ulama.',
+		href: '#/chat',
 	},
 	{
-		icon: ICON_PATHS.check,
-		title: 'Akurat & Terpercaya',
-		desc: 'Kutipan diverifikasi',
+		icon: ICON_PATHS.book,
+		title: 'Sumber Terpercaya',
+		desc: 'Akses langsung ke rujukan klasik dan kontemporer dari ulama yang diakui, dengan informasi yang terstruktur dan mudah ditelusuri.',
+		href: '#/sources',
+	},
+	{
+		icon: ICON_PATHS.edit,
+		title: 'Knowledge Studio',
+		desc: 'Susun, kelola, dan kembangkan pengetahuan fiqih untuk pembelajaran yang lebih mendalam dan sistematis.',
+		href: '#/studio',
 	},
 	{
 		icon: ICON_PATHS.shield,
-		title: 'Mendukung Pembelajaran',
-		desc: 'Telaah berlapis',
+		title: 'Tinjauan Klaim',
+		desc: 'Tinjau ulang jawaban AI, verifikasi sumber, dan pastikan akurasi dengan analisis mendalam terhadap dalil dan pendapat ulama.',
+		href: '#/reviewer',
 	},
 	{
-		icon: ICON_PATHS.heart,
-		title: 'Untuk Umat yang Lebih Baik',
-		desc: 'Gratis & tanpa iklan',
+		icon: ICON_PATHS.pulse,
+		title: 'Monitoring Sistem',
+		desc: 'Pantau status komponen, performa sistem, dan kualitas jawaban secara real-time demi layanan yang selalu andal dan aman.',
+		href: '#/health',
 	},
 ]
 
 /** how an answer earns trust — mirrors the API verification contract */
-const LANDING_STEPS = [
+const LANDING_TRUST = [
 	{
-		n: '1',
-		title: 'Jawaban hanya dari korpus terkurasi',
-		desc: 'Setiap sumber melewati kurasi editorial sebelum boleh dikutip; teks di luar korpus tidak akan dijawab.',
+		icon: ICON_PATHS.book,
+		title: 'Berbasis Sumber Asli',
+		desc: 'Jawaban diambil dari Al-Qur’an, Hadits, dan kitab-kitab ulama yang kredibel.',
 	},
 	{
-		n: '2',
-		title: 'Kutipan diperiksa terhadap sumber asli',
-		desc: 'Integritas kutipan diverifikasi otomatis — teks yang dikutip harus cocok dengan span sumber yang disetujui.',
+		icon: ICON_PATHS.check,
+		title: 'Transparan dan Dapat Diverifikasi',
+		desc: 'Setiap jawaban dilengkapi rujukan yang dapat ditelusuri ke sumber aslinya.',
 	},
 	{
-		n: '3',
-		title: 'Telaah ulama terpisah dari mesin',
-		desc: 'Keputusan keilmuan ditinjau manusia; status telaahnya selalu ditampilkan bersama jawaban.',
+		icon: ICON_PATHS.heart,
+		title: 'Mendukung Pembelajaran',
+		desc: 'Tidak hanya memberi jawaban, tetapi juga membantu memahami proses berdalil.',
+	},
+	{
+		icon: ICON_PATHS.star,
+		title: 'Untuk Umat yang Lebih Baik',
+		desc: 'Kami percaya ilmu yang benar akan melahirkan keputusan yang baik.',
 	},
 ]
 
-/** decorative arch illustration for the landing hero (pure SVG) */
-function LandingArch() {
+/** decorative arch + quote card beside the trust section */
+function TrustVisual() {
 	return (
-		<div className="landing-visual" aria-hidden="true">
+		<div className="trust-visual" aria-hidden="true">
 			<svg
-				className="landing-arch-svg"
-				viewBox="0 0 300 360"
+				className="trust-arch"
+				viewBox="0 0 220 200"
 				fill="none"
 				role="presentation"
 			>
-				<defs>
-					<linearGradient id="arch-g" x1="0" y1="0" x2="0" y2="1">
-						<stop offset="0" stopColor="#eaf4ef" />
-						<stop offset="1" stopColor="#d3e7dd" />
-					</linearGradient>
-				</defs>
-				{/* arch */}
 				<path
-					d="M40 348V160c0-66 49-110 110-110s110 44 110 110v188"
-					stroke="url(#arch-g)"
-					strokeWidth="26"
+					d="M30 192V96c0-44 36-76 80-76s80 32 80 76v96"
+					stroke="#dcece4"
+					strokeWidth="18"
 				/>
-				{/* mosque inside the arch */}
 				<path
-					d="M150 120c-3 18-13 28-24 36-12 9-20 19-20 34v14h88v-14c0-15-8-25-20-34-11-8-21-18-24-36z"
+					d="M110 66c-2 12-9 19-16 24-8 6-13 13-13 22v9h58v-9c0-9-5-16-13-22-7-5-14-12-16-24z"
 					fill="#0d6b4f"
 				/>
+				<rect x="70" y="126" width="80" height="6" rx="3" fill="#c99a4b" />
 				<path
-					d="M150 96v-14m0 0c4-4 4-10 0-14"
-					stroke="#c99a4b"
-					strokeWidth="4"
-					strokeLinecap="round"
-				/>
-				<rect x="96" y="206" width="108" height="8" rx="4" fill="#c99a4b" />
-				<path
-					d="M104 214v56m92-56v56"
+					d="M78 132v40m64-40v40"
 					stroke="#0d6b4f"
-					strokeWidth="6"
-					strokeLinecap="round"
-				/>
-				{/* book under the arch */}
-				<path
-					d="M150 300c-14-10-32-14-52-14-7 0-14 .6-20 2v34c6-1.4 13-2 20-2 20 0 38 4 52 14 14-10 32-14 52-14 7 0 14 .6 20 2v-34c-6-1.4-13-2-20-2-20 0-38 4-52 14z"
-					stroke="#0d6b4f"
-					strokeWidth="6"
-					fill="#fff"
-					strokeLinejoin="round"
-				/>
-				{/* ground */}
-				<path
-					d="M20 348h260"
-					stroke="#cfe4da"
-					strokeWidth="8"
+					strokeWidth="5"
 					strokeLinecap="round"
 				/>
 			</svg>
-			<div className="landing-quote">
-				“Bertanya tentang agama adalah jalan menuju kebaikan.”
-				<span>— HR. Ibnu Majah</span>
+			<p className="trust-quote-text">
+				Cahaya Ilmu untuk Langkah yang Lebih Baik
+			</p>
+		</div>
+	)
+}
+
+/** miniature app preview shown in the hero (pure markup, no screenshot) */
+function HeroAppPreview() {
+	const navItems: Array<[string, boolean]> = [
+		['Chat', true],
+		['Sumber', false],
+		['Knowledge Studio', false],
+		['Tinjauan Klaim', false],
+		['Dashboard', false],
+	]
+	const chips = [
+		'Apa hukum jual beli dengan riba?',
+		'Bagaimana niat wudhu?',
+		'Zakat profesi itu wajib?',
+		'Hukum musik dalam Islam?',
+	]
+	return (
+		<div
+			className="hero-app"
+			role="img"
+			aria-label="Pratinjau aplikasi Tafaqquh"
+		>
+			<div className="hero-app-badge">
+				<span className="hero-app-dot" aria-hidden="true" />
+				Dalil Utamakan
+			</div>
+			<aside className="hero-app-side">
+				<div className="hero-app-brand">
+					<BrandMark small />
+					<span>Tafaqquh</span>
+				</div>
+				<ul>
+					{navItems.map(([label, active]) => (
+						<li key={label} className={active ? 'is-active' : ''}>
+							{label}
+						</li>
+					))}
+				</ul>
+				<div className="hero-app-side-sep" aria-hidden="true" />
+				<span className="hero-app-side-dim">Operations</span>
+				<span className="hero-app-side-dim">Health</span>
+			</aside>
+			<div className="hero-app-main">
+				<span className="hero-app-lamp" aria-hidden="true">
+					<svg
+						width="30"
+						height="30"
+						viewBox="0 0 48 48"
+						fill="none"
+						role="presentation"
+					>
+						<path
+							d="M24 6c.4 3.1 1.8 5 4 6.6 3.1 2.2 5 4.6 5 8.4v3H15v-3c0-3.8 1.9-6.2 5-8.4 2.2-1.6 3.6-3.5 4-6.6z"
+							fill="#0d6b4f"
+						/>
+						<rect
+							x="13"
+							y="25.5"
+							width="22"
+							height="2.4"
+							rx="1.2"
+							fill="#c99a4b"
+						/>
+						<path
+							d="M24 30.5c-2.6-2.1-5.8-3-9.5-3-1.4 0-2.7.14-3.9.4v11.6c1.2-.26 2.5-.4 3.9-.4 3.7 0 6.9.9 9.5 3 2.6-2.1 5.8-3 9.5-3 1.4 0 2.7.14 3.9.4V27.9c-1.2-.26-2.5-.4-3.9-.4-3.7 0-6.9.9-9.5 3z"
+							stroke="#0d6b4f"
+							strokeWidth="2.2"
+							fill="#fff"
+						/>
+					</svg>
+				</span>
+				<b>Assalamu’alaikum</b>
+				<span className="hero-app-sub">
+					Tanyakan pertanyaan fiqih Anda dengan bebas.
+				</span>
+				<div className="hero-app-chips">
+					{chips.map((c) => (
+						<span key={c}>{c}</span>
+					))}
+				</div>
+				<div className="hero-app-composer">
+					Tanyakan pertanyaan fiqih di sini…
+					<span className="hero-app-send" aria-hidden="true" />
+				</div>
+				<span className="hero-app-note">
+					Jawaban disertai dalil dari Al-Qur’an, Hadits, dan sumber terpercaya.
+				</span>
 			</div>
 		</div>
 	)
+}
+
+/** in-page section scroll that keeps the hash router on the landing route */
+function scrollToSection(id: string) {
+	return () =>
+		document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
 }
 
 function Landing({
@@ -381,16 +471,19 @@ function Landing({
 }) {
 	return (
 		<section className="landing" aria-label="Pengantar Tafaqquh">
-			<div className="landing-grid">
-				<div className="landing-copy">
-					<span className="landing-eyebrow">Tanya · Telusuri · Pahami</span>
+			<div className="hero" id="beranda">
+				<div className="hero-copy">
+					<span className="landing-eyebrow">
+						Ilmu Fiqih, Lebih Mudah, Lebih Terpercaya
+					</span>
 					<h1>
-						Pahami Fiqih melalui <em>Dalil, Konteks, dan Sumber</em>
+						Tanyakan Pertanyaan Fiqih Anda, Dapatkan Jawaban dengan{' '}
+						<em>Dalil yang Jelas</em>
 					</h1>
 					<p>
-						Dapatkan jawaban berdasarkan dalil yang sahih, dari sumber yang
-						terpercaya, dengan penjelasan yang mudah dipahami — sebuah alat
-						untuk bertafaqquh, bukan pengganti ulama.
+						Tafaqquh adalah asisten AI untuk menjawab pertanyaan fiqih
+						berdasarkan dalil dari sumber-sumber terpercaya, membantu Anda
+						memahami hukum Islam dengan lebih mudah, akurat, dan mendalam.
 					</p>
 					<div className="landing-cta">
 						{authenticated ? (
@@ -412,7 +505,7 @@ function Landing({
 							</a>
 						) : (
 							<a className="btn-primary" href="/auth/login">
-								Mulai Belajar
+								Coba Sekarang Gratis
 								<svg
 									width="16"
 									height="16"
@@ -428,47 +521,125 @@ function Landing({
 								</svg>
 							</a>
 						)}
-						{!authenticated && devLoginEnabled && (
-							<a
-								className="btn-ghost"
-								href="/auth/dev-login?email=admin@example.com"
-							>
-								Masuk Cepat (Dev)
-							</a>
-						)}
+						<button
+							type="button"
+							className="btn-play"
+							onClick={scrollToSection('cara-kerja')}
+						>
+							<span className="btn-play-icon" aria-hidden="true">
+								<svg
+									width="12"
+									height="12"
+									viewBox="0 0 24 24"
+									fill="currentColor"
+									aria-hidden="true"
+								>
+									<path d="M8 5v14l11-7z" />
+								</svg>
+							</span>
+							<span>
+								<b>Lihat Cara Kerja</b>
+								<small>Tiga lapis verifikasi jawaban</small>
+							</span>
+						</button>
 					</div>
-					<ul className="landing-features">
-						{LANDING_FEATURES.map((f) => (
+					<blockquote className="hero-quote">
+						<p>
+							“Barang siapa menempuh jalan untuk mencari ilmu, Allah akan
+							mudahkan baginya jalan menuju surga.”
+						</p>
+						<footer>— HR. Muslim</footer>
+					</blockquote>
+					<ul className="hero-mini-features">
+						{LANDING_MINI_FEATURES.map((f) => (
 							<li key={f.title}>
 								<span className="feature-icon">
 									<NavIcon d={f.icon} />
 								</span>
-								<b>{f.title}</b>
-								<span className="feature-desc">{f.desc}</span>
+								<span>{f.title}</span>
 							</li>
 						))}
 					</ul>
 				</div>
-				<LandingArch />
+				<HeroAppPreview />
 			</div>
-			<section className="landing-steps" aria-label="Cara kerja verifikasi">
-				<h2 className="landing-steps-title">
-					Bagaimana sebuah jawaban mendapatkan kepercayaan
-				</h2>
-				<ol>
-					{LANDING_STEPS.map((s) => (
-						<li key={s.n}>
-							<span className="step-n" aria-hidden="true">
-								{s.n}
+
+			<section className="feature-cards" id="fitur" aria-label="Fitur utama">
+				{LANDING_CARDS.map((c) => (
+					<article key={c.title} className="feature-card">
+						<span className="feature-icon feature-icon-lg">
+							<NavIcon d={c.icon} />
+						</span>
+						<h3>{c.title}</h3>
+						<p>{c.desc}</p>
+						<a href={c.href}>
+							Pelajari lebih lanjut
+							<svg
+								width="14"
+								height="14"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+								aria-hidden="true"
+							>
+								<path d="M5 12h14M13 6l6 6-6 6" />
+							</svg>
+						</a>
+					</article>
+				))}
+			</section>
+
+			<section
+				className="trust-band"
+				id="cara-kerja"
+				aria-label="Cara kerja verifikasi"
+			>
+				<div className="trust-intro">
+					<h2>
+						Jawaban yang Dapat Dipercaya, untuk Pemahaman Fiqih yang Lebih Baik
+					</h2>
+					<p>
+						Tafaqquh dirancang untuk mengedepankan ketelitian, transparansi, dan
+						pembelajaran. Setiap jawaban dilengkapi sumber yang jelas sehingga
+						Anda dapat menelusuri dalil, memahami konteks, dan belajar lebih
+						dalam.
+					</p>
+					{authenticated ? (
+						<a className="btn-primary" href="#/chat">
+							Buka Aplikasi
+						</a>
+					) : (
+						<a className="btn-primary" href="/auth/login">
+							Mulai Sekarang
+						</a>
+					)}
+				</div>
+				<ul className="trust-rows">
+					{LANDING_TRUST.map((t) => (
+						<li key={t.title}>
+							<span className="feature-icon">
+								<NavIcon d={t.icon} />
 							</span>
 							<div>
-								<b>{s.title}</b>
-								<p>{s.desc}</p>
+								<b>{t.title}</b>
+								<p>{t.desc}</p>
 							</div>
 						</li>
 					))}
-				</ol>
+				</ul>
+				<TrustVisual />
 			</section>
+
+			{!authenticated && devLoginEnabled && (
+				<p className="dev-login-note">
+					<a href="/auth/dev-login?email=admin@example.com">
+						Masuk Cepat (Dev Admin)
+					</a>
+				</p>
+			)}
 		</section>
 	)
 }
@@ -487,23 +658,61 @@ function PublicLanding({
 					<BrandMark small />
 					<span>
 						<strong>Tafaqquh</strong>
-						<small>AI Fiqih Assistant</small>
+						<small>Ilmu Fiqih, Lebih Mudah</small>
 					</span>
 				</a>
 				<nav className="public-nav" aria-label="Navigasi publik">
-					<a href="#/sources">Sumber</a>
-					<a href="#/chat">Cara kerja</a>
+					<a href="#/">Beranda</a>
+					<button type="button" onClick={scrollToSection('fitur')}>
+						Fitur
+					</button>
+					<button type="button" onClick={scrollToSection('cara-kerja')}>
+						Tentang
+					</button>
 					<a href="#/health">Status</a>
+				</nav>
+				<div className="public-actions">
 					{authenticated ? (
 						<a className="public-nav-cta" href="#/chat">
-							Buka aplikasi
+							Buka Aplikasi
+							<svg
+								width="14"
+								height="14"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2.2"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+								aria-hidden="true"
+							>
+								<path d="M5 12h14M13 6l6 6-6 6" />
+							</svg>
 						</a>
 					) : (
-						<a className="public-nav-cta" href="/auth/login">
-							Masuk
-						</a>
+						<>
+							<a className="public-login" href="/auth/login">
+								Masuk
+							</a>
+							<a className="public-nav-cta" href="/auth/login">
+								Mulai Gratis
+								<svg
+									width="14"
+									height="14"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2.2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									aria-hidden="true"
+								>
+									<path d="M5 12h14M13 6l6 6-6 6" />
+								</svg>
+							</a>
+						</>
 					)}
-				</nav>
+				</div>
 			</header>
 			<main>
 				<Landing
@@ -512,13 +721,28 @@ function PublicLanding({
 				/>
 			</main>
 			<footer className="public-footer">
-				<span>© {new Date().getFullYear()} Tafaqquh AI</span>
-				<span>Pahami Fiqih melalui Dalil, Konteks, dan Sumber</span>
-				{!authenticated && devLoginEnabled ? (
-					<a href="/auth/dev-login?email=admin@example.com">
-						Masuk Cepat (Dev)
-					</a>
-				) : null}
+				<span className="footer-brand-mini">
+					<BrandMark small />
+					<span>
+						<b>Tafaqquh</b>
+						<small>Ilmu Fiqih, Lebih Mudah</small>
+					</span>
+				</span>
+				<nav className="public-footer-links" aria-label="Tautan footer">
+					<a href="#/">Beranda</a>
+					<button type="button" onClick={scrollToSection('fitur')}>
+						Fitur
+					</button>
+					<a href="#/health">Status</a>
+					{authenticated ? (
+						<a href="#/chat">Aplikasi</a>
+					) : (
+						<a href="/auth/login">Masuk</a>
+					)}
+				</nav>
+				<span>
+					© {new Date().getFullYear()} Tafaqquh. Semua hak dilindungi.
+				</span>
 			</footer>
 		</div>
 	)

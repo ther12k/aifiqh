@@ -194,7 +194,7 @@ export function authPlugin(deps: AuthDeps) {
 						secure,
 					),
 				]
-				set.headers.location = '/'
+				set.headers.location = '/#/chat'
 				set.status = 302
 				log.info('login succeeded', { userId: user.id })
 			} catch (err) {

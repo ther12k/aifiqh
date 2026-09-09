@@ -82,6 +82,94 @@ const REVIEW_DECISION_LABELS: Record<string, string> = {
 	retire: 'ditarik',
 }
 
+/** type badge tone — mirrors the reference palette per source kind */
+const TYPE_TONES: Record<string, string> = {
+	quran: 'tone-quran',
+	"al-qur'an": 'tone-quran',
+	hadis: 'tone-hadis',
+	hadits: 'tone-hadis',
+	kitab: 'tone-kitab',
+	'kitab fiqih': 'tone-kitab',
+	fatwa: 'tone-fatwa',
+}
+
+function typeTone(sourceType: string): string {
+	return TYPE_TONES[sourceType.toLowerCase()] ?? 'tone-neutral'
+}
+
+function SearchIcon() {
+	return (
+		<svg
+			width="15"
+			height="15"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="2"
+			strokeLinecap="round"
+			aria-hidden="true"
+		>
+			<circle cx="11" cy="11" r="7" />
+			<path d="M20 20l-3.5-3.5" />
+		</svg>
+	)
+}
+
+function BookIcon() {
+	return (
+		<svg
+			width="15"
+			height="15"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="1.8"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			aria-hidden="true"
+		>
+			<path d="M5 4h6a3 3 0 0 1 3 3v13a3 3 0 0 0-3-3H5V4zm18 0h-6a3 3 0 0 0-3 3v13a3 3 0 0 1 3-3h6V4z" />
+		</svg>
+	)
+}
+
+function NavGrid() {
+	return (
+		<svg
+			width="15"
+			height="15"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="1.8"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			aria-hidden="true"
+		>
+			<path d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z" />
+		</svg>
+	)
+}
+
+function NavGlobe() {
+	return (
+		<svg
+			width="15"
+			height="15"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="1.8"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			aria-hidden="true"
+		>
+			<circle cx="12" cy="12" r="9" />
+			<path d="M3 12h18M12 3c2.5 2.6 4 5.6 4 9s-1.5 6.4-4 9c-2.5-2.6-4-5.6-4-9s1.5-6.4 4-9z" />
+		</svg>
+	)
+}
+
 export interface SourceRegistryProps {
 	/** permissions held by the current principal (UI hints only — the server remains authoritative) */
 	permissions: string[]
@@ -100,6 +188,9 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 
 	const [sources, setSources] = useState<SourceRow[]>([])
 	const [query, setQuery] = useState('')
+	const [typeFilter, setTypeFilter] = useState('')
+	const [langFilter, setLangFilter] = useState('')
+	const [sortBy, setSortBy] = useState('newest')
 	const [statusFilter, setStatusFilter] = useState('')
 	const [selected, setSelected] = useState<SourceRow | null>(null)
 	const [revisions, setRevisions] = useState<RevisionRow[]>([])
@@ -235,17 +326,29 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 		[selected, openDetail],
 	)
 
-	const visible = sources.filter((s) =>
-		query.trim()
-			? `${s.title} ${s.author}`
-					.toLowerCase()
-					.includes(query.trim().toLowerCase())
-			: true,
-	)
+	const visible = sources
+		.filter((s) => {
+			const matchesQuery = query.trim()
+				? `${s.title} ${s.author}`
+						.toLowerCase()
+						.includes(query.trim().toLowerCase())
+				: true
+			const matchesType = typeFilter ? s.source_type === typeFilter : true
+			const matchesLang = langFilter ? s.language === langFilter : true
+			return matchesQuery && matchesType && matchesLang
+		})
+		.slice()
+		.sort((a, b) => {
+			if (sortBy === 'title') return a.title.localeCompare(b.title)
+			if (sortBy === 'author') return a.author.localeCompare(b.author)
+			return b.created_at.localeCompare(a.created_at)
+		})
 
 	// header stats are computed from the real list — nothing is invented
 	const typeCount = new Set(sources.map((s) => s.source_type)).size
 	const languageCount = new Set(sources.map((s) => s.language)).size
+	const typeOptions = [...new Set(sources.map((s) => s.source_type))].sort()
+	const langOptions = [...new Set(sources.map((s) => s.language))].sort()
 
 	return (
 		<section
@@ -255,52 +358,183 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 		>
 			<div className="source-stats">
 				<div className="source-stat">
-					<b>{sources.length}</b>
-					<span>Total Sumber</span>
+					<span className="source-stat-icon" aria-hidden="true">
+						<BookIcon />
+					</span>
+					<div>
+						<small>Total Sumber</small>
+						<b>{sources.length}</b>
+						<span className="source-stat-sub">
+							kitab &amp; dokumen terkurasi
+						</span>
+					</div>
 				</div>
 				<div className="source-stat">
-					<b>{typeCount}</b>
-					<span>Jenis Sumber</span>
+					<span className="source-stat-icon is-alt" aria-hidden="true">
+						<NavGrid />
+					</span>
+					<div>
+						<small>Jenis Sumber</small>
+						<b>{typeCount}</b>
+						<span className="source-stat-sub">klasifikasi konten</span>
+					</div>
 				</div>
 				<div className="source-stat">
-					<b>{languageCount}</b>
-					<span>Bahasa</span>
+					<span className="source-stat-icon is-gold" aria-hidden="true">
+						<NavGlobe />
+					</span>
+					<div>
+						<small>Bahasa</small>
+						<b>{languageCount}</b>
+						<span className="source-stat-sub">terdokumentasi</span>
+					</div>
 				</div>
 				<div className="source-stat">
-					<b>{visible.length}</b>
-					<span>Ditampilkan</span>
+					<span className="source-stat-icon is-dim" aria-hidden="true">
+						<SearchIcon />
+					</span>
+					<div>
+						<small>Ditampilkan</small>
+						<b>{visible.length}</b>
+						<span className="source-stat-sub">hasil filter saat ini</span>
+					</div>
 				</div>
 			</div>
 
-			<label>
-				Cari sumber
-				<input
-					data-testid="source-search"
-					value={query}
-					onChange={(e) => setQuery(e.target.value)}
-				/>
-			</label>
-
-			<ul data-testid="source-list">
-				{visible.map((s) => (
-					<li key={s.id}>
-						<button type="button" onClick={() => openDetail(s)}>
-							<span className="source-top">
-								<span className="source-title">{s.title}</span>
-								<span className="badge badge-neutral">{s.source_type}</span>
-							</span>
-							<span className="source-meta">
-								{s.author} · {s.language} · {s.rights_status}
-							</span>
-						</button>
-					</li>
-				))}
-				{visible.length === 0 && (
-					<li className="source-empty" data-testid="source-empty">
-						Tidak ada sumber yang cocok dengan pencarian.
-					</li>
+			<div className="source-toolbar">
+				<label className="source-search">
+					<SearchIcon />
+					<input
+						data-testid="source-search"
+						placeholder="Cari judul sumber, penulis, atau kata kunci…"
+						value={query}
+						onChange={(e) => setQuery(e.target.value)}
+					/>
+					<kbd>⌘ K</kbd>
+				</label>
+				<select
+					className="source-filter"
+					aria-label="Filter jenis"
+					value={typeFilter}
+					onChange={(e) => setTypeFilter(e.target.value)}
+				>
+					<option value="">Semua Jenis</option>
+					{typeOptions.map((t) => (
+						<option key={t} value={t}>
+							{t}
+						</option>
+					))}
+				</select>
+				<select
+					className="source-filter"
+					aria-label="Filter bahasa"
+					value={langFilter}
+					onChange={(e) => setLangFilter(e.target.value)}
+				>
+					<option value="">Semua Bahasa</option>
+					{langOptions.map((l) => (
+						<option key={l} value={l}>
+							{l}
+						</option>
+					))}
+				</select>
+				<select
+					className="source-filter"
+					aria-label="Urutkan"
+					value={sortBy}
+					onChange={(e) => setSortBy(e.target.value)}
+				>
+					<option value="newest">Terbaru</option>
+					<option value="title">Judul A–Z</option>
+					<option value="author">Penulis A–Z</option>
+				</select>
+				{canCreate && (
+					<a
+						className="btn-primary source-add"
+						href="#/studio"
+						title="Kelola sumber baru di Knowledge Studio"
+					>
+						+ Tambah Sumber
+					</a>
 				)}
-			</ul>
+			</div>
+
+			<div className="source-table-card">
+				<table className="source-table">
+					<thead>
+						<tr>
+							<th>Judul</th>
+							<th>Otoritas / Penulis</th>
+							<th>Jenis</th>
+							<th>Bahasa</th>
+							<th>Didaftarkan</th>
+							<th>Aksi</th>
+						</tr>
+					</thead>
+					<tbody data-testid="source-list">
+						{visible.map((s) => (
+							<tr key={s.id}>
+								<td>
+									<button
+										type="button"
+										className="source-title-cell"
+										onClick={() => openDetail(s)}
+									>
+										<span className="source-avatar" aria-hidden="true">
+											<BookIcon />
+										</span>
+										<span className="source-title-text">
+											<b>{s.title}</b>
+											<small>{s.rights_status}</small>
+										</span>
+									</button>
+								</td>
+								<td>{s.author}</td>
+								<td>
+									<span
+										className={`badge source-type-badge ${typeTone(s.source_type)}`}
+									>
+										{s.source_type}
+									</span>
+								</td>
+								<td>{s.language}</td>
+								<td>
+									{new Date(s.created_at).toLocaleDateString('id-ID', {
+										day: 'numeric',
+										month: 'short',
+										year: 'numeric',
+									})}
+								</td>
+								<td>
+									<button
+										type="button"
+										className="source-open"
+										onClick={() => openDetail(s)}
+									>
+										Lihat ›
+									</button>
+								</td>
+							</tr>
+						))}
+						{visible.length === 0 && (
+							<tr>
+								<td
+									colSpan={6}
+									className="source-empty"
+									data-testid="source-empty"
+								>
+									Tidak ada sumber yang cocok dengan pencarian.
+								</td>
+							</tr>
+						)}
+					</tbody>
+				</table>
+				{sources.length > 0 && (
+					<div className="source-table-foot">
+						Menampilkan {visible.length} dari {sources.length} sumber
+					</div>
+				)}
+			</div>
 
 			{selected && (
 				<div data-testid="source-detail">
