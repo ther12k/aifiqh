@@ -811,9 +811,11 @@ export default function App() {
 	}, [])
 
 	useEffect(() => {
-		if (authGuardDecision(route, !meLoading, Boolean(me)) === 'redirect') {
+		if (authGuardDecision(route, !meLoading, Boolean(me)) !== 'redirect') return
+		const redirectTimer = window.setTimeout(() => {
 			window.location.replace('/auth/login')
-		}
+		}, 250)
+		return () => window.clearTimeout(redirectTimer)
 	}, [route, meLoading, me])
 
 	const permissions = me?.permissions ?? []
