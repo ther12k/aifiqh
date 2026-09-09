@@ -86,17 +86,6 @@ const FEEDBACK_REASONS: Array<{
 	{ category: 'other', label: 'Penjelasan kurang jelas' },
 ]
 
-interface TurnSummary {
-	status: string
-	decision: string
-	claims: number
-	citations: number
-	sections: number
-	/** what actually generated the answer — real provider or builtin */
-	provider: string
-	model: string
-}
-
 /** action icons for the answer card footer */
 function ActionIcon({ d, filled }: { d: string; filled?: boolean }) {
 	return (
@@ -673,10 +662,12 @@ export function ChatContainer({
 	// single workspace sidebar: on desktop it is always visible, the flag
 	// only drives the mobile drawer
 	const [sidebarOpen, setSidebarOpen] = useState(false)
+	// history-first sidebar: the nav menu stays out of the way and is
+	// revealed by the config (gear) button
+	const [menuOpen, setMenuOpen] = useState(false)
 	const [chatState, setChatState] = useState<ChatShellState>(EMPTY_CHAT_STATE)
 	const [draft, setDraft] = useState('')
 	const [loading, setLoading] = useState(true)
-	const [lastTurn, setLastTurn] = useState<TurnSummary | null>(null)
 	const [answersByMsg, setAnswersByMsg] = useState<
 		Record<string, StoredAnswer>
 	>({})
@@ -826,7 +817,6 @@ export function ChatContainer({
 			setChatState(EMPTY_CHAT_STATE)
 			setAnswersByMsg({})
 			setDecisionsByMsg({})
-			setLastTurn(null)
 			void refreshConversations()
 		} catch (err: unknown) {
 			setChatState((prev) =>
@@ -1015,22 +1005,6 @@ export function ChatContainer({
 				}))
 			}
 
-			const citations = result.answer
-				? result.answer.claims.reduce(
-						(n, c) => n + (c.evidence?.length ?? 0),
-						0,
-					)
-				: 0
-			setLastTurn({
-				status: result.status,
-				decision: result.decision.decision,
-				claims: result.answer?.claims.length ?? 0,
-				citations,
-				sections: result.answer?.sections.length ?? 0,
-				provider: result.provider ?? '',
-				model: result.model ?? '',
-			})
-
 			if (storedAnswer) {
 				const answer = storedAnswer
 				setAnswersByMsg((prev) => ({ ...prev, [assistantMsgId]: answer }))
@@ -1081,16 +1055,6 @@ export function ChatContainer({
 			!chatState.messages.some((m) => m.role === 'user' && m.content === q),
 	)
 
-	const modelLine = lastTurn
-		? lastTurn.provider && lastTurn.provider !== 'builtin-compose'
-			? `Model aktif: ${lastTurn.provider} · ${lastTurn.model}`
-			: 'Model: penyusun deterministik (belum ada provider LLM aktif)'
-		: null
-
-	const statusLine = lastTurn
-		? `Keputusan ${lastTurn.decision} · ${lastTurn.claims} klaim · ${lastTurn.citations} rujukan`
-		: null
-
 	const activeConv = conversations.find((c) => c.id === conversationId)
 	const activeTitle = activeConv?.snippet
 		? activeConv.snippet.length > 55
@@ -1100,16 +1064,28 @@ export function ChatContainer({
 
 	return (
 		<div className="chat-workspace">
-			{/* the ONE sidebar: brand, nav, chat history, identity */}
+			{/* the ONE sidebar: history-first — nav lives behind the gear */}
 			<aside
 				className={`sidebar chat-ws-sidebar ${sidebarOpen ? 'is-open' : ''}`}
 			>
-				<div className="sidebar-brand">
-					<BrandMark small />
-					<div>
-						<div className="brand-name">{BRAND.name}</div>
-						<div className="brand-sub">{BRAND.tagline}</div>
+				<div className="ws-top">
+					<div className="sidebar-brand">
+						<BrandMark small />
+						<div>
+							<div className="brand-name">{BRAND.name}</div>
+							<div className="brand-sub">{BRAND.tagline}</div>
+						</div>
 					</div>
+					<button
+						type="button"
+						className="ws-config-btn"
+						aria-expanded={menuOpen}
+						aria-label="Buka menu navigasi"
+						title="Menu navigasi"
+						onClick={() => setMenuOpen((v) => !v)}
+					>
+						<NavIcon d={ICON_PATHS.gear} />
+					</button>
 				</div>
 
 				<button
@@ -1132,12 +1108,6 @@ export function ChatContainer({
 					</svg>
 					Chat Baru
 				</button>
-
-				<SidebarNav
-					permissions={permissions}
-					route="/chat"
-					onNavigate={() => setSidebarOpen(false)}
-				/>
 
 				<div className="ws-history" aria-label="Riwayat percakapan">
 					<div className="history-section-title">Riwayat</div>
@@ -1217,6 +1187,29 @@ export function ChatContainer({
 
 				<div className="sidebar-foot">
 					<SessionChip me={me} onLogout={onLogout} />
+				</div>
+
+				{/* nav menu, revealed by the config (gear) button */}
+				<div
+					className={`ws-nav-panel ${menuOpen ? 'is-open' : ''}`}
+					aria-hidden={!menuOpen}
+				>
+					<div className="ws-nav-head">
+						<span className="ws-nav-title">Navigasi</span>
+						<button
+							type="button"
+							className="ws-config-btn"
+							aria-label="Tutup menu navigasi"
+							onClick={() => setMenuOpen(false)}
+						>
+							<NavIcon d={ICON_PATHS.close} />
+						</button>
+					</div>
+					<SidebarNav
+						permissions={permissions}
+						route="/chat"
+						onNavigate={() => setMenuOpen(false)}
+					/>
 				</div>
 			</aside>
 			<button
@@ -1315,10 +1308,6 @@ export function ChatContainer({
 							}
 							composerNote={
 								<div className="composer-meta">
-									{statusLine ? <span>{statusLine}</span> : null}
-									{modelLine ? (
-										<span className="model-line">{modelLine}</span>
-									) : null}
 									<span>
 										Jawaban disusun dari sumber terverifikasi — bukan pengganti
 										keputusan ulama.

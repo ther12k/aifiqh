@@ -720,7 +720,66 @@ body {
 	position: relative;
 	height: 100vh;
 	top: auto;
-	padding: 18px 14px 14px;
+	padding: 14px 12px 12px;
+}
+
+/* brand row with the config (gear) button that reveals the nav menu */
+.ws-top {
+	display: flex;
+	align-items: flex-start;
+	gap: 6px;
+}
+
+.ws-top .sidebar-brand {
+	flex: 1;
+	min-width: 0;
+	padding: 2px 4px 10px;
+}
+
+.ws-config-btn {
+	flex: none;
+	width: 34px;
+	height: 34px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	background: transparent;
+	border: none;
+	border-radius: 10px;
+	color: var(--text-muted);
+	cursor: pointer;
+	transition: background 0.15s ease, color 0.15s ease;
+}
+
+.ws-config-btn:hover {
+	background: var(--primary-tint);
+	color: var(--primary-strong);
+}
+
+/* compact "Chat Baru" row (history-first sidebar keeps this quiet) */
+.chat-ws-sidebar .btn-new-chat {
+	flex: none;
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+	gap: 10px;
+	background: transparent;
+	color: var(--text);
+	border: none;
+	border-radius: 10px;
+	padding: 9px 10px;
+	font-size: 14px;
+	font-weight: 600;
+	box-shadow: none;
+	margin-top: 6px;
+}
+
+.chat-ws-sidebar .btn-new-chat svg {
+	color: var(--primary);
+}
+
+.chat-ws-sidebar .btn-new-chat:hover {
+	background: var(--primary-tint);
 }
 
 .btn-new-chat {
@@ -747,6 +806,41 @@ body {
 
 .btn-new-chat:active {
 	transform: scale(0.98);
+}
+
+/* nav menu overlay: hidden until the gear opens it, slides over the
+   history-first sidebar */
+.ws-nav-panel {
+	position: absolute;
+	inset: 0;
+	z-index: 6;
+	display: flex;
+	flex-direction: column;
+	padding: 14px 12px 12px;
+	background: linear-gradient(180deg, #fdfffe 0%, #f4f9f6 100%);
+	transform: translateX(-105%);
+	transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+	overflow-y: auto;
+}
+
+.ws-nav-panel.is-open {
+	transform: none;
+	box-shadow: -6px 0 22px rgba(15, 55, 42, 0.12);
+}
+
+.ws-nav-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 2px 4px 6px;
+}
+
+.ws-nav-title {
+	font-size: 10.5px;
+	font-weight: 700;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--text-faint);
 }
 
 /* conversation history inside the single sidebar */
@@ -944,12 +1038,16 @@ body {
 	position: relative;
 }
 
-/* Shell inside the workspace: full-bleed, centered readable column */
+/* Shell inside the workspace: the SHELL is the centered column (940px), so
+   the thread scrollbar hugs the content instead of sitting at the far
+   viewport edge with a dead gap between them */
 .chat-workspace .chat-shell {
 	flex: 1;
 	display: flex;
 	flex-direction: column;
 	height: 100%;
+	width: min(100%, 940px);
+	margin-inline: auto;
 	border: none;
 	border-radius: 0;
 	box-shadow: none;
@@ -960,21 +1058,21 @@ body {
 .chat-workspace .chat-messages {
 	flex: 1;
 	overflow-y: auto;
-	padding: 32px 32px 16px;
+	padding: 32px 28px 16px;
 	display: flex;
 	flex-direction: column;
 	gap: 22px;
 	width: 100%;
-	max-width: 860px;
-	margin: 0 auto;
+	max-width: none;
+	margin: 0;
 	box-sizing: border-box;
 }
 
 .chat-workspace .chat-composer {
 	width: 100%;
-	max-width: 900px;
-	margin: 0 auto;
-	padding: 0 32px 18px;
+	max-width: none;
+	margin: 0;
+	padding: 0 28px 16px;
 	box-sizing: border-box;
 	background: transparent;
 	border-top: none;
