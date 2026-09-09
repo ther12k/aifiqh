@@ -725,7 +725,8 @@ export function ChatContainer({
 	const [searchQuery, setSearchQuery] = useState('')
 	const [chatState, setChatState] = useState<ChatShellState>(EMPTY_CHAT_STATE)
 	const [draft, setDraft] = useState('')
-	const [loading, setLoading] = useState(true)
+	// the thread opens fresh immediately; only loadConversation flips this
+	const [loading, setLoading] = useState(false)
 	const [answersByMsg, setAnswersByMsg] = useState<
 		Record<string, StoredAnswer>
 	>({})
@@ -886,8 +887,23 @@ export function ChatContainer({
 		}
 	}
 
-	async function startNewConversation() {
-		setLoading(true)
+	/**
+	 * Fresh composer without touching the DB — the conversation row is
+	 * created lazily on the first submitted message, so abandoned new
+	 * chats never pollute the history.
+	 */
+	function handleNewChat() {
+		setConversationId(null)
+		setChatState(EMPTY_CHAT_STATE)
+		setAnswersByMsg({})
+		setDecisionsByMsg({})
+		setDraft('')
+		setLoading(false)
+		setSidebarOpen(false)
+	}
+
+	/** create the conversation row lazily, right before the first turn */
+	async function ensureConversation(): Promise<string | null> {
 		try {
 			const res = await fetch('/conversations', {
 				method: 'POST',
@@ -900,10 +916,8 @@ export function ChatContainer({
 			if (!res.ok) throw new Error(`Gagal memulai percakapan (${res.status})`)
 			const data = (await res.json()) as { conversationId: string }
 			setConversationId(data.conversationId)
-			setChatState(EMPTY_CHAT_STATE)
-			setAnswersByMsg({})
-			setDecisionsByMsg({})
 			void refreshConversations()
+			return data.conversationId
 		} catch (err: unknown) {
 			setChatState((prev) =>
 				failStreaming(
@@ -911,8 +925,7 @@ export function ChatContainer({
 					err instanceof Error ? err.message : 'Gagal memulai percakapan',
 				),
 			)
-		} finally {
-			setLoading(false)
+			return null
 		}
 	}
 
@@ -936,7 +949,7 @@ export function ChatContainer({
 					return remaining
 				})
 				if (conversationId === id) {
-					void startNewConversation()
+					handleNewChat()
 				}
 			}
 		} catch {
@@ -944,8 +957,8 @@ export function ChatContainer({
 		}
 	}
 
-	// Initialize: load existing conversation list, pick latest or create new
-	// biome-ignore lint/correctness/useExhaustiveDependencies: initial mount only
+	// Initialize: fill the history list; the thread itself opens fresh —
+	// opening Chat is "start a new conversation", old ones stay one click away
 	useEffect(() => {
 		let cancelled = false
 		async function initConv() {
@@ -953,53 +966,18 @@ export function ChatContainer({
 				const resList = await fetch('/conversations', {
 					headers: { 'x-csrf-token': getCsrfToken() },
 				})
-				let list: ConversationListItem[] = []
-				if (resList.ok) {
-					list = (await resList.json()) as ConversationListItem[]
-					if (!cancelled) {
-						setConversations(list)
-						setOrganization((prev) =>
-							cleanupStaleConversationIds(
-								prev,
-								list.map((conversation) => conversation.id),
-							),
-						)
-					}
-				}
-
-				if (list.length > 0) {
-					if (!cancelled) await loadConversation(list[0].id)
-				} else {
-					const resNew = await fetch('/conversations', {
-						method: 'POST',
-						headers: {
-							'content-type': 'application/json',
-							'x-csrf-token': getCsrfToken(),
-						},
-						body: JSON.stringify({ title: 'Percakapan Fiqih' }),
-					})
-					if (!resNew.ok) {
-						throw new Error(`Gagal memulai percakapan (${resNew.status})`)
-					}
-					const data = (await resNew.json()) as { conversationId: string }
-					if (!cancelled) {
-						setConversationId(data.conversationId)
-						setLoading(false)
-						void refreshConversations()
-					}
-				}
-			} catch (err: unknown) {
-				if (!cancelled) {
-					setChatState((prev) =>
-						failStreaming(
+				if (resList.ok && !cancelled) {
+					const list = (await resList.json()) as ConversationListItem[]
+					setConversations(list)
+					setOrganization((prev) =>
+						cleanupStaleConversationIds(
 							prev,
-							err instanceof Error
-								? err.message
-								: 'Gagal terhubung ke API chat',
+							list.map((conversation) => conversation.id),
 						),
 					)
-					setLoading(false)
 				}
+			} catch {
+				// the history list stays empty; the thread still opens fresh
 			}
 		}
 		initConv()
@@ -1009,7 +987,12 @@ export function ChatContainer({
 	}, [])
 
 	async function handleSubmit() {
-		if (!conversationId || !canSubmit(chatState, draft)) return
+		if (!canSubmit(chatState, draft)) return
+		let convId = conversationId
+		if (!convId) {
+			convId = await ensureConversation()
+			if (!convId) return
+		}
 		const query = draft.trim()
 		setDraft('')
 
@@ -1035,7 +1018,7 @@ export function ChatContainer({
 		})
 
 		try {
-			const res = await fetch(`/conversations/${conversationId}/messages`, {
+			const res = await fetch(`/conversations/${convId}/messages`, {
 				method: 'POST',
 				headers: {
 					'content-type': 'application/json',
@@ -1192,6 +1175,13 @@ export function ChatContainer({
 			: activeConv.snippet
 		: activeConv?.title || 'Percakapan Fiqih'
 
+	// the sidebar's primary green button opens what the role can reach next
+	const primaryAction = permissions.includes('ops:read')
+		? { href: '#/studio-dashboard', icon: ICON_PATHS.grid, label: 'Dashboard' }
+		: permissions.includes('source:read')
+			? { href: '#/sources', icon: ICON_PATHS.book, label: 'Sumber' }
+			: null
+
 	return (
 		<div className="chat-workspace">
 			{/* ONE sidebar: Chat + its history on top, the other menus pinned to
@@ -1207,21 +1197,26 @@ export function ChatContainer({
 					</div>
 				</div>
 
-				<button
-					type="button"
-					className="btn-new-chat"
-					onClick={() => void startNewConversation()}
-				>
-					<NavIcon d={ICON_PATHS.plus} />
-					Chat Baru
-				</button>
+				{primaryAction && (
+					<a className="ws-primary-btn" href={primaryAction.href}>
+						<NavIcon d={primaryAction.icon} />
+						{primaryAction.label}
+					</a>
+				)}
 
-				{/* the chat destination itself, directly above its history */}
+				{/* the Chat destination itself — clicking it starts a fresh
+				    conversation instead of re-entering the current one */}
 				<nav className="sidebar-nav chat-single-nav" aria-label="Chat">
-					<a href="#/chat" className="active-nav" aria-current="page">
+					<button
+						type="button"
+						className="chat-new-btn"
+						aria-current="page"
+						title="Mulai percakapan baru"
+						onClick={handleNewChat}
+					>
 						<NavIcon d={ICON_PATHS.chat} />
 						Chat
-					</a>
+					</button>
 				</nav>
 
 				<div className="ws-history" aria-label="Riwayat percakapan">
@@ -1463,7 +1458,7 @@ export function ChatContainer({
 					<button
 						type="button"
 						className="btn-new-chat btn-new-chat-mini"
-						onClick={() => void startNewConversation()}
+						onClick={handleNewChat}
 						aria-label="Mulai percakapan baru"
 					>
 						<svg

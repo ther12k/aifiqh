@@ -728,15 +728,70 @@ body {
 	margin-top: 10px;
 }
 
-/* primary green "Chat Baru" button at the top of the chat sidebar */
-.chat-ws-sidebar .btn-new-chat {
+/* primary action pinned at the top of the chat sidebar (role-aware:
+   Dashboard for operators, Sumber for curators) */
+.ws-primary-btn {
 	flex: none;
 	width: 100%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
 	margin-top: 10px;
 	padding: 10px 14px;
 	font-size: 14px;
+	font-weight: 600;
 	border-radius: 10px;
+	background: var(--primary);
+	color: #fff;
+	text-decoration: none;
+	box-shadow: 0 1px 3px rgba(14, 122, 99, 0.2);
+	transition: background 0.15s ease, transform 0.1s ease;
 }
+
+.ws-primary-btn:hover {
+	background: var(--primary-strong);
+	color: #fff;
+}
+
+.ws-primary-btn:active {
+	transform: scale(0.98);
+}
+
+/* the Chat item: clicking it starts a fresh conversation */
+.sidebar-nav .chat-new-btn {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
+	padding: 9px 12px;
+	border: none;
+	border-radius: 12px;
+	background: var(--primary-soft);
+	color: var(--primary-strong);
+	font-family: inherit;
+	font-size: 14px;
+	font-weight: 700;
+	cursor: pointer;
+	text-align: left;
+}
+
+.sidebar-nav .chat-new-btn svg {
+	flex: none;
+	width: 34px;
+	height: 34px;
+	padding: 8px;
+	border-radius: 10px;
+	background: var(--primary);
+	color: #fff;
+	box-sizing: border-box;
+}
+
+.sidebar-nav .chat-new-btn:hover {
+	background: var(--primary-tint);
+}
+
 .history-search {
 	display: flex;
 	align-items: center;
