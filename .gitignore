@@ -10,3 +10,4 @@ __pycache__/
 .qa/
 test-results/
 playwright-report/
+.zcode/
