@@ -250,7 +250,7 @@ export async function exportSourceRevisionToOkf(
 
 	const files: Record<string, string> = {
 		'index.md':
-			`# ${source.title}\n\nExported AiFiqh approved passages. ` +
+			`# ${source.title}\n\nExported Taffaqquh AI approved passages. ` +
 			`OKF v${OKF_VERSION_SUPPORTED}; embeddings and approvals live in the database, not this bundle.\n`,
 	}
 	let exportedSpans = 0

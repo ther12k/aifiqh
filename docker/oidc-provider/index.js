@@ -212,7 +212,7 @@ if (process.env.OIDC_TRUST_PROXY === 'true') {
 }
 
 function page(title, body) {
-	// split-panel login (Tafaqquh brand): emerald brand panel + form card
+	// split-panel login (Taffaqquh brand): emerald brand panel + form card
 	const brandPanel = `
   <div class="brand-side">
     <div class="brand-lockup">
@@ -225,7 +225,7 @@ function page(title, body) {
         <path d="M24 32.5V44" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
       </svg>
       <div>
-        <div class="brand-name">Tafaqquh</div>
+        <div class="brand-name">Taffaqquh</div>
         <div class="brand-tag">ILMU FIQIH, LEBIH MUDAH</div>
       </div>
     </div>
@@ -289,13 +289,13 @@ function loginForm(uid, title, error, email = '') {
 		title,
 		`<form method="post" action="${ISSUER_PREFIX}/interaction/${uid}/login" class="card">
   <h1>Selamat Datang Kembali</h1>
-  <p class="sub">Masuk ke akun Tafaqquh Anda untuk melanjutkan pembelajaran dan mendapatkan jawaban fiqih berbasis dalil.</p>
+  <p class="sub">Masuk ke akun Taffaqquh Anda untuk melanjutkan pembelajaran dan mendapatkan jawaban fiqih berbasis dalil.</p>
   ${error ? `<div class="error">${error}</div>` : ''}
   <label for="email">Email</label>
   <input id="email" name="email" type="email" autocomplete="username" required value="${email.replace(/"/g, '&quot;')}" />
   <label for="password">Kata Sandi</label>
   <input id="password" name="password" type="password" autocomplete="current-password" required />
-  <button type="submit">Masuk ke Tafaqquh</button>
+  <button type="submit">Masuk ke Taffaqquh</button>
   <div class="note"><span aria-hidden="true">&#128737;&#65039;</span><span><b>Jawaban Berdasarkan Sumber Terpercaya</b>Setiap jawaban didasarkan pada dalil dari Al-Qur'an, Hadits, dan sumber terpercaya, dan dapat Anda verifikasi.</span></div>
 </form>`,
 	)
@@ -340,7 +340,7 @@ async function handleInteraction(req, res) {
 				res,
 				200,
 				'text/html; charset=utf-8',
-				loginForm(uid, 'Masuk Tafaqquh', null),
+				loginForm(uid, 'Masuk Taffaqquh', null),
 			)
 			void details
 		} catch {
@@ -359,7 +359,12 @@ async function handleInteraction(req, res) {
 				res,
 				401,
 				'text/html; charset=utf-8',
-				loginForm(uid, 'Masuk Tafaqquh', 'Email atau kata sandi salah.', email),
+				loginForm(
+					uid,
+					'Masuk Taffaqquh',
+					'Email atau kata sandi salah.',
+					email,
+				),
 			)
 			return
 		}

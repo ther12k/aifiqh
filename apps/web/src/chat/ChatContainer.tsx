@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react'
+import { SessionChip, type SessionUser } from '../components/SessionChip'
+import { SidebarNav } from '../components/SidebarNav'
+import { BrandMark, ICON_PATHS, NavIcon } from '../components/icons'
+import { BRAND } from '../config/brand'
 import { stripUnsafeHtml } from '../lib/answerView'
-import type { ChatShellState } from '../lib/chatState'
 import {
+	type ChatShellState,
 	EMPTY_CHAT_STATE,
 	canSubmit,
 	clearError,
@@ -24,12 +28,13 @@ const SECTION_LABELS: Record<string, string> = {
 	sources: 'Sumber',
 }
 
-/** real follow-up prompts over the ingested corpus (fill the composer) */
+/** real follow-up prompts over the ingested corpus (fill the composer) —
+ * kept to four short starters; they show only on the empty thread */
 const FOLLOW_UPS = [
-	'Bagaimana hadits tentang amalan bergantung pada niat?',
-	'Apa kaidah la dharara wa la dhirar?',
-	'Bagaimana hukum riba dalam muamalah?',
-	"Apa rukun wudhu menurut QS Al-Ma'idah: 6?",
+	'Apa hukum jual beli dengan riba?',
+	'Bagaimana niat wudhu?',
+	'Apa perbedaan zakat dan sedekah?',
+	'Bagaimana qadha puasa?',
 ]
 
 /** a cleaned answer section kept for the structured answer card */
@@ -223,7 +228,8 @@ function VerificationBadges({ v }: { v: TurnVerification }) {
 }
 
 /** honest non-answer card: abstain / escalate / clarify get a distinct,
- * explainable treatment instead of a raw "[Keputusan: …]" string */
+ * explainable treatment in plain language — internal decision codes and
+ * retrieval jargon never surface to the user */
 function AbstainCard({
 	decision,
 	rationale,
@@ -238,23 +244,32 @@ function AbstainCard({
 			? {
 					icon: 'M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z',
 					title: 'Perlu telaah ulama',
-					bang: 'Pertanyaan ini menyangkut perbedaan pendapat yang membutuhkan peninjau manusia.',
+					bang: 'Pertanyaan ini menyangkut perbedaan pendapat ulama, sehingga lebih tepat ditinjau oleh peninjau manusia sebelum dijadikan rujukan.',
 				}
 			: decision === 'needs_clarification'
 				? {
 						icon: 'M12 2a10 10 0 1 0 10 10h-10V2z',
-						title: 'Perlu perincian pertanyaan',
-						bang: 'Pertanyaan belum cukup spesifik untuk dijawab dengan dalil yang tepat.',
+						title: 'Pertanyaan belum cukup spesifik',
+						bang: 'Coba perinci konteks atau kondisi yang Anda tanyakan agar dalil yang tepat dapat ditemukan.',
 					}
 				: {
 						icon: 'M12 2a10 10 0 1 0 10 10h-10V2z',
-						title: 'Belum dapat menjawab',
-						bang: 'Tidak ditemukan dalil yang memadai di korpus untuk pertanyaan ini.',
+						title: 'Belum menemukan sumber yang cukup',
+						bang: `${BRAND.name} tidak menemukan dalil yang cukup dalam sumber yang tersedia untuk menjawab pertanyaan ini dengan yakin.`,
 					}
 	const outcome =
 		userOutcome === 'insufficient_evidence'
 			? 'Sistem memilih tidak menjawab daripada mengarang dalil.'
 			: undefined
+
+	function focusComposer() {
+		const el = document.getElementById('chat-draft')
+		if (el) {
+			el.focus()
+			el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+		}
+	}
+
 	return (
 		<div className="abstain-card" data-testid="abstain-card">
 			<div className="abstain-icon" aria-hidden="true">
@@ -276,11 +291,14 @@ function AbstainCard({
 				<b>{cfg.title}</b>
 				<p>{rationale ?? cfg.bang}</p>
 				{outcome && <p className="abstain-outcome">{outcome}</p>}
-				<p className="abstain-hint">
-					Coba perinci pertanyaan, atau jelajahi{' '}
-					<a href="#/sources">sumber yang tersedia</a> untuk melihat cakupan
-					korpus.
-				</p>
+				<div className="abstain-actions">
+					<button type="button" className="chip" onClick={focusComposer}>
+						Perjelas pertanyaan
+					</button>
+					<a className="chip" href="#/sources">
+						Lihat sumber
+					</a>
+				</div>
 			</div>
 		</div>
 	)
@@ -313,6 +331,7 @@ function AnswerCard({
 	const [copied, setCopied] = useState(false)
 	const [vote, setVote] = useState<'up' | 'down' | null>(null)
 	const [rejecting, setRejecting] = useState(false)
+	const [verifyOpen, setVerifyOpen] = useState(false)
 	const [feedbackState, setFeedbackState] = useState<
 		'idle' | 'sending' | 'sent' | 'error'
 	>('idle')
@@ -534,17 +553,51 @@ function AnswerCard({
 				</output>
 			)}
 			{answer.verification && (
-				<div className="verify-row">
-					<VerificationBadges v={answer.verification} />
-					<span className="verify-caption">
-						{[
-							VERIFY_LABELS[answer.verification.citationIntegrity],
-							VERIFY_LABELS[answer.verification.claimSupport],
-							VERIFY_LABELS[answer.verification.scholarlyReview],
-						]
-							.filter(Boolean)
-							.join(' · ')}
-					</span>
+				<div className="verify-disclose">
+					<button
+						type="button"
+						className={`verify-summary ${answer.verification.citationIntegrity === 'failed' ? 'vb-danger' : 'vb-ok'}`}
+						aria-expanded={verifyOpen}
+						onClick={() => setVerifyOpen((v) => !v)}
+					>
+						<svg
+							width="13"
+							height="13"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2.2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+							aria-hidden="true"
+						>
+							{answer.verification.citationIntegrity === 'failed' ? (
+								<path d="M12 5v9M12 18.5v.5" />
+							) : (
+								<path d="M4 12l5 5L20 6" />
+							)}
+						</svg>
+						{answer.verification.citationIntegrity === 'failed'
+							? 'Perlu periksa rujukan'
+							: 'Berdasarkan sumber terverifikasi'}
+						<span className="toggle-caret" aria-hidden="true">
+							{verifyOpen ? '‹' : '›'}
+						</span>
+					</button>
+					{verifyOpen && (
+						<div className="verify-detail">
+							<VerificationBadges v={answer.verification} />
+							<span className="verify-caption">
+								{[
+									VERIFY_LABELS[answer.verification.citationIntegrity],
+									VERIFY_LABELS[answer.verification.claimSupport],
+									VERIFY_LABELS[answer.verification.scholarlyReview],
+								]
+									.filter(Boolean)
+									.join(' · ')}
+							</span>
+						</div>
+					)}
 				</div>
 			)}
 		</div>
@@ -604,13 +657,22 @@ function formatRelativeTime(isoStr: string): string {
 	}
 }
 
-export function ChatContainer() {
+export function ChatContainer({
+	me,
+	permissions,
+	onLogout,
+}: {
+	/** signed-in principal (chat is only mounted for authenticated users) */
+	me: SessionUser
+	permissions: string[]
+	onLogout: () => void
+}) {
 	const [conversationId, setConversationId] = useState<string | null>(null)
 	const [conversations, setConversations] = useState<ConversationListItem[]>([])
 	const [conversationsLoading, setConversationsLoading] = useState(false)
-	const [historyOpen, setHistoryOpen] = useState(
-		typeof window !== 'undefined' ? window.innerWidth > 900 : true,
-	)
+	// single workspace sidebar: on desktop it is always visible, the flag
+	// only drives the mobile drawer
+	const [sidebarOpen, setSidebarOpen] = useState(false)
 	const [chatState, setChatState] = useState<ChatShellState>(EMPTY_CHAT_STATE)
 	const [draft, setDraft] = useState('')
 	const [loading, setLoading] = useState(true)
@@ -1037,58 +1099,48 @@ export function ChatContainer() {
 		: activeConv?.title || 'Percakapan Fiqih'
 
 	return (
-		<div className="chat-layout">
-			{/* Chat History Sidebar */}
+		<div className="chat-workspace">
+			{/* the ONE sidebar: brand, nav, chat history, identity */}
 			<aside
-				className={`chat-history-sidebar ${historyOpen ? 'is-open' : 'is-collapsed'}`}
-				aria-label="Riwayat percakapan"
+				className={`sidebar chat-ws-sidebar ${sidebarOpen ? 'is-open' : ''}`}
 			>
-				<div className="history-header">
-					<button
-						type="button"
-						className="btn-new-chat"
-						onClick={() => void startNewConversation()}
-					>
-						<svg
-							width="15"
-							height="15"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth="2.2"
-							strokeLinecap="round"
-							strokeLinejoin="round"
-							aria-hidden="true"
-						>
-							<path d="M12 5v14M5 12h14" />
-						</svg>
-						Chat Baru
-					</button>
-					<button
-						type="button"
-						className="btn-close-history"
-						onClick={() => setHistoryOpen(false)}
-						title="Sembunyikan riwayat"
-						aria-label="Sembunyikan riwayat"
-					>
-						<svg
-							width="16"
-							height="16"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth="2"
-							strokeLinecap="round"
-							strokeLinejoin="round"
-							aria-hidden="true"
-						>
-							<path d="M19 12H5M12 19l-7-7 7-7" />
-						</svg>
-					</button>
+				<div className="sidebar-brand">
+					<BrandMark small />
+					<div>
+						<div className="brand-name">{BRAND.name}</div>
+						<div className="brand-sub">{BRAND.tagline}</div>
+					</div>
 				</div>
 
-				<div className="history-content">
-					<div className="history-section-title">Riwayat Percakapan</div>
+				<button
+					type="button"
+					className="btn-new-chat"
+					onClick={() => void startNewConversation()}
+				>
+					<svg
+						width="15"
+						height="15"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="2.2"
+						strokeLinecap="round"
+						strokeLinejoin="round"
+						aria-hidden="true"
+					>
+						<path d="M12 5v14M5 12h14" />
+					</svg>
+					Chat Baru
+				</button>
+
+				<SidebarNav
+					permissions={permissions}
+					route="/chat"
+					onNavigate={() => setSidebarOpen(false)}
+				/>
+
+				<div className="ws-history" aria-label="Riwayat percakapan">
+					<div className="history-section-title">Riwayat</div>
 					{conversationsLoading && conversations.length === 0 ? (
 						<div className="history-empty">Memuat riwayat…</div>
 					) : conversations.length === 0 ? (
@@ -1110,6 +1162,7 @@ export function ChatContainer() {
 												if (c.id !== conversationId) {
 													void loadConversation(c.id)
 												}
+												setSidebarOpen(false)
 											}}
 											title={label}
 										>
@@ -1161,49 +1214,43 @@ export function ChatContainer() {
 						</ul>
 					)}
 				</div>
-			</aside>
 
-			{/* Main Chat Area */}
+				<div className="sidebar-foot">
+					<SessionChip me={me} onLogout={onLogout} />
+				</div>
+			</aside>
+			<button
+				type="button"
+				className={`ws-backdrop ${sidebarOpen ? 'is-open' : ''}`}
+				aria-label="Tutup panel"
+				onClick={() => setSidebarOpen(false)}
+				tabIndex={-1}
+			/>
+
+			{/* focused conversation column — no global search, no op noise */}
 			<div className="chat-main-area">
-				<div className="chat-top-bar">
-					<div className="chat-top-left">
-						{!historyOpen && (
-							<button
-								type="button"
-								className="btn-toggle-sidebar"
-								onClick={() => setHistoryOpen(true)}
-								title="Buka riwayat percakapan"
-							>
-								<svg
-									width="16"
-									height="16"
-									viewBox="0 0 24 24"
-									fill="none"
-									stroke="currentColor"
-									strokeWidth="2"
-									strokeLinecap="round"
-									strokeLinejoin="round"
-									aria-hidden="true"
-								>
-									<path d="M3 3h18v18H3z M9 3v18" />
-								</svg>
-								<span>Riwayat</span>
-							</button>
-						)}
-						<span className="chat-top-title" title={activeTitle}>
-							{activeTitle}
-						</span>
-					</div>
-					<span className="chat-tagline">Tanyakan Pertanyaan Fiqih Anda,</span>
+				<div className="chat-mobile-bar">
 					<button
 						type="button"
-						className="btn-top-new"
+						className="btn-toggle-sidebar"
+						onClick={() => setSidebarOpen(true)}
+						aria-expanded={sidebarOpen}
+						aria-label="Buka menu dan riwayat"
+					>
+						<span aria-hidden="true">☰</span>
+					</button>
+					<span className="chat-top-title" title={activeTitle}>
+						{activeTitle}
+					</span>
+					<button
+						type="button"
+						className="btn-new-chat btn-new-chat-mini"
 						onClick={() => void startNewConversation()}
-						title="Mulai percakapan baru"
+						aria-label="Mulai percakapan baru"
 					>
 						<svg
-							width="13"
-							height="13"
+							width="14"
+							height="14"
 							viewBox="0 0 24 24"
 							fill="none"
 							stroke="currentColor"
@@ -1214,7 +1261,6 @@ export function ChatContainer() {
 						>
 							<path d="M12 5v14M5 12h14" />
 						</svg>
-						<span>Chat Baru</span>
 					</button>
 				</div>
 
@@ -1237,25 +1283,9 @@ export function ChatContainer() {
 							onCancel={handleCancel}
 							emptyState={
 								<div className="chat-greeting">
-									<span className="chat-greeting-kicker">
-										TAFAQQUH · RUANG BELAJAR FIQIH
-									</span>
-									<span className="greet-icon" aria-hidden="true">
-										<svg
-											width="26"
-											height="26"
-											viewBox="0 0 24 24"
-											fill="currentColor"
-											aria-hidden="true"
-										>
-											<path d="M12 2l2.4 5.3 5.6.8-4 4 1 5.9L12 15.6 6.9 18l1-5.9-4-4 5.6-.8L12 2z" />
-										</svg>
-									</span>
+									<BrandMark />
 									<h3>Assalamu&rsquo;alaikum</h3>
-									<p>
-										Ada yang ingin Anda tanyakan seputar fiqih? Jawaban disusun
-										hanya dari Al-Qur&rsquo;an dan Hadits yang terverifikasi.
-									</p>
+									<p>Apa yang ingin Anda pelajari hari ini?</p>
 									<div
 										className="chat-trust-points"
 										aria-label="Jaminan jawaban"
@@ -1267,9 +1297,10 @@ export function ChatContainer() {
 								</div>
 							}
 							composerExtra={
+								chatState.messages.length === 0 &&
 								remainingFollowUps.length > 0 ? (
 									<div className="chip-row composer-chips">
-										{remainingFollowUps.slice(0, 3).map((q) => (
+										{remainingFollowUps.slice(0, 4).map((q) => (
 											<button
 												key={q}
 												type="button"
@@ -1289,8 +1320,8 @@ export function ChatContainer() {
 										<span className="model-line">{modelLine}</span>
 									) : null}
 									<span>
-										Jawaban berbasis Al-Qur&rsquo;an &amp; Hadits Arba&rsquo;in
-										— verifikasi ke kitab asli untuk keputusan formal.
+										Jawaban disusun dari sumber terverifikasi — bukan pengganti
+										keputusan ulama.
 									</span>
 								</div>
 							}
