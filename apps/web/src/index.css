@@ -723,94 +723,19 @@ body {
 	padding: 14px 12px 12px;
 }
 
-/* brand row with the config (gear) button that reveals the nav menu */
-.ws-top {
-	display: flex;
-	align-items: flex-start;
-	gap: 6px;
+/* brand row; the other nav menus sit pinned at the sidebar bottom */
+.chat-single-nav {
+	margin-top: 10px;
 }
 
-.ws-top .sidebar-brand {
-	flex: 1;
-	min-width: 0;
-	padding: 2px 4px 10px;
-}
-
-.ws-config-btn {
-	flex: none;
-	min-width: 44px;
-	width: auto;
-	min-height: 44px;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	background: var(--surface);
-	border: 1px solid var(--border);
-	border-radius: 10px;
-	color: var(--text-muted);
-	cursor: pointer;
-	box-shadow: var(--shadow-sm);
-	transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-}
-
-.ws-config-label {
-	font-size: 11px;
-	font-weight: 700;
-}
-.ws-config-btn:hover {
-	background: var(--primary-tint);
-	border-color: var(--primary-border);
-	color: var(--primary-strong);
-}
-
-/* compact "Chat Baru" row (history-first sidebar keeps this quiet) */
+/* primary green "Chat Baru" button at the top of the chat sidebar */
 .chat-ws-sidebar .btn-new-chat {
 	flex: none;
-	display: flex;
-	align-items: center;
-	justify-content: flex-start;
-	gap: 10px;
-	background: transparent;
-	color: var(--text);
-	border: none;
-	border-radius: 10px;
-	padding: 9px 10px;
+	width: 100%;
+	margin-top: 10px;
+	padding: 10px 14px;
 	font-size: 14px;
-	font-weight: 600;
-	box-shadow: none;
-	margin-top: 6px;
-}
-
-.chat-ws-sidebar .btn-new-chat svg {
-	color: var(--primary);
-}
-
-.chat-ws-sidebar .btn-new-chat:hover {
-	background: var(--primary-tint);
-}
-
-.ws-quick-links {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-}
-.ws-quick-link {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	border: 0;
-	background: transparent;
-	color: var(--text);
-	border-radius: 9px;
-	padding: 9px 10px;
-	font: inherit;
-	font-size: 13px;
-	cursor: pointer;
-	text-align: left;
-}
-.ws-quick-link:hover {
-	background: var(--primary-tint);
-	color: var(--primary-strong);
+	border-radius: 10px;
 }
 .history-search {
 	display: flex;
@@ -872,7 +797,6 @@ body {
 .history-item-group:focus-visible,
 .history-item-delete:focus-visible,
 .history-item-btn:focus-visible,
-.ws-quick-link:focus-visible,
 .history-filters button:focus-visible,
 .history-search:focus-within {
 	opacity: 1;
@@ -916,50 +840,33 @@ body {
 	transform: scale(0.98);
 }
 
-/* nav menu overlay: hidden until the gear opens it, slides over the
-   history-first sidebar */
-.ws-nav-panel {
-	position: absolute;
-	inset: 0;
-	z-index: 6;
-	display: flex;
-	flex-direction: column;
-	padding: 14px 12px 12px;
-	background: linear-gradient(180deg, #fdfffe 0%, #f4f9f6 100%);
-	transform: translateX(-105%);
-	transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+/* nav menus pinned under the history (Sumber, Studio, … + Sistem) */
+.ws-nav-bottom {
+	flex: none;
+	margin-top: 10px;
+	padding-top: 8px;
+	border-top: 1px solid var(--border-soft);
+	max-height: 42vh;
 	overflow-y: auto;
 }
 
-.ws-nav-panel.is-open {
-	transform: none;
-	box-shadow: -6px 0 22px rgba(15, 55, 42, 0.12);
-}
-
-.ws-nav-head {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	padding: 2px 4px 6px;
-}
-
-.ws-nav-title {
-	font-size: 10.5px;
-	font-weight: 700;
-	letter-spacing: 0.1em;
-	text-transform: uppercase;
-	color: var(--text-faint);
-}
-
-/* conversation history inside the single sidebar */
+/* conversation history: search + title stay fixed, the list scrolls */
 .ws-history {
+	flex: 1;
+	min-height: 120px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin-top: 8px;
+	overflow: hidden;
+}
+
+.history-scroll {
 	flex: 1;
 	min-height: 0;
 	overflow-y: auto;
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
-	margin-top: 10px;
 }
 
 .history-section-title {
@@ -4888,5 +4795,265 @@ h2 {
 
 	.landing-steps {
 		padding: 20px 18px;
+	}
+}
+
+/* ==========================================================================
+   Chat workspace topbar (reference: page title + search + health + user)
+   ========================================================================== */
+.chat-topbar {
+	flex: none;
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	padding: 10px 22px;
+	background: rgba(255, 255, 255, 0.9);
+	border-bottom: 1px solid var(--border-soft);
+}
+
+.chat-topbar-title {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+}
+
+.chat-topbar-title b {
+	display: block;
+	font-size: 14.5px;
+	color: var(--text);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.chat-topbar-title small {
+	display: block;
+	font-size: 11.5px;
+	color: var(--text-faint);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.chat-topbar-icon {
+	flex: none;
+	width: 36px;
+	height: 36px;
+	border-radius: 10px;
+	background: var(--primary-tint);
+	color: var(--primary);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.chat-topbar .topbar-search {
+	flex: none;
+	width: min(340px, 34vw);
+}
+
+.chat-topbar .user-chip {
+	flex: none;
+}
+
+@media (max-width: 900px) {
+	.chat-topbar {
+		display: none;
+	}
+}
+
+/* ==========================================================================
+   Thread: day divider pills, message clocks, assistant name row
+   ========================================================================== */
+.chat-day-divider {
+	align-self: center;
+	max-width: none !important;
+	background: none;
+	border: none;
+	padding: 0;
+	box-shadow: none;
+}
+
+.chat-day-divider span {
+	display: inline-block;
+	background: var(--surface-subtle, #eef4f0);
+	border: 1px solid var(--border-soft);
+	color: var(--text-muted);
+	font-size: 11.5px;
+	font-weight: 600;
+	padding: 4px 14px;
+	border-radius: 999px;
+}
+
+.msg-user-inner {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.msg-user-inner .msg-clock {
+	align-self: flex-end;
+	font-size: 10px;
+	opacity: 0.65;
+	font-weight: 600;
+}
+
+.msg-assistant-head {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	margin-bottom: 6px;
+}
+
+.msg-assistant-head b {
+	font-size: 13px;
+	color: var(--text);
+}
+
+.msg-assistant-head span {
+	font-size: 10.5px;
+	color: var(--text-faint);
+}
+
+/* ==========================================================================
+   Citation source cards (reference: source name + meta + Lihat sumber)
+   ========================================================================== */
+.citation-list .citation-head {
+	justify-content: space-between;
+	gap: 10px;
+}
+
+.citation-source-name {
+	font-size: 12.5px;
+	font-weight: 700;
+	color: var(--text);
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.citation-head-actions {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	flex: none;
+}
+
+.citation-list .citation-open {
+	width: auto;
+	height: auto;
+	padding: 3px 8px;
+	gap: 5px;
+	font-size: 11.5px;
+	font-weight: 700;
+	color: var(--primary-strong);
+	background: var(--primary-soft);
+	border-radius: 8px;
+}
+
+.citation-meta {
+	font-size: 11px;
+	color: var(--text-faint);
+}
+
+/* ==========================================================================
+   Source registry: pagination + add-source CTA card
+   ========================================================================== */
+.source-table-foot {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.source-pagination {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.source-pagination button {
+	min-width: 28px;
+	min-height: 28px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--surface);
+	color: var(--text-muted);
+	font: inherit;
+	font-size: 14px;
+	cursor: pointer;
+	padding: 0 8px;
+}
+
+.source-pagination button:hover:not(:disabled) {
+	border-color: var(--primary-border);
+	color: var(--primary-strong);
+	background: var(--primary-tint);
+}
+
+.source-pagination button:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+
+.source-page-ind {
+	font-size: 12px;
+	font-weight: 700;
+	color: var(--text-muted);
+	min-width: 44px;
+	text-align: center;
+}
+
+.source-cta {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	margin-top: 14px;
+	padding: 18px 20px;
+	background: var(--primary-soft);
+	border: 1px solid var(--primary-border);
+	border-radius: var(--r-lg);
+}
+
+.source-cta-icon {
+	flex: none;
+	width: 46px;
+	height: 46px;
+	border-radius: 12px;
+	background: #fff;
+	border: 1px solid var(--primary-border);
+	color: var(--primary);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.source-cta-text {
+	flex: 1;
+	min-width: 0;
+}
+
+.source-cta-text b {
+	font-size: 14.5px;
+	color: var(--primary-strong);
+}
+
+.source-cta-text p {
+	margin: 3px 0 0;
+	font-size: 12.5px;
+	color: var(--text-muted);
+	line-height: 1.5;
+}
+
+.source-cta .btn-primary {
+	flex: none;
+}
+
+@media (max-width: 700px) {
+	.source-cta {
+		flex-direction: column;
+		align-items: flex-start;
 	}
 }

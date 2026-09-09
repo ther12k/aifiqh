@@ -87,34 +87,43 @@ export function SidebarNav({
 	permissions,
 	route,
 	onNavigate,
+	hideHref,
 }: {
 	permissions: string[]
 	route: string
 	/** fired after a link is clicked (closes mobile drawers) */
 	onNavigate?: () => void
+	/** one nav destination to omit (the chat sidebar lists Chat separately) */
+	hideHref?: string
 }) {
 	return (
 		<nav className="sidebar-nav" aria-label="Navigasi utama">
-			{navSectionsFor(permissions).map((section) => (
-				<div className="nav-section" key={section.label}>
-					<div className="nav-section-label">{section.label}</div>
-					{section.items.map((item) => {
-						const active = isNavItemActive(route, item.href)
-						return (
-							<a
-								key={item.href}
-								href={item.href}
-								className={active ? 'active-nav' : ''}
-								aria-current={active ? 'page' : undefined}
-								onClick={onNavigate}
-							>
-								<NavIcon d={item.icon} />
-								{item.label}
-							</a>
-						)
-					})}
-				</div>
-			))}
+			{navSectionsFor(permissions)
+				.map((section) => ({
+					...section,
+					items: section.items.filter((item) => item.href !== hideHref),
+				}))
+				.filter((section) => section.items.length > 0)
+				.map((section) => (
+					<div className="nav-section" key={section.label}>
+						<div className="nav-section-label">{section.label}</div>
+						{section.items.map((item) => {
+							const active = isNavItemActive(route, item.href)
+							return (
+								<a
+									key={item.href}
+									href={item.href}
+									className={active ? 'active-nav' : ''}
+									aria-current={active ? 'page' : undefined}
+									onClick={onNavigate}
+								>
+									<NavIcon d={item.icon} />
+									{item.label}
+								</a>
+							)
+						})}
+					</div>
+				))}
 		</nav>
 	)
 }

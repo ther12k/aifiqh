@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { BRAND } from '../config/brand'
 
 interface RevisionRow {
 	id: string
@@ -58,6 +59,21 @@ export function canDeprecateRevision(permissions: string[]): boolean {
 /** Review decisions are offered only for the review:approve permission hint. */
 export function canReviewRevision(permissions: string[]): boolean {
 	return permissions.includes('review:approve')
+}
+
+/** rows per page for the source table (client-side, list is tenant-scoped) */
+export const SOURCE_PAGE_SIZE = 8
+
+/** pure 1-based pagination so the table window is unit-testable */
+export function pageSlice<T>(list: T[], page: number, perPage: number): T[] {
+	const totalPages = Math.max(1, Math.ceil(list.length / perPage))
+	const safePage = Math.min(Math.max(1, page), totalPages)
+	const start = (safePage - 1) * perPage
+	return list.slice(start, start + perPage)
+}
+
+export function pageCount(total: number, perPage: number): number {
+	return Math.max(1, Math.ceil(total / perPage))
 }
 
 /** Indonesian status labels for the revision lifecycle (#108). */
@@ -210,6 +226,7 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 	const [sortBy, setSortBy] = useState('newest')
 	const [statusFilter, setStatusFilter] = useState('')
 	const [selected, setSelected] = useState<SourceRow | null>(null)
+	const [page, setPage] = useState(1)
 	const [revisions, setRevisions] = useState<RevisionRow[]>([])
 	const [reviewsByRevision, setReviewsByRevision] = useState<
 		Record<string, ReviewRow[]>
@@ -367,6 +384,16 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 	const typeOptions = [...new Set(sources.map((s) => s.source_type))].sort()
 	const langOptions = [...new Set(sources.map((s) => s.language))].sort()
 
+	// any filter change resets to the first page
+	function updateFilters(apply: () => void) {
+		apply()
+		setPage(1)
+	}
+
+	// filtering/sorting feed the stats; pagination only windows the table
+	const totalPages = pageCount(visible.length, SOURCE_PAGE_SIZE)
+	const pageRows = pageSlice(visible, page, SOURCE_PAGE_SIZE)
+
 	return (
 		<section
 			aria-label="source-registry"
@@ -425,7 +452,7 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 						data-testid="source-search"
 						placeholder="Cari judul sumber, penulis, atau kata kunci…"
 						value={query}
-						onChange={(e) => setQuery(e.target.value)}
+						onChange={(e) => updateFilters(() => setQuery(e.target.value))}
 					/>
 					<kbd>⌘ K</kbd>
 				</label>
@@ -433,7 +460,7 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 					className="source-filter"
 					aria-label="Filter jenis"
 					value={typeFilter}
-					onChange={(e) => setTypeFilter(e.target.value)}
+					onChange={(e) => updateFilters(() => setTypeFilter(e.target.value))}
 				>
 					<option value="">Semua Jenis</option>
 					{typeOptions.map((t) => (
@@ -446,7 +473,7 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 					className="source-filter"
 					aria-label="Filter bahasa"
 					value={langFilter}
-					onChange={(e) => setLangFilter(e.target.value)}
+					onChange={(e) => updateFilters(() => setLangFilter(e.target.value))}
 				>
 					<option value="">Semua Bahasa</option>
 					{langOptions.map((l) => (
@@ -459,7 +486,7 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 					className="source-filter"
 					aria-label="Urutkan"
 					value={sortBy}
-					onChange={(e) => setSortBy(e.target.value)}
+					onChange={(e) => updateFilters(() => setSortBy(e.target.value))}
 				>
 					<option value="newest">Terbaru</option>
 					<option value="title">Judul A–Z</option>
@@ -489,7 +516,7 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 						</tr>
 					</thead>
 					<tbody data-testid="source-list">
-						{visible.map((s) => (
+						{pageRows.map((s) => (
 							<tr key={s.id}>
 								<td>
 									<button
@@ -548,10 +575,54 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 				</table>
 				{sources.length > 0 && (
 					<div className="source-table-foot">
-						Menampilkan {visible.length} dari {sources.length} sumber
+						<span>
+							Menampilkan {pageRows.length} dari {visible.length} sumber
+						</span>
+						{totalPages > 1 && (
+							<nav className="source-pagination" aria-label="Paginasi sumber">
+								<button
+									type="button"
+									aria-label="Halaman sebelumnya"
+									disabled={page <= 1}
+									onClick={() => setPage((p) => Math.max(1, p - 1))}
+								>
+									‹
+								</button>
+								<span className="source-page-ind">
+									{page} / {totalPages}
+								</span>
+								<button
+									type="button"
+									aria-label="Halaman berikutnya"
+									disabled={page >= totalPages}
+									onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+								>
+									›
+								</button>
+							</nav>
+						)}
 					</div>
 				)}
 			</div>
+
+			{canCreate && (
+				<div className="source-cta">
+					<span className="source-cta-icon" aria-hidden="true">
+						<BookIcon />
+					</span>
+					<div className="source-cta-text">
+						<b>Perlu menambahkan sumber?</b>
+						<p>
+							Tambahkan kitab, dokumen, atau referensi baru untuk memperluas
+							basis pengetahuan {BRAND.shortName} dan mendapatkan jawaban yang
+							lebih komprehensif dan akurat.
+						</p>
+					</div>
+					<a className="btn-primary" href="#/studio">
+						+ Tambah Sumber
+					</a>
+				</div>
+			)}
 
 			{selected && (
 				<div data-testid="source-detail">

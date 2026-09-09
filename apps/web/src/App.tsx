@@ -1,23 +1,22 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ChatContainer } from './chat/ChatContainer'
 import { ReviewerWorkspace } from './chat/ReviewerWorkspace'
+import { type Health, HealthPill } from './components/HealthPill'
 import { SessionChip, roleAccent, roleLabel } from './components/SessionChip'
 import { SidebarNav, navSectionsFor } from './components/SidebarNav'
 import { BrandMark, ICON_PATHS, NavIcon, SearchIcon } from './components/icons'
 import { BRAND } from './config/brand'
 import { ConceptEditor } from './knowledge/ConceptEditor'
+import {
+	authGuardDecision,
+	isNavItemActive,
+	searchRouteFor,
+} from './lib/routes'
 import { OpsStatusContainer } from './ops/OpsStatusContainer'
 import { SourceRegistry } from './sources/SourceRegistry'
 import { StudioDashboardContainer } from './studio/StudioDashboardContainer'
 
 export { isNavItemActive, routePath } from './lib/routes'
-
-import { authGuardDecision, isNavItemActive } from './lib/routes'
-
-interface Health {
-	status: string
-	components: { component: string; status: string }[]
-}
 
 interface Me {
 	userId: string
@@ -610,43 +609,8 @@ function PublicLanding({
 	)
 }
 
-/** quick-jump keywords for the topbar search (real routes only) */
-const SEARCH_ROUTES: Array<{ match: RegExp; hash: string }> = [
-	{ match: /chat|tanya|fiqih|jawab/i, hash: '#/chat' },
-	{ match: /sumber|source|kitab|hadis|qur/i, hash: '#/sources' },
-	{ match: /studio|konsep|editor|draft/i, hash: '#/studio' },
-	{ match: /dasbor|dashboard|kartu/i, hash: '#/studio-dashboard' },
-	{ match: /ops|operasional|status|health|sehat/i, hash: '#/ops' },
-]
-
-/** role helpers live in components/SessionChip.tsx */
-
-/** small health pill for the topbar; shows the worst component status */
-function HealthPill({ health }: { health: Health | null }) {
-	if (!health) {
-		return (
-			<span className="health-pill hp-down" title="Status tidak diketahui">
-				<span className="hp-dot" aria-hidden="true" />
-				API?
-			</span>
-		)
-	}
-	const allOk = health.components.every((c) => c.status === 'healthy')
-	return (
-		<a
-			className={`health-pill ${allOk ? 'hp-ok' : 'hp-down'}`}
-			href="#/ops"
-			title={
-				allOk
-					? 'Semua komponen sehat'
-					: 'Ada komponen bermasalah — buka status operasional'
-			}
-		>
-			<span className="hp-dot" aria-hidden="true" />
-			{allOk ? 'Sehat' : 'Terdegradasi'}
-		</a>
-	)
-}
+/** role helpers live in components/SessionChip.tsx; the health pill and
+ * search-route matching live in components/ + lib/ (shared with chat) */
 
 /** mockup-style system health page: banner, stat cards, component table */
 function HealthPage({
@@ -833,11 +797,11 @@ export default function App() {
 
 	function onSearchKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
 		if (e.key !== 'Enter') return
-		const q = (e.target as HTMLInputElement).value
-		const hit = SEARCH_ROUTES.find((r) => r.match.test(q))
-		if (hit) {
-			window.location.hash = hit.hash
-			;(e.target as HTMLInputElement).value = ''
+		const input = e.target as HTMLInputElement
+		const target = searchRouteFor(input.value)
+		if (target) {
+			window.location.hash = target
+			input.value = ''
 		}
 	}
 
@@ -870,13 +834,18 @@ export default function App() {
 		)
 	}
 
-	// chat gets its own workspace shell: one sidebar (nav + history) and a
-	// focused conversation column — no topbar search, no operational noise
+	// chat gets its own workspace shell: one sidebar (chat history on top,
+	// remaining menus at the bottom) and a focused conversation column
 	if (route === '/chat' && me?.permissions.includes('knowledge:read')) {
-		return <ChatContainer me={me} permissions={permissions} onLogout={logout} />
+		return (
+			<ChatContainer
+				me={me}
+				permissions={permissions}
+				onLogout={logout}
+				health={health}
+			/>
+		)
 	}
-
-	const canOps = permissions.includes('ops:read')
 
 	return (
 		<div className="app-layout">
@@ -895,17 +864,6 @@ export default function App() {
 				</a>
 
 				<SidebarNav permissions={permissions} route={route} />
-
-				{canOps && (
-					<div className="sidebar-card">
-						<div className="sidebar-card-title">Kesehatan Sistem</div>
-						<p className="sidebar-card-text">
-							Pantau status komponen dan catatan kegagalan operasional secara
-							langsung.
-						</p>
-						<a href="#/ops">Buka Status Operasional →</a>
-					</div>
-				)}
 
 				<div className="sidebar-foot">
 					<SessionChip

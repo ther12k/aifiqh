@@ -3,6 +3,7 @@ import {
 	liveAnnouncement,
 	toParagraphs,
 } from '../lib/chatState'
+import { withDayDividers } from '../lib/threadView'
 
 /**
  * Streaming multilingual chat shell (CHAT-002).
@@ -76,6 +77,7 @@ export function ChatShell(props: {
 		role: 'user' | 'assistant' | 'system'
 		content: string
 		answerStatus?: string | null
+		createdAt?: string | null
 	}) => React.ReactNode
 }) {
 	const {
@@ -101,11 +103,23 @@ export function ChatShell(props: {
 						{emptyState}
 					</li>
 				) : null}
-				{state.messages.map((m) => {
+				{withDayDividers(state.messages).map((entry) => {
+					if (entry.kind === 'divider') {
+						return (
+							<li
+								key={entry.key}
+								className="chat-day-divider"
+								data-role="divider"
+							>
+								<span>{entry.label}</span>
+							</li>
+						)
+					}
+					const m = entry.message
 					const custom = renderMessage?.(m)
 					return (
 						<li
-							key={m.id}
+							key={entry.key}
 							data-role={m.role}
 							data-status={m.answerStatus ?? ''}
 						>

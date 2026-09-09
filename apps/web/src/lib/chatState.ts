@@ -17,6 +17,8 @@ export interface ChatMessageView {
 	answerId?: string | null
 	traceId?: string | null
 	answerStatus?: string | null
+	/** ISO creation time — drives the thread's day dividers and clocks */
+	createdAt?: string | null
 }
 
 export type ChatPhase = 'idle' | 'streaming' | 'cancelled' | 'error'

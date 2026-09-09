@@ -90,6 +90,12 @@ export interface TurnCitation {
 	sourceRevisionId: string
 	spanId: string
 	quote: string
+	/** display metadata joined from sources — lets the chat UI render a
+	 * proper source card without a per-citation round-trip */
+	sourceTitle?: string
+	sourceAuthor?: string
+	sourceType?: string
+	rightsStatus?: string
 }
 
 export async function startConversation(
@@ -719,6 +725,8 @@ export interface ConversationView {
 		ordinal: number
 		role: string
 		content: string
+		/** message creation timestamp — the UI groups turns into days */
+		createdAt: string
 		answerId: string | null
 		traceId: string | null
 		answerStatus: string | null
@@ -822,10 +830,11 @@ export async function getConversation(
 			answer_id: string | null
 			trace_id: string | null
 			answer_status: string | null
+			created_at: string
 		}[]
 	>`select m.id, m.ordinal, m.role, m.content,
 			m.answer_id::text as answer_id, m.retrieval_trace_id::text as trace_id,
-			a.status as answer_status
+			a.status as answer_status, m.created_at::text as created_at
 		from messages m left join answers a on a.id = m.answer_id
 		where m.conversation_id = ${conversationId}::uuid
 		order by m.ordinal`
@@ -866,11 +875,18 @@ export async function getConversation(
 				source_revision_id: string
 				span_id: string
 				quote: string | null
+				source_title: string | null
+				source_author: string | null
+				source_type: string | null
+				rights_status: string | null
 			}[]
-		>`select answer_id, ordinal, source_id, source_revision_id, span_id, quote
-			from citations
-			where answer_id = any(${answerIds}::uuid[])
-			order by ordinal asc`
+		>`select c.answer_id, c.ordinal, c.source_id, c.source_revision_id, c.span_id, c.quote,
+				s.title as source_title, s.author as source_author,
+				s.source_type as source_type, s.rights_status as rights_status
+			from citations c
+			join sources s on s.id = c.source_id
+			where c.answer_id = any(${answerIds}::uuid[])
+			order by c.ordinal asc`
 		for (const c of citRows) {
 			const list = citationsByAnswer.get(c.answer_id) ?? []
 			list.push({
@@ -879,6 +895,10 @@ export async function getConversation(
 				sourceRevisionId: c.source_revision_id,
 				spanId: c.span_id,
 				quote: c.quote ?? '',
+				sourceTitle: c.source_title ?? undefined,
+				sourceAuthor: c.source_author ?? undefined,
+				sourceType: c.source_type ?? undefined,
+				rightsStatus: c.rights_status ?? undefined,
 			})
 			citationsByAnswer.set(c.answer_id, list)
 		}
@@ -982,6 +1002,7 @@ export async function getConversation(
 				ordinal: m.ordinal,
 				role: m.role,
 				content: m.content,
+				createdAt: m.created_at,
 				answerId: m.answer_id,
 				traceId: m.trace_id,
 				answerStatus: m.answer_status,

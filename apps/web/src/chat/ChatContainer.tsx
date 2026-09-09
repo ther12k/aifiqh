@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { SessionChip, type SessionUser } from '../components/SessionChip'
+import { type Health, HealthPill } from '../components/HealthPill'
+import {
+	SessionChip,
+	type SessionUser,
+	roleAccent,
+	roleLabel,
+} from '../components/SessionChip'
 import { SidebarNav } from '../components/SidebarNav'
 import { BrandMark, ICON_PATHS, NavIcon, SearchIcon } from '../components/icons'
 import { BRAND } from '../config/brand'
@@ -22,6 +28,8 @@ import {
 	saveConversationOrganization,
 	toggleConversationPin,
 } from '../lib/conversationOrganization'
+import { searchRouteFor } from '../lib/routes'
+import { threadTimeLabel, withDayDividers } from '../lib/threadView'
 import { ChatShell, MessageParagraphs } from './ChatShell'
 
 function getCsrfToken(): string {
@@ -74,6 +82,11 @@ interface TurnCitation {
 	sourceRevisionId: string
 	spanId: string
 	quote: string
+	/** display metadata joined server-side (absent on older answers) */
+	sourceTitle?: string
+	sourceAuthor?: string
+	sourceType?: string
+	rightsStatus?: string
 }
 
 /** mirrors apps/api/src/answers/answerStatus.ts */
@@ -121,6 +134,21 @@ const ICON_UP =
 	'M7 10v10H4V10h3zm3 10h7a2 2 0 0 0 2-1.7l1-6A2 2 0 0 0 18 10h-5l1-5a2 2 0 0 0-3.4-1.8L10 7v13z'
 const ICON_DOWN =
 	'M17 14V4h3v10h-3zm-3-10H7a2 2 0 0 0-2 1.7l-1 6A2 2 0 0 0 6 14h5l-1 5a2 2 0 0 0 3.4 1.8L14 17V4z'
+
+/** readable Indonesian label per citation source type (fallback: raw) */
+const CITATION_TYPE_LABELS: Record<string, string> = {
+	quran: "Al-Qur'an",
+	hadis: 'Hadits',
+	hadits: 'Hadits',
+	book: 'Kitab',
+	kitab: 'Kitab',
+	fatwa: 'Fatwa',
+}
+
+function citationTypeLabel(sourceType?: string): string {
+	if (!sourceType) return ''
+	return CITATION_TYPE_LABELS[sourceType.toLowerCase()] ?? sourceType
+}
 
 const VERIFY_LABELS: Record<string, string> = {
 	passed: 'integritas kutipan lulus',
@@ -423,38 +451,54 @@ function AnswerCard({
 									</span>
 									<div className="citation-body">
 										<div className="citation-head">
-											<button
-												type="button"
-												className="citation-report"
-												onClick={() =>
-													submitFeedback('citation_issue', c.spanId)
-												}
-											>
-												Rujukan salah?
-											</button>
-											<a
-												className="citation-open"
-												href={`#/sources/${c.sourceId}/revisions/${c.sourceRevisionId}?span=${c.spanId}`}
-												title="Buka pada revisi terkunci di Sumber"
-											>
-												<span className="sr-only">
-													{`Buka sumber ${c.ordinal} pada viewer`}
-												</span>
-												<svg
-													width="13"
-													height="13"
-													viewBox="0 0 24 24"
-													fill="none"
-													stroke="currentColor"
-													strokeWidth="2"
-													strokeLinecap="round"
-													strokeLinejoin="round"
-													aria-hidden="true"
+											<span className="citation-source-name">
+												{c.sourceTitle ?? `Sumber ${c.ordinal}`}
+											</span>
+											<span className="citation-head-actions">
+												<button
+													type="button"
+													className="citation-report"
+													onClick={() =>
+														submitFeedback('citation_issue', c.spanId)
+													}
 												>
-													<path d="M14 5h5v5M19 5l-8 8M9 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3" />
-												</svg>
-											</a>
+													Rujukan salah?
+												</button>
+												<a
+													className="citation-open"
+													href={`#/sources/${c.sourceId}/revisions/${c.sourceRevisionId}?span=${c.spanId}`}
+													title="Buka pada revisi terkunci di Sumber"
+												>
+													Lihat sumber
+													<svg
+														width="13"
+														height="13"
+														viewBox="0 0 24 24"
+														fill="none"
+														stroke="currentColor"
+														strokeWidth="2"
+														strokeLinecap="round"
+														strokeLinejoin="round"
+														aria-hidden="true"
+													>
+														<path d="M14 5h5v5M19 5l-8 8M9 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3" />
+													</svg>
+												</a>
+											</span>
 										</div>
+										{(c.sourceAuthor ||
+											citationTypeLabel(c.sourceType) ||
+											c.rightsStatus) && (
+											<span className="citation-meta">
+												{[
+													c.sourceAuthor,
+													citationTypeLabel(c.sourceType),
+													c.rightsStatus,
+												]
+													.filter(Boolean)
+													.join(' · ')}
+											</span>
+										)}
 										<MessageParagraphs text={c.quote} />
 									</div>
 								</li>
@@ -660,11 +704,14 @@ export function ChatContainer({
 	me,
 	permissions,
 	onLogout,
+	health = null,
 }: {
 	/** signed-in principal (chat is only mounted for authenticated users) */
 	me: SessionUser
 	permissions: string[]
 	onLogout: () => void
+	/** system health for the workspace topbar pill (fetched by App) */
+	health?: Health | null
 }) {
 	const [conversationId, setConversationId] = useState<string | null>(null)
 	const [conversations, setConversations] = useState<ConversationListItem[]>([])
@@ -672,9 +719,6 @@ export function ChatContainer({
 	// single workspace sidebar: on desktop it is always visible, the flag
 	// only drives the mobile drawer
 	const [sidebarOpen, setSidebarOpen] = useState(false)
-	// history-first sidebar: the nav menu stays out of the way and is
-	// revealed by the config (gear) button
-	const [menuOpen, setMenuOpen] = useState(false)
 	const [organization, setOrganization] =
 		useState<ConversationOrganizationPreferences>(loadConversationOrganization)
 	const [groupFilter, setGroupFilter] = useState('')
@@ -746,6 +790,7 @@ export function ChatContainer({
 					ordinal: number
 					role: 'user' | 'assistant' | 'system'
 					content: string
+					createdAt?: string
 					answerId: string | null
 					traceId: string | null
 					answerStatus: string | null
@@ -776,6 +821,7 @@ export function ChatContainer({
 				answerId?: string | null
 				traceId?: string | null
 				answerStatus?: string | null
+				createdAt?: string | null
 			}> = []
 
 			for (const m of data.messages) {
@@ -786,6 +832,7 @@ export function ChatContainer({
 					answerId: m.answerId,
 					traceId: m.traceId,
 					answerStatus: m.answerStatus,
+					createdAt: m.createdAt,
 				})
 
 				if (m.role === 'assistant') {
@@ -968,6 +1015,7 @@ export function ChatContainer({
 
 		const userMsgId = crypto.randomUUID()
 		const assistantMsgId = crypto.randomUUID()
+		const turnClock = new Date().toISOString()
 
 		// Optimistically append user message and start assistant stream state
 		setChatState((prev) => {
@@ -975,7 +1023,12 @@ export function ChatContainer({
 				...prev,
 				messages: [
 					...prev.messages,
-					{ id: userMsgId, role: 'user' as const, content: query },
+					{
+						id: userMsgId,
+						role: 'user' as const,
+						content: query,
+						createdAt: turnClock,
+					},
 				],
 			}
 			return startStreaming(s1, userMsgId, assistantMsgId)
@@ -1079,6 +1132,7 @@ export function ChatContainer({
 						role: 'assistant',
 						content: assistantText,
 						answerStatus: result.status,
+						createdAt: turnClock,
 					},
 				],
 			}))
@@ -1140,50 +1194,35 @@ export function ChatContainer({
 
 	return (
 		<div className="chat-workspace">
-			{/* the ONE sidebar: history-first — nav lives behind the gear */}
+			{/* ONE sidebar: Chat + its history on top, the other menus pinned to
+			    the bottom so the history list can grow and scroll between them */}
 			<aside
 				className={`sidebar chat-ws-sidebar ${sidebarOpen ? 'is-open' : ''}`}
 			>
-				<div className="ws-top">
-					<div className="sidebar-brand">
-						<BrandMark small />
-						<div>
-							<div className="brand-name">{BRAND.name}</div>
-							<div className="brand-sub">{BRAND.tagline}</div>
-						</div>
+				<div className="sidebar-brand">
+					<BrandMark small />
+					<div>
+						<div className="brand-name">{BRAND.name}</div>
+						<div className="brand-sub">{BRAND.tagline}</div>
 					</div>
-					<button
-						type="button"
-						className="ws-config-btn"
-						aria-expanded={menuOpen}
-						aria-label={menuOpen ? 'Tutup menu navigasi' : 'Buka menu navigasi'}
-						title="Menu navigasi"
-						onClick={() => setMenuOpen((v) => !v)}
-					>
-						<NavIcon d={menuOpen ? ICON_PATHS.close : ICON_PATHS.gear} />
-						<span className="ws-config-label">Menu</span>
-					</button>
 				</div>
 
-				<div className="ws-quick-links" aria-label="Akses cepat">
-					<button
-						type="button"
-						className="btn-new-chat"
-						onClick={() => void startNewConversation()}
-					>
-						<NavIcon d={ICON_PATHS.plus} />
-						Chat Baru
-					</button>
-					<button
-						type="button"
-						className="ws-quick-link"
-						onClick={() =>
-							document.getElementById('conversation-search')?.focus()
-						}
-					>
-						<NavIcon d={ICON_PATHS.chat} /> Cari percakapan
-					</button>
-				</div>
+				<button
+					type="button"
+					className="btn-new-chat"
+					onClick={() => void startNewConversation()}
+				>
+					<NavIcon d={ICON_PATHS.plus} />
+					Chat Baru
+				</button>
+
+				{/* the chat destination itself, directly above its history */}
+				<nav className="sidebar-nav chat-single-nav" aria-label="Chat">
+					<a href="#/chat" className="active-nav" aria-current="page">
+						<NavIcon d={ICON_PATHS.chat} />
+						Chat
+					</a>
+				</nav>
 
 				<div className="ws-history" aria-label="Riwayat percakapan">
 					<label className="history-search">
@@ -1193,7 +1232,7 @@ export function ChatContainer({
 							id="conversation-search"
 							value={searchQuery}
 							onChange={(e) => setSearchQuery(e.target.value)}
-							placeholder="Cari percakapan"
+							placeholder="Cari percakapan…"
 						/>
 					</label>
 					{groups.length > 0 && (
@@ -1217,146 +1256,135 @@ export function ChatContainer({
 							))}
 						</div>
 					)}
-					<div className="history-section-title">Riwayat</div>
-					{conversationsLoading && conversations.length === 0 ? (
-						<div className="history-empty">Memuat riwayat…</div>
-					) : conversations.length === 0 ? (
-						<div className="history-empty">Belum ada riwayat percakapan.</div>
-					) : visibleConversations.length === 0 ? (
-						<div className="history-empty">
-							Tidak ada percakapan yang cocok dengan filter ini.
-						</div>
-					) : (
-						<>
-							{pinnedConversations.length > 0 && (
-								<div className="history-section-title">Disematkan</div>
-							)}
-							<ul className="history-list">
-								{[...pinnedConversations, ...recentConversations].map((c) => {
-									const isPinned = organization.pinnedIds.includes(c.id)
+					<div className="history-section-title">Riwayat Percakapan</div>
+					<div className="history-scroll">
+						{conversationsLoading && conversations.length === 0 ? (
+							<div className="history-empty">Memuat riwayat…</div>
+						) : conversations.length === 0 ? (
+							<div className="history-empty">Belum ada riwayat percakapan.</div>
+						) : visibleConversations.length === 0 ? (
+							<div className="history-empty">
+								Tidak ada percakapan yang cocok dengan filter ini.
+							</div>
+						) : (
+							<>
+								{pinnedConversations.length > 0 && (
+									<div className="history-section-title">Disematkan</div>
+								)}
+								<ul className="history-list">
+									{[...pinnedConversations, ...recentConversations].map((c) => {
+										const isPinned = organization.pinnedIds.includes(c.id)
 
-									const isCurrent = c.id === conversationId
-									const label = c.snippet || c.title || 'Percakapan Baru'
-									return (
-										<li
-											key={c.id}
-											className={`history-item ${isCurrent ? 'active' : ''}`}
-										>
-											<button
-												type="button"
-												className="history-item-btn"
-												onClick={() => {
-													if (c.id !== conversationId) {
-														void loadConversation(c.id)
-													}
-													setSidebarOpen(false)
-												}}
-												title={label}
+										const isCurrent = c.id === conversationId
+										const label = c.snippet || c.title || 'Percakapan Baru'
+										return (
+											<li
+												key={c.id}
+												className={`history-item ${isCurrent ? 'active' : ''}`}
 											>
-												<svg
-													className="history-item-icon"
-													width="14"
-													height="14"
-													viewBox="0 0 24 24"
-													fill="none"
-													stroke="currentColor"
-													strokeWidth="1.8"
-													strokeLinecap="round"
-													strokeLinejoin="round"
-													aria-hidden="true"
+												<button
+													type="button"
+													className="history-item-btn"
+													onClick={() => {
+														if (c.id !== conversationId) {
+															void loadConversation(c.id)
+														}
+														setSidebarOpen(false)
+													}}
+													title={label}
 												>
-													<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-												</svg>
-												<span className="history-item-text">
-													<span className="history-item-title">{label}</span>
-													<span className="history-item-meta">
-														{formatRelativeTime(c.updatedAt)}
+													<svg
+														className="history-item-icon"
+														width="14"
+														height="14"
+														viewBox="0 0 24 24"
+														fill="none"
+														stroke="currentColor"
+														strokeWidth="1.8"
+														strokeLinecap="round"
+														strokeLinejoin="round"
+														aria-hidden="true"
+													>
+														<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+													</svg>
+													<span className="history-item-text">
+														<span className="history-item-title">{label}</span>
+														<span className="history-item-meta">
+															{formatRelativeTime(c.updatedAt)}
+														</span>
 													</span>
-												</span>
-											</button>
-											<button
-												type="button"
-												className="history-item-pin"
-												aria-label={
-													isPinned ? 'Lepas sematan' : 'Sematkan percakapan'
-												}
-												title={
-													isPinned ? 'Lepas sematan' : 'Sematkan percakapan'
-												}
-												onClick={(e) => {
-													e.stopPropagation()
-													togglePinned(c.id)
-												}}
-											>
-												★
-											</button>
-											<button
-												type="button"
-												className="history-item-group"
-												aria-label="Atur grup percakapan"
-												title="Atur grup"
-												onClick={(e) => {
-													e.stopPropagation()
-													assignGroup(c.id)
-												}}
-											>
-												+
-											</button>
-											<button
-												type="button"
-												className="history-item-delete"
-												title="Hapus percakapan"
-												aria-label="Hapus percakapan"
-												onClick={(e) => void handleDeleteConversation(e, c.id)}
-											>
-												<svg
-													width="13"
-													height="13"
-													viewBox="0 0 24 24"
-													fill="none"
-													stroke="currentColor"
-													strokeWidth="1.8"
-													strokeLinecap="round"
-													strokeLinejoin="round"
-													aria-hidden="true"
+												</button>
+												<button
+													type="button"
+													className="history-item-pin"
+													aria-label={
+														isPinned ? 'Lepas sematan' : 'Sematkan percakapan'
+													}
+													title={
+														isPinned ? 'Lepas sematan' : 'Sematkan percakapan'
+													}
+													onClick={(e) => {
+														e.stopPropagation()
+														togglePinned(c.id)
+													}}
 												>
-													<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-												</svg>
-											</button>
-										</li>
-									)
-								})}
-							</ul>
-						</>
-					)}
+													★
+												</button>
+												<button
+													type="button"
+													className="history-item-group"
+													aria-label="Atur grup percakapan"
+													title="Atur grup"
+													onClick={(e) => {
+														e.stopPropagation()
+														assignGroup(c.id)
+													}}
+												>
+													+
+												</button>
+												<button
+													type="button"
+													className="history-item-delete"
+													title="Hapus percakapan"
+													aria-label="Hapus percakapan"
+													onClick={(e) =>
+														void handleDeleteConversation(e, c.id)
+													}
+												>
+													<svg
+														width="13"
+														height="13"
+														viewBox="0 0 24 24"
+														fill="none"
+														stroke="currentColor"
+														strokeWidth="1.8"
+														strokeLinecap="round"
+														strokeLinejoin="round"
+														aria-hidden="true"
+													>
+														<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+													</svg>
+												</button>
+											</li>
+										)
+									})}
+								</ul>
+							</>
+						)}
+					</div>
+				</div>
+
+				{/* the other destinations, pinned under the history */}
+				<div className="ws-nav-bottom">
+					<SidebarNav
+						permissions={permissions}
+						route="/chat"
+						hideHref="#/chat"
+					/>
 				</div>
 
 				<div className="sidebar-foot">
 					<SessionChip me={me} onLogout={onLogout} />
-				</div>
-
-				{/* nav menu, revealed by the config (gear) button */}
-				<div
-					className={`ws-nav-panel ${menuOpen ? 'is-open' : ''}`}
-					aria-hidden={!menuOpen}
-				>
-					<div className="ws-nav-head">
-						<span className="ws-nav-title">Navigasi</span>
-						<button
-							type="button"
-							className="ws-config-btn"
-							aria-label="Tutup menu navigasi"
-							onClick={() => setMenuOpen(false)}
-						>
-							<NavIcon d={ICON_PATHS.close} />
-							<span className="ws-config-label">Tutup</span>
-						</button>
-					</div>
-					<SidebarNav
-						permissions={permissions}
-						route="/chat"
-						onNavigate={() => setMenuOpen(false)}
-					/>
 				</div>
 			</aside>
 			<button
@@ -1367,8 +1395,58 @@ export function ChatContainer({
 				tabIndex={-1}
 			/>
 
-			{/* focused conversation column — no global search, no op noise */}
+			{/* focused conversation column: workspace topbar + centered thread */}
 			<div className="chat-main-area">
+				<header className="chat-topbar">
+					<div className="chat-topbar-title">
+						<span className="chat-topbar-icon" aria-hidden="true">
+							<NavIcon d={ICON_PATHS.chat} />
+						</span>
+						<div>
+							<b>Percakapan Fiqih</b>
+							<small>
+								Dapatkan jawaban berbasis dalil dari sumber terpercaya
+							</small>
+						</div>
+					</div>
+					<div className="topbar-search">
+						<SearchIcon />
+						<input
+							type="text"
+							placeholder="Cari topik, dalil, atau pertanyaan…"
+							aria-label="Cari topik, dalil, atau pertanyaan"
+							onKeyDown={(e) => {
+								if (e.key !== 'Enter') return
+								const target = searchRouteFor(
+									(e.target as HTMLInputElement).value,
+								)
+								if (target) {
+									window.location.hash = target
+									;(e.target as HTMLInputElement).value = ''
+								}
+							}}
+						/>
+						<kbd>⏎</kbd>
+					</div>
+					<div className="topbar-spacer" />
+					<HealthPill health={health} />
+					<div className="user-chip">
+						<span
+							className={`avatar ${roleAccent(me.permissions)}`}
+							aria-hidden="true"
+						>
+							{me.userId.slice(0, 2).toUpperCase()}
+						</span>
+						<span className="who">
+							<b>{roleLabel(me.permissions)}</b>
+							<small>
+								{me.tenantId
+									? `Tenant ${me.tenantId.slice(0, 8)}`
+									: 'Tanpa tenant'}
+							</small>
+						</span>
+					</div>
+				</header>
 				<div className="chat-mobile-bar">
 					<button
 						type="button"
@@ -1462,13 +1540,34 @@ export function ChatContainer({
 								</div>
 							}
 							renderMessage={(m) => {
+								if (m.role === 'user') {
+									return (
+										<div className="msg-user-inner">
+											<MessageParagraphs text={m.content} />
+											{m.createdAt ? (
+												<span className="msg-clock">
+													{threadTimeLabel(m.createdAt)}
+												</span>
+											) : null}
+										</div>
+									)
+								}
 								if (m.role !== 'assistant') return null
+								const head = (
+									<div className="msg-assistant-head">
+										<b>{BRAND.name}</b>
+										{m.createdAt ? (
+											<span>{threadTimeLabel(m.createdAt)}</span>
+										) : null}
+									</div>
+								)
 								const answer = answersByMsg[m.id]
 								if (answer) {
 									return (
 										<>
 											<AssistantAvatar />
 											<div className="msg-body">
+												{head}
 												<AnswerCard answer={answer} messageId={m.id} />
 											</div>
 										</>
@@ -1480,6 +1579,7 @@ export function ChatContainer({
 										<>
 											<AssistantAvatar />
 											<div className="msg-body">
+												{head}
 												<AbstainCard
 													decision={decision.decision}
 													rationale={decision.rationale}
@@ -1493,6 +1593,7 @@ export function ChatContainer({
 									<>
 										<AssistantAvatar />
 										<div className="msg-body">
+											{head}
 											<MessageParagraphs text={m.content} />
 										</div>
 									</>

@@ -44,3 +44,18 @@ export function authGuardDecision(
 	if (!meKnown) return 'loading'
 	return authenticated ? 'allow' : 'redirect'
 }
+
+/** quick-jump keywords for the topbar search (real routes only) */
+const SEARCH_ROUTES: Array<{ match: RegExp; hash: string }> = [
+	{ match: /chat|tanya|fiqih|jawab/i, hash: '#/chat' },
+	{ match: /sumber|source|kitab|hadis|qur/i, hash: '#/sources' },
+	{ match: /studio|konsep|editor|draft/i, hash: '#/studio' },
+	{ match: /dasbor|dashboard|kartu/i, hash: '#/studio-dashboard' },
+	{ match: /ops|operasional|status|health|sehat/i, hash: '#/ops' },
+]
+
+/** resolve a free-text topbar query to the route it most likely means */
+export function searchRouteFor(query: string): string | null {
+	const hit = SEARCH_ROUTES.find((r) => r.match.test(query))
+	return hit ? hit.hash : null
+}
