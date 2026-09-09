@@ -82,7 +82,7 @@ body {
    ========================================================================== */
 .app-layout {
 	display: grid;
-	grid-template-columns: 248px minmax(0, 1fr);
+	grid-template-columns: 272px minmax(0, 1fr);
 	min-height: 100vh;
 }
 
@@ -93,13 +93,10 @@ body {
 	height: 100vh;
 	display: flex;
 	flex-direction: column;
-	/* decorative mosque skyline at the bottom edge */
-	background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 70' fill='none'%3E%3Cpath d='M120 46V26c0-8 6-14 14-14s14 6 14 14v20' stroke='%23e3efe8' stroke-width='6'/%3E%3Cpath d='M134 12v-6' stroke='%23e3efe8' stroke-width='3' stroke-linecap='round'/%3E%3Ccircle cx='134' cy='4' r='2.4' stroke='%23c99a4b' stroke-width='1.6'/%3E%3Cpath d='M60 46V32m-5 0h10M180 46V32m-5 0h10' stroke='%23e3efe8' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M22 46V36m0 0c-3-1.6-6-.8-8 1.4M22 36c3-1.6 6-.8 8 1.4' stroke='%23e3efe8' stroke-width='2.6' stroke-linecap='round'/%3E%3Cpath d='M218 46V38m0 0c-3-1.6-6-.8-8 1.4m8-1.4c3-1.6 6-.8 8 1.4' stroke='%23e3efe8' stroke-width='2.6' stroke-linecap='round'/%3E%3Cpath d='M6 46h228' stroke='%23e3efe8' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E")
-		bottom center / 100% auto no-repeat,
-		linear-gradient(180deg, #fdfffe 0%, #f4f9f6 100%);
+	background: linear-gradient(180deg, #fdfffe 0%, #f4f9f6 100%);
 	border-right: 1px solid var(--border);
 	color: var(--text);
-	padding: 20px 14px 88px;
+	padding: 20px 14px 20px;
 	gap: 6px;
 	overflow-y: auto;
 }
@@ -109,6 +106,11 @@ body {
 	align-items: center;
 	gap: 12px;
 	padding: 6px 10px 16px;
+	min-width: 0;
+}
+
+.sidebar-brand > div {
+	min-width: 0;
 }
 
 .brand-mark {
@@ -125,15 +127,15 @@ body {
 }
 
 .brand-sub {
-	font-size: 10px;
+	font-size: 9.5px;
 	color: var(--primary);
-	letter-spacing: 0.08em;
+	letter-spacing: 0.05em;
 	text-transform: uppercase;
 	font-weight: 700;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
-	max-width: 200px;
+	max-width: 100%;
 }
 
 /* primary "Chat Baru" action */
@@ -485,7 +487,12 @@ body {
 
 .topbar-search input {
 	flex: 1;
+	min-width: 0;
+	/* the global :where(input) baseline pads every input — the topbar pill
+	   provides its own spacing, so the bare input stays slim */
+	padding: 0;
 	border: none;
+	box-shadow: none;
 	outline: none;
 	background: transparent;
 	font: inherit;

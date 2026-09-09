@@ -994,7 +994,7 @@ export default function App() {
 								</p>
 							</div>
 							<PageQuote quote={PAGE_QUOTES['/sources']} />
-							<SkylineDecor />
+							
 						</div>
 					)}
 					{route === '/studio-dashboard' && (
@@ -1022,7 +1022,7 @@ export default function App() {
 								</p>
 							</div>
 							<PageQuote quote={PAGE_QUOTES['/reviewer']} />
-							<SkylineDecor />
+							
 						</div>
 					)}
 					{route === '/ops' && (
@@ -1035,7 +1035,7 @@ export default function App() {
 								</p>
 							</div>
 							<PageQuote quote={PAGE_QUOTES['/ops']} />
-							<SkylineDecor />
+							
 						</div>
 					)}
 					{route === '/studio' && (
@@ -1048,7 +1048,7 @@ export default function App() {
 								</p>
 							</div>
 							<PageQuote quote={PAGE_QUOTES['/studio']} />
-							<SkylineDecor />
+							
 						</div>
 					)}
 
@@ -1107,7 +1107,7 @@ export default function App() {
 									</p>
 								</div>
 								<PageQuote quote={PAGE_QUOTES['/health']} />
-								<SkylineDecor />
+								
 							</div>
 							<HealthPage
 								health={health}

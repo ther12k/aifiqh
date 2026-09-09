@@ -212,32 +212,41 @@ if (process.env.OIDC_TRUST_PROXY === 'true') {
 }
 
 function page(title, body) {
-	// split-panel login (Taffaqquh brand): emerald brand panel + form card
+	// split-panel login (Taffaqquh AI brand): emerald brand panel + form card.
+	// The mark mirrors apps/web/src/components/icons.tsx (mihrab arch framing
+	// a speech bubble above an open book) so both surfaces read as one product.
+	const brandMark = `
+      <svg width="56" height="56" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+        <path d="M24 3.2C15.2 9.8 9.8 15.4 9.8 24.8V39h28.4V24.8c0-9.4-5.4-15-14.2-21.6z" stroke="#fff" stroke-width="2.6" stroke-linejoin="round" fill="rgba(255,255,255,.06)"/>
+        <path d="M24 11.6c5.1 0 9.2 3.2 9.2 7.4s-4.1 7.4-9.2 7.4c-.9 0-1.75-.1-2.55-.28l-4.05 2.08 1.05-3.5c-2.2-1.32-3.65-3.4-3.65-5.7 0-4.2 4.1-7.4 9.2-7.4z" fill="#fff"/>
+        <circle cx="20.4" cy="19" r="1.25" fill="#0f7a5c"/>
+        <circle cx="24" cy="19" r="1.25" fill="#0f7a5c"/>
+        <circle cx="27.6" cy="19" r="1.25" fill="#0f7a5c"/>
+        <path d="M24 30.4c-2.4-1.9-5.3-2.7-8.6-2.7-1.2 0-2.35.12-3.4.34v9c1.05-.22 2.2-.34 3.4-.34 3.3 0 6.2.82 8.6 2.7 2.4-1.88 5.3-2.7 8.6-2.7 1.2 0 2.35.12 3.4.34v-9c-1.05-.22-2.2-.34-3.4-.34-3.3 0-6.2.8-8.6 2.7z" stroke="#fff" stroke-width="2" stroke-linejoin="round" fill="none"/>
+        <path d="M24 30.6v8.8" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+        <path d="M13 42.4h22" stroke="#e5c88a" stroke-width="2.4" stroke-linecap="round"/>
+      </svg>`
+	const featIcon = (d) => `
+      <span class="feat-dot" aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg></span>`
 	const brandPanel = `
   <div class="brand-side">
+    <div class="arch-decor" aria-hidden="true"></div>
     <div class="brand-lockup">
-      <svg width="54" height="54" viewBox="0 0 48 48" fill="none" aria-hidden="true">
-        <path d="M24 6c.4 3.1 1.8 5 4 6.6 3.1 2.2 5 4.6 5 8.4v3H15v-3c0-3.8 1.9-6.2 5-8.4 2.2-1.6 3.6-3.5 4-6.6z" fill="#fff"/>
-        <path d="M24 3.2a2.8 2.8 0 1 0 2.4 4.3 2.3 2.3 0 1 1-1.1-4.2c-.4-.07-.86-.1-1.3-.1z" fill="#e5c88a"/>
-        <path d="M10.5 24v-6.5M8.5 24h4M37.5 24v-6.5M35.5 24h4" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>
-        <rect x="13" y="25.5" width="22" height="2.4" rx="1.2" fill="#e5c88a"/>
-        <path d="M24 32.5c-2.6-2.1-5.8-3-9.5-3-1.4 0-2.7.14-3.9.4v11.6c1.2-.26 2.5-.4 3.9-.4 3.7 0 6.9.9 9.5 3 2.6-2.1 5.8-3 9.5-3 1.4 0 2.7.14 3.9.4V29.9c-1.2-.26-2.5-.4-3.9-.4-3.7 0-6.9.9-9.5 3z" stroke="#fff" stroke-width="2" fill="none" stroke-linejoin="round"/>
-        <path d="M24 32.5V44" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
-      </svg>
+      ${brandMark}
       <div>
-        <div class="brand-name">Taffaqquh</div>
-        <div class="brand-tag">ILMU FIQIH, LEBIH MUDAH</div>
+        <div class="brand-name">Taffaqquh AI</div>
+        <div class="brand-tag">Asisten Fiqih Berbasis Dalil</div>
       </div>
     </div>
-    <h2>Pahami Fiqih melalui<br/>Dalil, Konteks, dan Sumber</h2>
-    <blockquote>“Bertanya tentang agama adalah jalan menuju kebaikan.”<span>— HR. Ibnu Majah</span></blockquote>
+    <h2>Pahami Fiqih melalui<br/><em>Dalil, Konteks, dan Sumber</em></h2>
+    <blockquote>“Barang siapa menempuh jalan untuk mencari ilmu, Allah akan mudahkan baginya jalan menuju surga.”<span>— HR. Muslim</span></blockquote>
     <ul class="brand-feats">
-      <li><span class="feat-dot">&#128214;</span>Bersumber pada Dalil</li>
-      <li><span class="feat-dot">&#9989;</span>Akurat &amp; Terpercaya</li>
-      <li><span class="feat-dot">&#128737;&#65039;</span>Mendukung Pembelajaran</li>
-      <li><span class="feat-dot">&#10084;&#65039;</span>Untuk Umat yang Lebih Baik</li>
+      <li>${featIcon('M5 4h6a3 3 0 0 1 3 3v13a3 3 0 0 0-3-3H5V4zm18 0h-6a3 3 0 0 0-3 3v13a3 3 0 0 1 3-3h6V4z')}Bersumber pada Dalil</li>
+      <li>${featIcon('M4 12l5 5L20 6')}Akurat &amp; Terverifikasi</li>
+      <li>${featIcon('M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z')}Mendukung Pembelajaran</li>
+      <li>${featIcon('M12 20s-7-4.5-9-9c-1.5-3.5 1-7 4.5-7 2 0 3.5 1 4.5 2.7C13.5 5 15 4 17 4c3.5 0 6 3.5 4.5 7-2 4.5-9 9-9 9z')}Untuk Umat yang Lebih Baik</li>
     </ul>
-    <div class="brand-foot">Islamic knowledge for a brighter tomorrow</div>
+    <div class="brand-foot">Tanya &middot; Telusuri &middot; Pahami</div>
   </div>`
 	return `<!doctype html>
 <html lang="id">
@@ -245,34 +254,44 @@ function page(title, body) {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>${title}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,600;1,500&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; }
-  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #f6f9f7; display: grid; place-items: center; min-height: 100vh; margin: 0; padding: 20px; }
-  .shell { display: grid; grid-template-columns: 1fr 1fr; width: min(880px, 100%); border-radius: 20px; overflow: hidden; box-shadow: 0 20px 60px -18px rgba(15, 55, 42, .25); background: #fff; }
-  .brand-side { background: linear-gradient(170deg, #0f7a5c, #0a4c3a 70%, #093f31); color: #fff; padding: 40px 36px; display: flex; flex-direction: column; gap: 22px; }
-  .brand-lockup { display: flex; align-items: center; gap: 14px; }
-  .brand-name { font-size: 1.7rem; font-weight: 800; letter-spacing: -0.01em; }
-  .brand-tag { font-size: .66rem; letter-spacing: .22em; color: #bcd9cb; font-weight: 700; margin-top: 2px; }
-  .brand-side h2 { font-size: 1.5rem; line-height: 1.3; margin: 4px 0 0; font-weight: 700; }
-  .brand-side blockquote { margin: 0; font-style: italic; color: #d9ece2; font-size: .95rem; line-height: 1.6; border-left: 3px solid #2e8f6f; padding-left: 14px; }
+  body { font-family: 'Plus Jakarta Sans', 'Segoe UI', system-ui, -apple-system, sans-serif; background: #f6f9f7; display: grid; place-items: center; min-height: 100vh; margin: 0; padding: 20px; }
+  .shell { display: grid; grid-template-columns: 1.06fr 1fr; width: min(920px, 100%); border-radius: 24px; overflow: hidden; box-shadow: 0 24px 64px -20px rgba(15, 55, 42, .28); background: #fff; }
+  .brand-side { position: relative; overflow: hidden; background: linear-gradient(168deg, #0f7a5c 0%, #0a523c 62%, #08402f 100%); color: #fff; padding: 44px 40px; display: flex; flex-direction: column; gap: 24px; }
+  .arch-decor { position: absolute; inset: 0; pointer-events: none; background:
+    radial-gradient(120% 60% at 100% 0%, rgba(229,200,138,.14), transparent 55%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 160 160' fill='none'%3E%3Cpath d='M80 18c-26 20-40 38-40 66v58h80V84c0-28-14-46-40-66z' stroke='rgba(255,255,255,.07)' stroke-width='5'/%3E%3C/svg%3E") right -34px bottom -34px / 240px auto no-repeat; }
+  .brand-lockup { position: relative; display: flex; align-items: center; gap: 15px; }
+  .brand-name { font-size: 1.72rem; font-weight: 800; letter-spacing: -0.01em; }
+  .brand-tag { font-size: .68rem; letter-spacing: .18em; text-transform: uppercase; color: #bcd9cb; font-weight: 700; margin-top: 3px; }
+  .brand-side h2 { position: relative; font-family: 'Lora', Georgia, serif; font-size: 1.62rem; line-height: 1.35; margin: 6px 0 0; font-weight: 600; }
+  .brand-side h2 em { font-style: italic; color: #ecd9ae; }
+  .brand-side blockquote { position: relative; margin: 0; font-style: italic; color: #d9ece2; font-size: .92rem; line-height: 1.65; border-left: 3px solid rgba(229,200,138,.6); padding-left: 14px; }
   .brand-side blockquote span { display: block; margin-top: 8px; font-style: normal; font-size: .78rem; color: #a9cdbb; }
-  .brand-feats { list-style: none; margin: auto 0 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; font-size: .82rem; color: #d9ece2; }
-  .brand-feats li { display: flex; align-items: center; gap: 8px; }
-  .feat-dot { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; background: rgba(255,255,255,.12); font-size: .85rem; flex: none; }
-  .brand-foot { font-size: .68rem; letter-spacing: .18em; text-transform: uppercase; color: #8fbfa8; border-top: 1px solid rgba(255,255,255,.14); padding-top: 14px; }
-  main { display: grid; place-items: center; padding: 40px 36px; }
+  .brand-feats { position: relative; list-style: none; margin: auto 0 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; font-size: .82rem; font-weight: 600; color: #e6f2ec; }
+  .brand-feats li { display: flex; align-items: center; gap: 10px; }
+  .feat-dot { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 10px; background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.14); color: #ecd9ae; flex: none; }
+  .brand-foot { position: relative; font-size: .68rem; letter-spacing: .24em; text-transform: uppercase; color: #9dc7b3; border-top: 1px solid rgba(255,255,255,.14); padding-top: 14px; }
+  main { display: grid; place-items: center; padding: 44px 40px; }
   form, .card { width: min(340px, 100%); }
-  h1 { font-size: 1.35rem; margin: 0 0 6px; color: #12251e; text-align: center; }
-  .sub { text-align: center; color: #6b7f76; font-size: .85rem; line-height: 1.5; margin: 0 0 22px; }
-  label { display: block; font-size: .8rem; font-weight: 700; margin: .9rem 0 .3rem; color: #37473f; }
-  input { width: 100%; padding: .68rem .8rem; border: 1px solid #d8e2dc; border-radius: 10px; font-size: .95rem; background: #fbfdfc; }
+  h1 { font-size: 1.4rem; margin: 0 0 6px; color: #12251e; text-align: center; letter-spacing: -0.01em; }
+  .sub { text-align: center; color: #6b7f76; font-size: .85rem; line-height: 1.55; margin: 0 0 22px; }
+  label { display: block; font-size: .78rem; font-weight: 700; margin: .9rem 0 .32rem; color: #37473f; letter-spacing: .02em; }
+  input { width: 100%; padding: .72rem .85rem; border: 1px solid #d8e2dc; border-radius: 11px; font-size: .95rem; font-family: inherit; background: #fbfdfc; transition: border-color .15s ease, box-shadow .15s ease; }
   input:focus { outline: none; border-color: #0d6b4f; box-shadow: 0 0 0 3px rgba(13,107,79,.14); }
-  button { margin-top: 1.4rem; width: 100%; padding: .8rem; border: 0; border-radius: 10px; background: linear-gradient(160deg, #0f7a5c, #0a523c); color: #fff; font-size: 1rem; font-weight: 700; cursor: pointer; }
+  button { margin-top: 1.45rem; width: 100%; padding: .82rem; border: 0; border-radius: 12px; background: linear-gradient(160deg, #0f8468, #0b5f4e); color: #fff; font-family: inherit; font-size: .98rem; font-weight: 700; letter-spacing: .01em; cursor: pointer; box-shadow: 0 6px 16px -6px rgba(13,107,79,.5); transition: filter .15s ease, transform .12s ease; }
   button:hover { filter: brightness(1.07); }
-  .error { background: #fdecec; color: #8a1f1f; border: 1px solid #f5c2c2; border-radius: 8px; padding: .6rem .75rem; font-size: .85rem; margin-bottom: .5rem; }
-  .note { margin-top: 20px; background: #eef7f2; border: 1px solid #d5e8de; border-radius: 10px; padding: .8rem .9rem; font-size: .78rem; color: #33544a; line-height: 1.55; display: flex; gap: 10px; }
+  button:active { transform: scale(.99); }
+  button:focus-visible { outline: 3px solid rgba(13,107,79,.35); outline-offset: 2px; }
+  .error { background: #fdecec; color: #8a1f1f; border: 1px solid #f5c2c2; border-radius: 10px; padding: .6rem .75rem; font-size: .85rem; margin-bottom: .5rem; }
+  .note { margin-top: 20px; background: #eef7f2; border: 1px solid #d5e8de; border-radius: 12px; padding: .8rem .9rem; font-size: .78rem; color: #33544a; line-height: 1.55; display: flex; gap: 10px; }
+  .note svg { flex: none; margin-top: 2px; color: #0d6b4f; }
   .note b { display: block; margin-bottom: 2px; color: #0a523c; }
-  @media (max-width: 720px) { .shell { grid-template-columns: 1fr; } .brand-side { display: none; } }
+  @media (max-width: 760px) { .shell { grid-template-columns: 1fr; } .brand-side { display: none; } }
 </style>
 </head>
 <body>
@@ -289,14 +308,14 @@ function loginForm(uid, title, error, email = '') {
 		title,
 		`<form method="post" action="${ISSUER_PREFIX}/interaction/${uid}/login" class="card">
   <h1>Selamat Datang Kembali</h1>
-  <p class="sub">Masuk ke akun Taffaqquh Anda untuk melanjutkan pembelajaran dan mendapatkan jawaban fiqih berbasis dalil.</p>
+  <p class="sub">Masuk untuk melanjutkan perjalanan belajar Anda di ${'Taffaqquh AI'}.</p>
   ${error ? `<div class="error">${error}</div>` : ''}
   <label for="email">Email</label>
   <input id="email" name="email" type="email" autocomplete="username" required value="${email.replace(/"/g, '&quot;')}" />
   <label for="password">Kata Sandi</label>
   <input id="password" name="password" type="password" autocomplete="current-password" required />
-  <button type="submit">Masuk ke Taffaqquh</button>
-  <div class="note"><span aria-hidden="true">&#128737;&#65039;</span><span><b>Jawaban Berdasarkan Sumber Terpercaya</b>Setiap jawaban didasarkan pada dalil dari Al-Qur'an, Hadits, dan sumber terpercaya, dan dapat Anda verifikasi.</span></div>
+  <button type="submit">Masuk ke Taffaqquh AI</button>
+  <div class="note"><span aria-hidden="true"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg></span><span><b>Jawaban Berdasarkan Sumber Terpercaya</b>Setiap jawaban didasarkan pada dalil dari Al-Qur'an, Hadits, dan sumber terpercaya, dan dapat Anda verifikasi.</span></div>
 </form>`,
 	)
 }
@@ -340,7 +359,7 @@ async function handleInteraction(req, res) {
 				res,
 				200,
 				'text/html; charset=utf-8',
-				loginForm(uid, 'Masuk Taffaqquh', null),
+				loginForm(uid, 'Masuk · Taffaqquh AI', null),
 			)
 			void details
 		} catch {
@@ -361,7 +380,7 @@ async function handleInteraction(req, res) {
 				'text/html; charset=utf-8',
 				loginForm(
 					uid,
-					'Masuk Taffaqquh',
+					'Masuk · Taffaqquh AI',
 					'Email atau kata sandi salah.',
 					email,
 				),
