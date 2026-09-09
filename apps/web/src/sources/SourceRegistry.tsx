@@ -88,13 +88,30 @@ const TYPE_TONES: Record<string, string> = {
 	"al-qur'an": 'tone-quran',
 	hadis: 'tone-hadis',
 	hadits: 'tone-hadis',
+	book: 'tone-kitab',
 	kitab: 'tone-kitab',
 	'kitab fiqih': 'tone-kitab',
 	fatwa: 'tone-fatwa',
 }
 
+/** readable Indonesian label per source type (fallback: raw value) */
+const TYPE_LABELS: Record<string, string> = {
+	quran: "Al-Qur'an",
+	hadis: 'Hadits',
+	hadits: 'Hadits',
+	book: 'Kitab',
+	kitab: 'Kitab',
+	fatwa: 'Fatwa',
+	journal_article: 'Jurnal',
+	thesis: 'Tesis',
+}
+
 function typeTone(sourceType: string): string {
 	return TYPE_TONES[sourceType.toLowerCase()] ?? 'tone-neutral'
+}
+
+function typeLabel(sourceType: string): string {
+	return TYPE_LABELS[sourceType.toLowerCase()] ?? sourceType
 }
 
 function SearchIcon() {
@@ -494,7 +511,7 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 									<span
 										className={`badge source-type-badge ${typeTone(s.source_type)}`}
 									>
-										{s.source_type}
+										{typeLabel(s.source_type)}
 									</span>
 								</td>
 								<td>{s.language}</td>

@@ -2984,13 +2984,15 @@ h2 {
 .public-footer-links button:hover {
 	color: var(--primary-strong);
 }
-.public-nav .public-nav-cta {
+.public-nav .public-nav-cta,
+.public-actions .public-nav-cta {
 	padding: 9px 16px;
 	border-radius: 999px;
 	background: var(--primary);
 	color: #fff;
 }
-.public-nav .public-nav-cta:hover {
+.public-nav .public-nav-cta:hover,
+.public-actions .public-nav-cta:hover {
 	color: #fff;
 	filter: brightness(1.06);
 }
