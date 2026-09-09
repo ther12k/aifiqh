@@ -852,10 +852,20 @@ export default function App() {
 	// flight we wait, then the effect above sends anonymous visitors to OIDC.
 	const authDecision = authGuardDecision(route, !meLoading, Boolean(me))
 	if (authDecision === 'loading') {
-		return <output className="gate-note">Memeriksa sesi…</output>
+		return (
+			<main className="app-content">
+				<output className="gate-note">Memeriksa sesi…</output>
+			</main>
+		)
 	}
 	if (authDecision === 'redirect') {
-		return <output className="gate-note">Mengalihkan ke halaman masuk…</output>
+		return (
+			<main className="app-content">
+				<output className="gate-note">
+					Masuk diperlukan. Mengalihkan ke halaman masuk…
+				</output>
+			</main>
+		)
 	}
 
 	// chat gets its own workspace shell: one sidebar (nav + history) and a
