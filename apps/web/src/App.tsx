@@ -994,7 +994,6 @@ export default function App() {
 								</p>
 							</div>
 							<PageQuote quote={PAGE_QUOTES['/sources']} />
-							
 						</div>
 					)}
 					{route === '/studio-dashboard' && (
@@ -1022,7 +1021,6 @@ export default function App() {
 								</p>
 							</div>
 							<PageQuote quote={PAGE_QUOTES['/reviewer']} />
-							
 						</div>
 					)}
 					{route === '/ops' && (
@@ -1035,7 +1033,6 @@ export default function App() {
 								</p>
 							</div>
 							<PageQuote quote={PAGE_QUOTES['/ops']} />
-							
 						</div>
 					)}
 					{route === '/studio' && (
@@ -1048,7 +1045,6 @@ export default function App() {
 								</p>
 							</div>
 							<PageQuote quote={PAGE_QUOTES['/studio']} />
-							
 						</div>
 					)}
 
@@ -1107,7 +1103,6 @@ export default function App() {
 									</p>
 								</div>
 								<PageQuote quote={PAGE_QUOTES['/health']} />
-								
 							</div>
 							<HealthPage
 								health={health}
