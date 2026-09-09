@@ -738,8 +738,9 @@ body {
 
 .ws-config-btn {
 	flex: none;
-	width: 36px;
-	height: 36px;
+	min-width: 44px;
+	width: auto;
+	min-height: 44px;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -752,6 +753,10 @@ body {
 	transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
+.ws-config-label {
+	font-size: 11px;
+	font-weight: 700;
+}
 .ws-config-btn:hover {
 	background: var(--primary-tint);
 	border-color: var(--primary-border);
@@ -782,6 +787,107 @@ body {
 
 .chat-ws-sidebar .btn-new-chat:hover {
 	background: var(--primary-tint);
+}
+
+.ws-quick-links {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.ws-quick-link {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	border: 0;
+	background: transparent;
+	color: var(--text);
+	border-radius: 9px;
+	padding: 9px 10px;
+	font: inherit;
+	font-size: 13px;
+	cursor: pointer;
+	text-align: left;
+}
+.ws-quick-link:hover {
+	background: var(--primary-tint);
+	color: var(--primary-strong);
+}
+.history-search {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 7px 9px;
+	border: 1px solid var(--border);
+	border-radius: 9px;
+	background: var(--surface);
+	color: var(--text-faint);
+}
+.history-search input {
+	width: 100%;
+	min-width: 0;
+	border: 0;
+	outline: 0;
+	background: transparent;
+	color: var(--text);
+	font: inherit;
+	font-size: 12px;
+}
+.history-filters {
+	display: flex;
+	gap: 5px;
+	overflow-x: auto;
+	padding: 2px 0;
+}
+.history-filters button {
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 4px 8px;
+	background: var(--surface);
+	color: var(--text-muted);
+	font: inherit;
+	font-size: 10px;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.history-filters button.is-selected {
+	background: var(--primary-soft);
+	border-color: var(--primary-border);
+	color: var(--primary-strong);
+}
+.history-item-pin,
+.history-item-group {
+	border: 0;
+	background: transparent;
+	color: var(--text-faint);
+	padding: 6px 4px;
+	min-width: 28px;
+	min-height: 28px;
+	cursor: pointer;
+	opacity: 0;
+	font: inherit;
+	font-size: 13px;
+}
+
+.history-item-pin:focus-visible,
+.history-item-group:focus-visible,
+.history-item-delete:focus-visible,
+.history-item-btn:focus-visible,
+.ws-quick-link:focus-visible,
+.history-filters button:focus-visible,
+.history-search:focus-within {
+	opacity: 1;
+	outline: 2px solid var(--gold);
+	outline-offset: 1px;
+}
+.history-item:hover .history-item-pin,
+.history-item:focus-within .history-item-pin,
+.history-item:hover .history-item-group,
+.history-item:focus-within .history-item-group {
+	opacity: 1;
+}
+.history-item-pin:hover,
+.history-item-pin[aria-label="Lepas sematan"] {
+	color: var(--gold-deep);
 }
 
 .btn-new-chat {

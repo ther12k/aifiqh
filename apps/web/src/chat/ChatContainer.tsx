@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { SessionChip, type SessionUser } from '../components/SessionChip'
 import { SidebarNav } from '../components/SidebarNav'
-import { BrandMark, ICON_PATHS, NavIcon } from '../components/icons'
+import { BrandMark, ICON_PATHS, NavIcon, SearchIcon } from '../components/icons'
 import { BRAND } from '../config/brand'
 import { stripUnsafeHtml } from '../lib/answerView'
 import {
@@ -12,6 +12,16 @@ import {
 	failStreaming,
 	startStreaming,
 } from '../lib/chatState'
+import {
+	type ConversationOrganizationPreferences,
+	assignConversationToGroup,
+	cleanupStaleConversationIds,
+	filterConversations,
+	loadConversationOrganization,
+	partitionConversations,
+	saveConversationOrganization,
+	toggleConversationPin,
+} from '../lib/conversationOrganization'
 import { ChatShell, MessageParagraphs } from './ChatShell'
 
 function getCsrfToken(): string {
@@ -665,6 +675,10 @@ export function ChatContainer({
 	// history-first sidebar: the nav menu stays out of the way and is
 	// revealed by the config (gear) button
 	const [menuOpen, setMenuOpen] = useState(false)
+	const [organization, setOrganization] =
+		useState<ConversationOrganizationPreferences>(loadConversationOrganization)
+	const [groupFilter, setGroupFilter] = useState('')
+	const [searchQuery, setSearchQuery] = useState('')
 	const [chatState, setChatState] = useState<ChatShellState>(EMPTY_CHAT_STATE)
 	const [draft, setDraft] = useState('')
 	const [loading, setLoading] = useState(true)
@@ -675,6 +689,25 @@ export function ChatContainer({
 		Record<string, TurnDecisionInfo>
 	>({})
 
+	useEffect(() => {
+		saveConversationOrganization(organization)
+	}, [organization])
+
+	function togglePinned(id: string) {
+		setOrganization((prev) => toggleConversationPin(prev, id))
+	}
+
+	function assignGroup(id: string) {
+		const group =
+			window
+				.prompt('Nama grup percakapan (kosongkan untuk menghapus):', '')
+				?.trim() ?? null
+		if (group === null) return
+		setOrganization((prev) =>
+			assignConversationToGroup(prev, id, group || null),
+		)
+	}
+
 	async function refreshConversations() {
 		try {
 			setConversationsLoading(true)
@@ -684,6 +717,12 @@ export function ChatContainer({
 			if (res.ok) {
 				const list = (await res.json()) as ConversationListItem[]
 				setConversations(list)
+				setOrganization((prev) =>
+					cleanupStaleConversationIds(
+						prev,
+						list.map((conversation) => conversation.id),
+					),
+				)
 			}
 		} catch {
 			// ignore fetch failure
@@ -839,7 +878,16 @@ export function ChatContainer({
 				headers: { 'x-csrf-token': getCsrfToken() },
 			})
 			if (res.ok) {
-				setConversations((prev) => prev.filter((c) => c.id !== id))
+				setConversations((prev) => {
+					const remaining = prev.filter((c) => c.id !== id)
+					setOrganization((organization) =>
+						cleanupStaleConversationIds(
+							organization,
+							remaining.map((conversation) => conversation.id),
+						),
+					)
+					return remaining
+				})
 				if (conversationId === id) {
 					void startNewConversation()
 				}
@@ -861,8 +909,17 @@ export function ChatContainer({
 				let list: ConversationListItem[] = []
 				if (resList.ok) {
 					list = (await resList.json()) as ConversationListItem[]
-					if (!cancelled) setConversations(list)
+					if (!cancelled) {
+						setConversations(list)
+						setOrganization((prev) =>
+							cleanupStaleConversationIds(
+								prev,
+								list.map((conversation) => conversation.id),
+							),
+						)
+					}
 				}
+
 				if (list.length > 0) {
 					if (!cancelled) await loadConversation(list[0].id)
 				} else {
@@ -1055,6 +1112,25 @@ export function ChatContainer({
 			!chatState.messages.some((m) => m.role === 'user' && m.content === q),
 	)
 
+	const groups = useMemo(
+		() => Object.keys(organization.groups).sort(),
+		[organization.groups],
+	)
+	const visibleConversations = useMemo(() => {
+		const searched = filterConversations(
+			conversations.map((conversation) => ({ ...conversation })),
+			searchQuery,
+		)
+		return groupFilter
+			? searched.filter((conversation) =>
+					organization.groups[groupFilter]?.includes(conversation.id),
+				)
+			: searched
+	}, [conversations, groupFilter, organization.groups, searchQuery])
+	const { pinned: pinnedConversations, recent: recentConversations } = useMemo(
+		() => partitionConversations(visibleConversations, organization),
+		[organization, visibleConversations],
+	)
 	const activeConv = conversations.find((c) => c.id === conversationId)
 	const activeTitle = activeConv?.snippet
 		? activeConv.snippet.length > 55
@@ -1080,108 +1156,178 @@ export function ChatContainer({
 						type="button"
 						className="ws-config-btn"
 						aria-expanded={menuOpen}
-						aria-label="Buka menu navigasi"
+						aria-label={menuOpen ? 'Tutup menu navigasi' : 'Buka menu navigasi'}
 						title="Menu navigasi"
 						onClick={() => setMenuOpen((v) => !v)}
 					>
-						<NavIcon d={ICON_PATHS.gear} />
+						<NavIcon d={menuOpen ? ICON_PATHS.close : ICON_PATHS.gear} />
+						<span className="ws-config-label">Menu</span>
 					</button>
 				</div>
 
-				<button
-					type="button"
-					className="btn-new-chat"
-					onClick={() => void startNewConversation()}
-				>
-					<svg
-						width="15"
-						height="15"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						strokeWidth="2.2"
-						strokeLinecap="round"
-						strokeLinejoin="round"
-						aria-hidden="true"
+				<div className="ws-quick-links" aria-label="Akses cepat">
+					<button
+						type="button"
+						className="btn-new-chat"
+						onClick={() => void startNewConversation()}
 					>
-						<path d="M12 5v14M5 12h14" />
-					</svg>
-					Chat Baru
-				</button>
+						<NavIcon d={ICON_PATHS.plus} />
+						Chat Baru
+					</button>
+					<button
+						type="button"
+						className="ws-quick-link"
+						onClick={() =>
+							document.getElementById('conversation-search')?.focus()
+						}
+					>
+						<NavIcon d={ICON_PATHS.chat} /> Cari percakapan
+					</button>
+				</div>
 
 				<div className="ws-history" aria-label="Riwayat percakapan">
+					<label className="history-search">
+						<SearchIcon />
+						<span className="sr-only">Cari percakapan</span>
+						<input
+							id="conversation-search"
+							value={searchQuery}
+							onChange={(e) => setSearchQuery(e.target.value)}
+							placeholder="Cari percakapan"
+						/>
+					</label>
+					{groups.length > 0 && (
+						<div className="history-filters" aria-label="Filter grup">
+							<button
+								type="button"
+								className={!groupFilter ? 'is-selected' : ''}
+								onClick={() => setGroupFilter('')}
+							>
+								Semua
+							</button>
+							{groups.map((group) => (
+								<button
+									type="button"
+									key={group}
+									className={groupFilter === group ? 'is-selected' : ''}
+									onClick={() => setGroupFilter(group)}
+								>
+									{group}
+								</button>
+							))}
+						</div>
+					)}
 					<div className="history-section-title">Riwayat</div>
 					{conversationsLoading && conversations.length === 0 ? (
 						<div className="history-empty">Memuat riwayat…</div>
 					) : conversations.length === 0 ? (
 						<div className="history-empty">Belum ada riwayat percakapan.</div>
+					) : visibleConversations.length === 0 ? (
+						<div className="history-empty">
+							Tidak ada percakapan yang cocok dengan filter ini.
+						</div>
 					) : (
-						<ul className="history-list">
-							{conversations.map((c) => {
-								const isCurrent = c.id === conversationId
-								const label = c.snippet || c.title || 'Percakapan Baru'
-								return (
-									<li
-										key={c.id}
-										className={`history-item ${isCurrent ? 'active' : ''}`}
-									>
-										<button
-											type="button"
-											className="history-item-btn"
-											onClick={() => {
-												if (c.id !== conversationId) {
-													void loadConversation(c.id)
-												}
-												setSidebarOpen(false)
-											}}
-											title={label}
+						<>
+							{pinnedConversations.length > 0 && (
+								<div className="history-section-title">Disematkan</div>
+							)}
+							<ul className="history-list">
+								{[...pinnedConversations, ...recentConversations].map((c) => {
+									const isPinned = organization.pinnedIds.includes(c.id)
+
+									const isCurrent = c.id === conversationId
+									const label = c.snippet || c.title || 'Percakapan Baru'
+									return (
+										<li
+											key={c.id}
+											className={`history-item ${isCurrent ? 'active' : ''}`}
 										>
-											<svg
-												className="history-item-icon"
-												width="14"
-												height="14"
-												viewBox="0 0 24 24"
-												fill="none"
-												stroke="currentColor"
-												strokeWidth="1.8"
-												strokeLinecap="round"
-												strokeLinejoin="round"
-												aria-hidden="true"
+											<button
+												type="button"
+												className="history-item-btn"
+												onClick={() => {
+													if (c.id !== conversationId) {
+														void loadConversation(c.id)
+													}
+													setSidebarOpen(false)
+												}}
+												title={label}
 											>
-												<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-											</svg>
-											<span className="history-item-text">
-												<span className="history-item-title">{label}</span>
-												<span className="history-item-meta">
-													{formatRelativeTime(c.updatedAt)}
+												<svg
+													className="history-item-icon"
+													width="14"
+													height="14"
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													strokeWidth="1.8"
+													strokeLinecap="round"
+													strokeLinejoin="round"
+													aria-hidden="true"
+												>
+													<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+												</svg>
+												<span className="history-item-text">
+													<span className="history-item-title">{label}</span>
+													<span className="history-item-meta">
+														{formatRelativeTime(c.updatedAt)}
+													</span>
 												</span>
-											</span>
-										</button>
-										<button
-											type="button"
-											className="history-item-delete"
-											title="Hapus percakapan"
-											aria-label="Hapus percakapan"
-											onClick={(e) => void handleDeleteConversation(e, c.id)}
-										>
-											<svg
-												width="13"
-												height="13"
-												viewBox="0 0 24 24"
-												fill="none"
-												stroke="currentColor"
-												strokeWidth="1.8"
-												strokeLinecap="round"
-												strokeLinejoin="round"
-												aria-hidden="true"
+											</button>
+											<button
+												type="button"
+												className="history-item-pin"
+												aria-label={
+													isPinned ? 'Lepas sematan' : 'Sematkan percakapan'
+												}
+												title={
+													isPinned ? 'Lepas sematan' : 'Sematkan percakapan'
+												}
+												onClick={(e) => {
+													e.stopPropagation()
+													togglePinned(c.id)
+												}}
 											>
-												<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-											</svg>
-										</button>
-									</li>
-								)
-							})}
-						</ul>
+												★
+											</button>
+											<button
+												type="button"
+												className="history-item-group"
+												aria-label="Atur grup percakapan"
+												title="Atur grup"
+												onClick={(e) => {
+													e.stopPropagation()
+													assignGroup(c.id)
+												}}
+											>
+												+
+											</button>
+											<button
+												type="button"
+												className="history-item-delete"
+												title="Hapus percakapan"
+												aria-label="Hapus percakapan"
+												onClick={(e) => void handleDeleteConversation(e, c.id)}
+											>
+												<svg
+													width="13"
+													height="13"
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													strokeWidth="1.8"
+													strokeLinecap="round"
+													strokeLinejoin="round"
+													aria-hidden="true"
+												>
+													<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+												</svg>
+											</button>
+										</li>
+									)
+								})}
+							</ul>
+						</>
 					)}
 				</div>
 
@@ -1203,6 +1349,7 @@ export function ChatContainer({
 							onClick={() => setMenuOpen(false)}
 						>
 							<NavIcon d={ICON_PATHS.close} />
+							<span className="ws-config-label">Tutup</span>
 						</button>
 					</div>
 					<SidebarNav
