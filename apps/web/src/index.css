@@ -738,21 +738,23 @@ body {
 
 .ws-config-btn {
 	flex: none;
-	width: 34px;
-	height: 34px;
+	width: 36px;
+	height: 36px;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	background: transparent;
-	border: none;
+	background: var(--surface);
+	border: 1px solid var(--border);
 	border-radius: 10px;
 	color: var(--text-muted);
 	cursor: pointer;
-	transition: background 0.15s ease, color 0.15s ease;
+	box-shadow: var(--shadow-sm);
+	transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
 .ws-config-btn:hover {
 	background: var(--primary-tint);
+	border-color: var(--primary-border);
 	color: var(--primary-strong);
 }
 
@@ -1152,11 +1154,13 @@ body {
 .chat-messages li[data-role="user"] {
 	align-self: flex-end;
 	max-width: 78%;
-	background: var(--primary-soft);
-	border: 1px solid var(--primary-border);
-	color: var(--text);
+	background: linear-gradient(160deg, #e3f2ea, #d5ebdf);
+	border: 1px solid #c2e0d2;
+	color: #14322a;
 	padding: 11px 16px;
+	font-weight: 500;
 	border-radius: 18px 18px 4px 18px;
+	box-shadow: var(--shadow-sm);
 }
 
 /* assistant: avatar + content directly on white (reference layout) */
@@ -1450,10 +1454,11 @@ body {
 	display: flex;
 	align-items: flex-end;
 	gap: 10px;
-	background: var(--bg);
+	background: var(--surface);
 	border: 1px solid var(--border);
 	border-radius: 18px;
-	padding: 10px 10px 10px 16px;
+	padding: 8px 8px 8px 16px;
+	box-shadow: var(--shadow-sm);
 	transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
@@ -1465,13 +1470,18 @@ body {
 .composer-bar textarea {
 	flex: 1;
 	border: none;
+	/* kill the :where(input) baseline shadow — it ghosts a box around the
+	   otherwise transparent textarea */
+	box-shadow: none;
+	border-radius: 0;
 	background: transparent;
-	padding: 8px 0;
+	padding: 12px 0;
 	font: inherit;
 	font-size: 14.5px;
+	line-height: 1.5;
 	color: var(--text);
 	resize: none;
-	min-height: 44px;
+	min-height: 24px;
 	max-height: 140px;
 	outline: none;
 }

@@ -179,7 +179,7 @@ export function ChatShell(props: {
 								onSubmit()
 							}
 						}}
-						rows={2}
+						rows={1}
 						placeholder="Tanyakan pertanyaan fiqih di sini…"
 					/>
 					{state.phase === 'streaming' ? (
