@@ -7,6 +7,7 @@ import {
 	type ChatModelResolution,
 	resolveChatModelCandidates,
 } from '../llm/modelRouter'
+import { ModelGatewayError } from '@aifiqh/shared'
 import { resolveChatModelConfig } from '../llm/modelRouter'
 import {
 	type ResponseDecisionOutcome,
@@ -651,7 +652,7 @@ async function runTurn(
 			providerKey: model.providerKey,
 			evidenceTexts,
 			generate: async (request) => {
-				const res = await gateway.generate(model.providerKey, {
+				const payload = {
 					modelId: model.modelId,
 					messages: request.messages,
 					temperature: 0.2,
@@ -660,11 +661,33 @@ async function runTurn(
 					// length), 16k completes with valid grounded JSON
 					maxTokens: 16_384,
 					responseFormat: request.responseFormat,
-				})
-				return {
-					text: res.text,
-					finishReason: res.finishReason,
-					modelId: res.modelId,
+				}
+				// STREAM transport: bytes keep flowing while the model thinks, so
+				// reverse proxies (openresty 504s) cannot kill long grounded
+				// generations. Nothing reaches the user pre-validation — the
+				// stream is only the wire format; the final answer still appears
+				// only after schema/citation/claim checks pass.
+				try {
+					const res = await gateway.stream(model.providerKey, payload, () => {})
+					return {
+						text: res.text,
+						finishReason: res.finishReason,
+						modelId: res.modelId,
+					}
+				} catch (err) {
+					// provider without stream support → classic non-streaming call
+					if (
+						err instanceof ModelGatewayError &&
+						err.code === 'INVALID_REQUEST'
+					) {
+						const res = await gateway.generate(model.providerKey, payload)
+						return {
+							text: res.text,
+							finishReason: res.finishReason,
+							modelId: res.modelId,
+						}
+					}
+					throw err
 				}
 			},
 		})

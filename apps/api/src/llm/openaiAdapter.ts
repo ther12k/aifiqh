@@ -174,6 +174,12 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 			stream: true,
 			stream_options: { include_usage: true },
 		}
+		// structured output must survive the streaming transport too — proxies
+		// (openresty et al) kill long non-streaming upstreams with 504 while
+		// SSE keeps bytes flowing
+		if (request.responseFormat === 'json_object') {
+			body.response_format = { type: 'json_object' }
+		}
 
 		const headers: Record<string, string> = {
 			'content-type': 'application/json',
@@ -183,6 +189,9 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 		}
 
 		const controller = new AbortController()
+		// streams need the SAME attempt timeout as non-streaming calls —
+		// otherwise a stalled upstream hangs the turn forever
+		const timer = setTimeout(() => controller.abort(), this.timeoutMs)
 		if (request.signal) {
 			request.signal.addEventListener('abort', () => controller.abort())
 		}
@@ -197,14 +206,17 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 				signal: controller.signal,
 			})
 		} catch (err) {
+			clearTimeout(timer)
 			if (controller.signal.aborted) {
 				throw new ModelGatewayError(
-					'CANCELLED',
-					'Streaming request was cancelled',
+					request.signal?.aborted ? 'CANCELLED' : 'TIMEOUT',
+					request.signal?.aborted
+						? 'Streaming request was cancelled'
+						: `Streaming request timed out after ${this.timeoutMs}ms`,
 					{
 						providerId: this.providerKey,
 						modelId: request.modelId,
-						retryable: false,
+						retryable: !request.signal?.aborted,
 					},
 				)
 			}
@@ -220,18 +232,24 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 		}
 
 		if (!res.ok) {
+			clearTimeout(timer)
+			const errText = await res.text().catch(() => '')
 			throw new ModelGatewayError(
-				'PROVIDER_UNAVAILABLE',
-				`Streaming request failed with status ${res.status}`,
+				res.status === 401 || res.status === 403
+					? 'AUTHENTICATION_FAILED'
+					: 'PROVIDER_UNAVAILABLE',
+				`Provider returned ${res.status}: ${errText.slice(0, 240)}`,
 				{
 					providerId: this.providerKey,
 					modelId: request.modelId,
-					retryable: true,
+					retryable: res.status >= 500,
+					statusCode: res.status,
 				},
 			)
 		}
 
 		if (!res.body) {
+			clearTimeout(timer)
 			throw new ModelGatewayError(
 				'PROVIDER_UNAVAILABLE',
 				'No response body received for stream',
@@ -286,7 +304,22 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 					}
 				}
 			}
+		} catch (err) {
+			clearTimeout(timer)
+			if (controller.signal.aborted && !request.signal?.aborted) {
+				throw new ModelGatewayError(
+					'TIMEOUT',
+					`Streaming response timed out after ${this.timeoutMs}ms`,
+					{
+						providerId: this.providerKey,
+						modelId: request.modelId,
+						retryable: true,
+					},
+				)
+			}
+			throw err
 		} finally {
+			clearTimeout(timer)
 			reader.releaseLock()
 		}
 

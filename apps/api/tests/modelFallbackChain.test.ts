@@ -42,6 +42,7 @@ const server = Bun.serve({
 		}
 		const body = (await req.json()) as {
 			model: string
+			stream?: boolean
 			messages: Array<{ role: string; content: string }>
 		}
 		if (body.model.startsWith('fail-')) {
@@ -58,6 +59,75 @@ const server = Bun.serve({
 		const match = PROMPT_EVIDENCE.exec(system)
 		if (!match) return new Response('no evidence in prompt', { status: 502 })
 		const [, evidenceId, teks] = match
+		const content = JSON.stringify({
+			schemaVersion: ANSWER_SCHEMA_VERSION,
+			language: 'id',
+			sections: [
+				{
+					kind: 'direct_answer',
+					markdown: 'Hukumnya dirujuk dari bukti.',
+					claimIds: ['c1'],
+				},
+				{
+					kind: 'evidence',
+					markdown: 'Dalil dikutip verbatim.',
+					claimIds: ['c1'],
+				},
+				{ kind: 'method', markdown: 'Kutipan langsung.', claimIds: [] },
+				{ kind: 'caveats', markdown: 'Satu bukti tersedia.', claimIds: [] },
+				{
+					kind: 'sources',
+					markdown: 'Sumber tercantum di bukti.',
+					claimIds: [],
+				},
+			],
+			claims: [
+				{
+					id: 'c1',
+					text: teks,
+					material: true,
+					evidence: [
+						{
+							claimId: 'c1',
+							evidenceId,
+							relation: 'direct',
+							quote: teks,
+						},
+					],
+				},
+			],
+		})
+		// streaming transport: the adapter now asks for SSE — emit the answer
+		// as content deltas so the chain test exercises the SAME wire format
+		// production uses behind the reverse proxy
+		if (body.stream === true) {
+			const mid = Math.ceil(content.length / 2)
+			const chunk = (delta: unknown, extra: Record<string, unknown> = {}) =>
+				`data: ${JSON.stringify({
+					id: 'fb-1',
+					object: 'chat.completion.chunk',
+					choices: [{ index: 0, delta, finish_reason: null, ...extra }],
+					...(extra.usage ? { usage: extra.usage } : {}),
+				})}\n\n`
+			const sse =
+				chunk({ role: 'assistant', content: content.slice(0, mid) }) +
+				chunk({ content: content.slice(mid) }) +
+				chunk({}, { finish_reason: 'stop' }) +
+				`data: ${JSON.stringify({
+					id: 'fb-1',
+					object: 'chat.completion.chunk',
+					choices: [],
+					usage: {
+						prompt_tokens: 10,
+						completion_tokens: 20,
+						total_tokens: 30,
+					},
+				})}\n\n` +
+				'data: [DONE]\n\n'
+			return new Response(sse, {
+				headers: { 'content-type': 'text/event-stream' },
+			})
+		}
 		const answer = {
 			schemaVersion: ANSWER_SCHEMA_VERSION,
 			language: 'id',
@@ -104,7 +174,7 @@ const server = Bun.serve({
 				{
 					index: 0,
 					finish_reason: 'stop',
-					message: { role: 'assistant', content: JSON.stringify(answer) },
+					message: { role: 'assistant', content },
 				},
 			],
 			usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
