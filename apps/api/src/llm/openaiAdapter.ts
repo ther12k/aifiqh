@@ -32,6 +32,8 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 	private readonly apiKey?: string
 	private readonly timeoutMs: number
 	private readonly defaultBody: Record<string, unknown>
+	/** AIFIQH_LLM_DEBUG=true logs wire-level timings to stdout (ops) */
+	private readonly debug: boolean
 
 	constructor(config: OpenAIAdapterConfig) {
 		this.providerKey = config.providerKey
@@ -39,17 +41,24 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 		this.apiKey = config.apiKey
 		this.timeoutMs = config.timeoutMs ?? 30000
 		this.defaultBody = config.defaultBody ?? {}
+		this.debug = process.env.AIFIQH_LLM_DEBUG === 'true'
 	}
 
 	/** base body with provider extras merged (transport flags set later) */
 	private baseBody(request: GenerateRequest): Record<string, unknown> {
-		return {
+		const body = {
 			model: request.modelId,
 			messages: request.messages,
 			temperature: request.temperature ?? 0.2,
 			max_tokens: request.maxTokens,
 			...this.defaultBody,
 		}
+		if (this.debug) {
+			console.info(
+				`[llm-debug] request model=${request.modelId} bodyChars=${JSON.stringify(body).length} extraKeys=${JSON.stringify(Object.keys(this.defaultBody))}`,
+			)
+		}
+		return body
 	}
 
 	async getCapabilities(_modelId: string): Promise<ModelCapabilities> {
@@ -282,11 +291,23 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 		let finishReason: GenerateResponse['finishReason'] = 'stop'
 		let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
 		let buffer = ''
+		if (this.debug) {
+			console.info(
+				`[llm-debug] stream headers status=${res.status} at ${Date.now() - startTime}ms`,
+			)
+		}
+		let firstByte = false
 
 		try {
 			while (true) {
 				const { done, value } = await reader.read()
 				if (done) break
+				if (this.debug && !firstByte) {
+					firstByte = true
+					console.info(
+						`[llm-debug] stream first bytes at ${Date.now() - startTime}ms`,
+					)
+				}
 				buffer += decoder.decode(value, { stream: true })
 				const lines = buffer.split('\n')
 				buffer = lines.pop() ?? ''
@@ -338,6 +359,11 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 			reader.releaseLock()
 		}
 
+		if (this.debug) {
+			console.info(
+				`[llm-debug] stream done at ${Date.now() - startTime}ms chars=${accumulatedText.length} finish=${finishReason}`,
+			)
+		}
 		return {
 			text: accumulatedText,
 			finishReason,
