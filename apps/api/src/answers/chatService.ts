@@ -631,9 +631,10 @@ async function runTurn(
 					modelId: model.modelId,
 					messages: request.messages,
 					temperature: 0.2,
-					// thinking models (e.g. GLM) spend reasoning tokens before
-					// the JSON payload — 2048 starved them into truncated answers
-					maxTokens: 4096,
+					// thinking models (e.g. GLM) spend reasoning tokens before the
+					// JSON payload — measured live: 4k truncates (finishReason
+					// length), 16k completes with valid grounded JSON
+					maxTokens: 16_384,
 					responseFormat: request.responseFormat,
 				})
 				return {
