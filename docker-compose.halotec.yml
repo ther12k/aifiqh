@@ -34,6 +34,12 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       AIFIQH_REQUIRE_CHAT_MODEL: "true"
       AIFIQH_LLM_DEBUG: "true"
+      # RAG-SEM-001: explicit operator opt-in to hash embeddings. The current
+      # LLM endpoint has no embedding models, so no provider binding exists
+      # yet; without this flag the require-mode gate would refuse to embed
+      # new index releases (503). Remove once configure_embedding.ts has
+      # provisioned a real embedding binding (RAG-SEM-002).
+      AIFIQH_ALLOW_HASH_EMBEDDINGS: "true"
       SESSION_SECRET: aifiqh-halotec-session-secret-change-before-production-32chars
       WEB_DIST_PATH: /app/apps/web/dist
     networks:
