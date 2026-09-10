@@ -64,7 +64,7 @@ const server = Bun.serve({
 			sections: [
 				{
 					kind: 'direct_answer',
-					markdown: `Hukumnya dirujuk dari bukti.`,
+					markdown: 'Hukumnya dirujuk dari bukti.',
 					claimIds: ['c1'],
 				},
 				{
@@ -260,7 +260,7 @@ describe('AI-004: chat model fallback chain', () => {
 		expect(maxChatAttempts()).toBe(5)
 		process.env.AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS = 'banana'
 		expect(maxChatAttempts()).toBe(3)
-		delete process.env.AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS
+		process.env.AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS = '3'
 	})
 
 	test('chain resolution orders primary → fallbacks and skips unresolvable', async () => {
