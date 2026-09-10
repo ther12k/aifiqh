@@ -69,6 +69,7 @@ interface ResolvedRow {
 	base_url: string
 	model_id: string
 	secret_ref: string | null
+	capabilities: unknown
 }
 
 /**
@@ -113,7 +114,7 @@ export async function resolveChatModelDiagnostics(
 	if (aliasTarget.length > 0 && aliasTarget[0].target_type === 'model') {
 		rows = await sql<ResolvedRow[]>`
 			select pc.key as provider_key, pc.provider as provider_type,
-				pc.base_url, mc.model_id, psr.secret_ref
+				pc.base_url, mc.model_id, psr.secret_ref, mc.capabilities
 			from model_configs mc
 			join provider_configs pc on pc.id = mc.provider_config_id
 			left join provider_secret_refs psr on psr.provider_config_id = pc.id
@@ -124,7 +125,7 @@ export async function resolveChatModelDiagnostics(
 		const direct = aliasTarget.find((t) => t.target_type === 'provider')
 		rows = await sql<ResolvedRow[]>`
 			select pc.key as provider_key, pc.provider as provider_type,
-				pc.base_url, mc.model_id, psr.secret_ref
+				pc.base_url, mc.model_id, psr.secret_ref, mc.capabilities
 			from model_configs mc
 			join provider_configs pc on pc.id = mc.provider_config_id
 			left join provider_secret_refs psr on psr.provider_config_id = pc.id
@@ -309,7 +310,7 @@ export async function resolveChatModelCandidates(
 							secret_ref: string | null
 						}[]
 					>`select pc.key as provider_key, pc.provider as provider_type,
-						pc.base_url, mc.model_id, psr.secret_ref
+						pc.base_url, mc.model_id, psr.secret_ref, mc.capabilities
 					from model_configs mc
 					join provider_configs pc on pc.id = mc.provider_config_id
 					left join provider_secret_refs psr on psr.provider_config_id = pc.id
@@ -324,7 +325,7 @@ export async function resolveChatModelCandidates(
 							secret_ref: string | null
 						}[]
 					>`select pc.key as provider_key, pc.provider as provider_type,
-						pc.base_url, mc.model_id, psr.secret_ref
+						pc.base_url, mc.model_id, psr.secret_ref, mc.capabilities
 					from provider_configs pc
 					join model_configs mc on mc.provider_config_id = pc.id
 					left join provider_secret_refs psr on psr.provider_config_id = pc.id

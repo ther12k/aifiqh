@@ -15,6 +15,9 @@
  *   LLM_MODEL         model id                         (default: gpt-4o-mini)
  *   LLM_SECRET_REF    secret ref                       (default: env://OPENAI_API_KEY)
  *   LLM_CONTEXT_WINDOW context window override         (default: 128000)
+ *   LLM_EXTRA_BODY    JSON object merged into every request body of the
+ *                     primary model (stored as capabilities.requestBody),
+ *                     e.g. '{"thinking":{"type":"disabled"}}' for GLM
  *
  * Usage: bun scripts/configure_model.ts
  */
@@ -31,6 +34,21 @@ const baseUrl = process.env.LLM_BASE_URL ?? 'https://api.openai.com/v1'
 const modelId = process.env.LLM_MODEL ?? 'gpt-4o-mini'
 const secretRef = process.env.LLM_SECRET_REF ?? 'env://OPENAI_API_KEY'
 const contextWindow = Number(process.env.LLM_CONTEXT_WINDOW ?? 128000)
+// provider-specific request knobs stored on the model row as
+// capabilities.requestBody, e.g. '{"thinking":{"type":"disabled"}}' for GLM
+const extraBodyRaw = process.env.LLM_EXTRA_BODY
+let extraBody: Record<string, unknown> | undefined
+if (extraBodyRaw?.trim()) {
+	try {
+		const parsed = JSON.parse(extraBodyRaw) as unknown
+		if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+			fail('LLM_EXTRA_BODY must be a JSON object')
+		}
+		extraBody = parsed as Record<string, unknown>
+	} catch {
+		fail('LLM_EXTRA_BODY is not valid JSON')
+	}
+}
 
 const ALLOWED_PROVIDERS = [
 	'openai',
@@ -86,10 +104,12 @@ await sql.begin(async (tx) => {
 			updated_at = now()`
 
 	const [model] = await tx<{ id: string }[]>`
-		insert into model_configs (provider_config_id, model_id, context_window)
-		values (${provider.id}::uuid, ${modelId}, ${contextWindow})
+		insert into model_configs (provider_config_id, model_id, context_window, capabilities)
+		values (${provider.id}::uuid, ${modelId}, ${contextWindow},
+			${JSON.stringify(extraBody ? { requestBody: extraBody } : {})})
 		on conflict (provider_config_id, model_id) do update set
-			context_window = excluded.context_window
+			context_window = excluded.context_window,
+			capabilities = excluded.capabilities
 		returning id`
 
 	const changeReason = `configure_model script: point chat at ${providerKey}/${modelId}`
@@ -134,6 +154,7 @@ if (fallbacksRaw?.trim()) {
 		model: string
 		secretRef?: string
 		contextWindow?: number
+		extraBody?: Record<string, unknown>
 	}
 	let specs: FallbackSpec[]
 	try {
@@ -168,10 +189,12 @@ if (fallbacksRaw?.trim()) {
 					secret_ref = excluded.secret_ref,
 					updated_at = now()`
 			const [fModel] = await tx<{ id: string }[]>`
-				insert into model_configs (provider_config_id, model_id, context_window)
-				values (${fProvider.id}::uuid, ${spec.model}, ${fCtx})
+				insert into model_configs (provider_config_id, model_id, context_window, capabilities)
+				values (${fProvider.id}::uuid, ${spec.model}, ${fCtx},
+					${JSON.stringify(spec.extraBody ? { requestBody: spec.extraBody } : {})})
 				on conflict (provider_config_id, model_id) do update set
-					context_window = excluded.context_window
+					context_window = excluded.context_window,
+					capabilities = excluded.capabilities
 				returning id`
 			await tx`delete from configuration_fallbacks where alias = 'chat-production' and position = ${idx + 1}`
 			await tx`

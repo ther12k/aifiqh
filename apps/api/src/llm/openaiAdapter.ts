@@ -14,6 +14,12 @@ export interface OpenAIAdapterConfig {
 	apiKey?: string
 	timeoutMs?: number
 	maxRetries?: number
+	/**
+	 * extra fields merged into EVERY request body (model_configs.capabilities
+	 * `.requestBody`) — provider-specific knobs like GLM's
+	 * `{"thinking":{"type":"disabled"}}` without hardcoding them here
+	 */
+	defaultBody?: Record<string, unknown>
 }
 
 /**
@@ -25,12 +31,25 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 	private readonly baseUrl: string
 	private readonly apiKey?: string
 	private readonly timeoutMs: number
+	private readonly defaultBody: Record<string, unknown>
 
 	constructor(config: OpenAIAdapterConfig) {
 		this.providerKey = config.providerKey
 		this.baseUrl = config.baseUrl.replace(/\/+$/, '')
 		this.apiKey = config.apiKey
 		this.timeoutMs = config.timeoutMs ?? 30000
+		this.defaultBody = config.defaultBody ?? {}
+	}
+
+	/** base body with provider extras merged (transport flags set later) */
+	private baseBody(request: GenerateRequest): Record<string, unknown> {
+		return {
+			model: request.modelId,
+			messages: request.messages,
+			temperature: request.temperature ?? 0.2,
+			max_tokens: request.maxTokens,
+			...this.defaultBody,
+		}
 	}
 
 	async getCapabilities(_modelId: string): Promise<ModelCapabilities> {
@@ -45,11 +64,10 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 
 	async generate(request: GenerateRequest): Promise<GenerateResponse> {
 		const url = `${this.baseUrl}/chat/completions`
+		// explicit stream:false — some proxies default to streaming, which
+		// this non-streaming parser cannot read
 		const body: Record<string, unknown> = {
-			model: request.modelId,
-			messages: request.messages,
-			temperature: request.temperature ?? 0.2,
-			max_tokens: request.maxTokens,
+			...this.baseBody(request),
 			stream: false,
 		}
 
@@ -167,10 +185,7 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 	): Promise<GenerateResponse> {
 		const url = `${this.baseUrl}/chat/completions`
 		const body: Record<string, unknown> = {
-			model: request.modelId,
-			messages: request.messages,
-			temperature: request.temperature ?? 0.2,
-			max_tokens: request.maxTokens,
+			...this.baseBody(request),
 			stream: true,
 			stream_options: { include_usage: true },
 		}
