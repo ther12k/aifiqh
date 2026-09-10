@@ -151,6 +151,7 @@ export async function resolveChatModelDiagnostics(
 		providerKey,
 		row.base_url,
 		apiKey,
+		extraBodyFromCapabilities(row.capabilities),
 	)
 
 	return {
@@ -207,11 +208,34 @@ export interface ChatModelChain {
 	hasFallbackConfigured: boolean
 }
 
+/** provider knobs stored on the model row: capabilities.requestBody */
+function extraBodyFromCapabilities(
+	capabilities: unknown,
+): Record<string, unknown> | undefined {
+	// drivers may hand jsonb back as an object or an encoded string
+	let value = capabilities
+	if (typeof value === 'string') {
+		try {
+			value = JSON.parse(value)
+		} catch {
+			return undefined
+		}
+	}
+	if (value && typeof value === 'object') {
+		const requestBody = (value as { requestBody?: unknown }).requestBody
+		if (requestBody && typeof requestBody === 'object') {
+			return requestBody as Record<string, unknown>
+		}
+	}
+	return undefined
+}
+
 function buildAdapter(
 	providerType: string,
 	providerKey: string,
 	baseUrl: string,
 	apiKey: string | null,
+	defaultBody?: Record<string, unknown>,
 ): ModelProviderAdapter {
 	return providerType === 'anthropic' || providerType === 'google'
 		? new FrontierModelAdapter({
@@ -229,6 +253,10 @@ function buildAdapter(
 				timeoutMs: Number(
 					process.env.AIFIQH_CHAT_ATTEMPT_TIMEOUT_MS ?? 120_000,
 				),
+				// provider knobs from model_configs.capabilities.requestBody
+				// (e.g. GLM {"thinking":{"type":"disabled"}}) — without this the
+				// proxy 504s long silent-thinking generations
+				defaultBody,
 			})
 }
 
@@ -239,6 +267,7 @@ function configFromRow(row: {
 	base_url: string
 	model_id: string
 	secret_ref: string | null
+	capabilities: unknown
 }): ChatModelConfig | null {
 	const apiKey = row.secret_ref ? resolveSecretRef(row.secret_ref) : null
 	if (row.secret_ref && !apiKey) return null
@@ -251,6 +280,7 @@ function configFromRow(row: {
 			row.provider_key,
 			row.base_url,
 			apiKey,
+			extraBodyFromCapabilities(row.capabilities),
 		),
 		secretSource: row.secret_ref ?? 'no-secret-ref',
 	}
@@ -308,6 +338,7 @@ export async function resolveChatModelCandidates(
 							base_url: string
 							model_id: string
 							secret_ref: string | null
+							capabilities: unknown
 						}[]
 					>`select pc.key as provider_key, pc.provider as provider_type,
 						pc.base_url, mc.model_id, psr.secret_ref, mc.capabilities
@@ -323,6 +354,7 @@ export async function resolveChatModelCandidates(
 							base_url: string
 							model_id: string
 							secret_ref: string | null
+							capabilities: unknown
 						}[]
 					>`select pc.key as provider_key, pc.provider as provider_type,
 						pc.base_url, mc.model_id, psr.secret_ref, mc.capabilities

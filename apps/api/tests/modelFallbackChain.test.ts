@@ -33,6 +33,8 @@ const PROMPT_EVIDENCE =
 
 let primaryHits = 0
 let fallbackHits = 0
+/** the last fallback request body — asserts the capabilities knob reaches the wire */
+let lastFallbackBody: { thinking?: { type?: string } } | null = null
 const server = Bun.serve({
 	port: 0,
 	async fetch(req) {
@@ -52,6 +54,7 @@ const server = Bun.serve({
 			})
 		}
 		fallbackHits += 1
+		lastFallbackBody = body as { thinking?: { type?: string } }
 		// build a VALID grounded answer from the first evidence id+text the
 		// pipeline put in the system prompt — quotes must be verbatim
 		const system = body.messages.find((m) => m.role === 'system')?.content ?? ''
@@ -276,8 +279,10 @@ async function setupFixture(): Promise<Fixture> {
 	await sql`insert into provider_secret_refs (provider_config_id, secret_ref)
 		values (${pBackup.id}::uuid, 'env://OPENAI_API_KEY')`
 	const [mBackup] = await sql<{ id: string }[]>`
-		insert into model_configs (provider_config_id, model_id, context_window)
-		values (${pBackup.id}::uuid, ${`ok-model-${suffix}`}, 128000) returning id`
+		insert into model_configs (provider_config_id, model_id, context_window, capabilities)
+		values (${pBackup.id}::uuid, ${`ok-model-${suffix}`}, 128000,
+			${JSON.stringify({ requestBody: { thinking: { type: 'disabled' } } })})
+		returning id`
 	// an enabled provider WITHOUT models — must be skipped with a reason
 	const [pGhost] = await sql<{ id: string }[]>`
 		insert into provider_configs (key, provider, base_url, enabled)
@@ -372,5 +377,9 @@ describe('AI-004: chat model fallback chain', () => {
 		expect(fallbackHits).toBeGreaterThanOrEqual(1)
 		// the answer cites real corpus evidence (grounding held through the chain)
 		expect(turn.citations.length).toBeGreaterThan(0)
+		// REGRESSION (extraBody threading): capabilities.requestBody must
+		// reach the provider request body — a silently dropped knob is what
+		// left GLM thinking past the proxy timeout in production
+		expect(lastFallbackBody?.thinking).toEqual({ type: 'disabled' })
 	})
 })
