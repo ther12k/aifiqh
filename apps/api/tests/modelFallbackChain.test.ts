@@ -109,9 +109,11 @@ const server = Bun.serve({
 					choices: [{ index: 0, delta, finish_reason: null, ...extra }],
 					...(extra.usage ? { usage: extra.usage } : {}),
 				})}\n\n`
-			const sse = `${chunk({ role: 'assistant', content: content.slice(0, mid) }) +
+			const sse = `${
+				chunk({ role: 'assistant', content: content.slice(0, mid) }) +
 				chunk({ content: content.slice(mid) }) +
-				chunk({}, { finish_reason: 'stop' })}data: ${JSON.stringify({
+				chunk({}, { finish_reason: 'stop' })
+			}data: ${JSON.stringify({
 				id: 'fb-1',
 				object: 'chat.completion.chunk',
 				choices: [],
