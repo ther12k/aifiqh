@@ -131,6 +131,8 @@ export interface GenerationMetadata {
 	fallbackReason: GenerationFallbackReason | null
 	/** AI-004: the attempts this turn made before an answer was produced */
 	attempts?: ModelAttempt[]
+	/** LLM-REPAIR-001: the answer succeeded on the single bounded repair attempt */
+	repaired?: boolean
 }
 
 /** resolution diagnostic → user-visible fallback reason */
@@ -694,6 +696,9 @@ async function runTurn(
 			decision,
 			providerKey: model.providerKey,
 			evidenceTexts,
+			// CHAT-AI-004: conversation understanding context — the pipeline
+			// keeps it strictly separated from evidence (never citable)
+			conversationHistory: conversationContext.messages,
 			generate: async (request) => {
 				const payload = {
 					modelId: model.modelId,
@@ -860,6 +865,8 @@ async function runTurn(
 		citations,
 		provider: usedProvider,
 		model: usedModel,
+		// LLM-REPAIR-001: the attempt is auditable on the answer row
+		repairTrace: generation.repair,
 	})
 
 	// middle verification layer (#109): does the cited evidence actually
@@ -900,6 +907,7 @@ async function runTurn(
 			fallbackReason:
 				usedProvider === 'builtin-compose' ? fallbackReason : null,
 			attempts: modelAttempts.length > 0 ? modelAttempts : undefined,
+			repaired: generation.repair.result === 'success' || undefined,
 		},
 	}
 }

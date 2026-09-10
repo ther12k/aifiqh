@@ -7,6 +7,7 @@ import {
 import type { ResponseDecisionOutcome } from '../retrieval/abstentionPolicy'
 import type { BuiltContext } from '../retrieval/contextBuilder'
 import { normalizeText } from '../retrieval/queryNormalization'
+import { buildRepairInstruction } from './repairPipeline'
 
 /**
  * Versioned grounded-generation pipeline (LLM-005).
@@ -23,12 +24,19 @@ import { normalizeText } from '../retrieval/queryNormalization'
  *  - abstain/escalate decisions never reach the model at all: abstention
  *    is a decision, not generated prose;
  *  - a failed or invalid generation NEVER produces a valid answer — the
- *    draft is discarded with its issues, no partial output leaks through.
+ *    draft is discarded with its issues, no partial output leaks through;
+ *  - on a REPAIRABLE validation failure the model gets exactly ONE repair
+ *    attempt (same evidence, same validator stack, explicit issue list) —
+ *    a second failure is final (LLM-REPAIR-001);
+ *  - conversation history may appear ONLY in a clearly separated
+ *    understanding block: it can never satisfy a citation, because the
+ *    grounding gate checks against the manifest regardless of the prompt
+ *    (CHAT-AI-004).
  */
 
 export const GENERATION_PIPELINE_VERSION = 'grounded-generation-v1'
 
-export const PROMPT_VERSION = 'grounded-answer-prompt-v3'
+export const PROMPT_VERSION = 'grounded-answer-prompt-v4'
 
 export interface PinnedVersions {
 	pipelineVersion: string
@@ -47,6 +55,10 @@ export interface GenerateAnswerInput {
 	/** optional unit texts by id — real model providers need the evidence
 	 * content, not just ids; omitted for test/deterministic generators */
 	evidenceTexts?: Record<string, string>
+	/** CHAT-AI-004: recent conversation messages (oldest→newest, already
+	 * sanitized by conversationContext). Understanding context ONLY —
+	 * never evidence, never citable. */
+	conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>
 	generate: (request: {
 		messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
 		responseFormat: 'text' | 'json_object'
@@ -56,23 +68,61 @@ export interface GenerateAnswerInput {
 
 export type GenerationStatus = 'generated' | 'abstained' | 'failed'
 
+/** LLM-REPAIR-001: exactly one bounded repair attempt, fully traced */
+export interface RepairTrace {
+	attempted: boolean
+	result:
+		| 'not_needed'
+		| 'success'
+		| 'failed'
+		| 'skipped_gateway_error'
+		| 'skipped_incomplete_generation'
+	instruction: string | null
+	issueCountBefore: number
+	issueCountAfter: number
+}
+
 export interface GenerationResult {
 	status: GenerationStatus
 	answer: StructuredAnswer | null
 	issues: SchemaIssue[]
 	pinned: PinnedVersions | null
-	/** the raw model output, kept only for failure forensics */
+	/** the raw model output of the LAST attempt, kept for failure forensics */
 	rawOutput: string | null
+	repair: RepairTrace
+}
+
+/** CHAT-AI-004: separated understanding block — never cited, never evidence */
+function buildConversationBlock(
+	history: Array<{ role: 'user' | 'assistant'; content: string }> | undefined,
+): string {
+	if (!history || history.length === 0) return ''
+	const lines = history
+		.slice(-6)
+		.map((m) => `- ${m.role}: ${m.content}`)
+		.join('\n')
+	return `KONTEKS PERCAKAPAN (hanya untuk MEMAHAMI pertanyaan saat ini):
+${lines}
+
+ATURAN KONTEKS PERCAKAPAN (pelanggaran = jawaban ditolak):
+- Riwayat percakapan BUKAN bukti: DILARANG mengutip, merujuk id, atau
+  memakai kalimat apa pun dari riwayat sebagai dasar klaim.
+- Setiap klaim fiqih TETAP wajib bersumber dari blok BUKTI di bawah dan
+  lolos verifikasi kutipan — riwayat tidak pernah lolos verifikasi.
+- Gunakan riwayat HANYA untuk menyelesaikan rujukan/anaphora dalam
+  pertanyaan (mis. "kalau yang dimaksud...").
+`
 }
 
 function buildSystemPrompt(
 	decision: ResponseDecisionOutcome,
 	evidenceBlock: string,
+	conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>,
 ): string {
 	const constraints = decision.languageConstraints.join('\n- ')
 	return `Anda adalah asisten fiqih yang HANYA menjawab berdasarkan bukti yang diberikan.
 
-ATURAN JAWABAN (wajib):
+${buildConversationBlock(conversationHistory)}ATURAN JAWABAN (wajib):
 - Keluarkan HANYA satu objek JSON valid, tanpa teks lain, tanpa blok kode.
 - schemaVersion: "${ANSWER_SCHEMA_VERSION}"
 - language: "id", "ar", atau "mixed" sesuai pertanyaan.
@@ -140,6 +190,13 @@ export async function generateGroundedAnswer(
 			issues: [],
 			pinned: null,
 			rawOutput: null,
+			repair: {
+				attempted: false,
+				result: 'not_needed',
+				instruction: null,
+				issueCountBefore: 0,
+				issueCountAfter: 0,
+			},
 		}
 	}
 
@@ -155,6 +212,13 @@ export async function generateGroundedAnswer(
 		})
 		.join('\n')
 
+	const systemPrompt = buildSystemPrompt(
+		input.decision,
+		evidenceBlock,
+		input.conversationHistory,
+	)
+	const userPrompt = buildUserPrompt(input.query)
+
 	const pinned: PinnedVersions = {
 		pipelineVersion: GENERATION_PIPELINE_VERSION,
 		promptVersion: PROMPT_VERSION,
@@ -164,151 +228,266 @@ export async function generateGroundedAnswer(
 		modelId: '',
 	}
 
-	let response: { text: string; finishReason: string; modelId?: string }
-	try {
-		response = await input.generate({
-			messages: [
-				{
-					role: 'system',
-					content: buildSystemPrompt(input.decision, evidenceBlock),
-				},
-				{ role: 'user', content: buildUserPrompt(input.query) },
-			],
-			responseFormat: 'json_object',
-			promptVersion: PROMPT_VERSION,
-		})
-	} catch (err) {
-		// gateway failure is a failed generation, never a partial draft
-		return {
-			status: 'failed',
-			answer: null,
-			issues: [
-				{
-					path: '$gateway',
-					code: 'GATEWAY_ERROR',
-					message: err instanceof Error ? err.message : String(err),
-				},
-			],
-			pinned,
-			rawOutput: null,
-		}
-	}
+	type AttemptOutcome =
+		| {
+				kind: 'generated'
+				answer: StructuredAnswer
+				text: string
+				modelId?: string
+		  }
+		| {
+				kind: 'gateway_error' | 'incomplete' | 'unparseable' | 'invalid'
+				text: string | null
+				modelId?: string
+				issues: SchemaIssue[]
+				finishReason?: string
+		  }
 
-	pinned.modelId = response.modelId ?? ''
-
-	if (response.finishReason !== 'stop') {
-		return {
-			status: 'failed',
-			answer: null,
-			issues: [
-				{
-					path: '$gateway',
-					code: 'INCOMPLETE_GENERATION',
-					message: `finishReason=${response.finishReason}`,
-				},
-			],
-			pinned,
-			rawOutput: response.text,
-		}
-	}
-
-	// parse: the model must return a single JSON object
-	let parsed: unknown
-	try {
-		parsed = JSON.parse(response.text)
-	} catch {
-		return {
-			status: 'failed',
-			answer: null,
-			issues: [
-				{
-					path: '$',
-					code: 'UNPARSEABLE_JSON',
-					message: 'model output is not valid JSON',
-				},
-			],
-			pinned,
-			rawOutput: response.text,
-		}
-	}
-
-	// schema validation (LLM-004) — all issues collected for repair
-	const validation = validateStructuredAnswer(parsed)
-
-	// grounding gate: only manifest evidence ids are accepted — the check
-	// runs even when schema validation already failed so callers see every
-	// problem at once
-	if (validation.answer) {
-		const candidate = validation.answer
-		const unknownIds: string[] = []
-		for (const claim of candidate.claims) {
-			for (const link of claim.evidence) {
-				if (!evidenceIds.has(link.evidenceId)) {
-					unknownIds.push(link.evidenceId)
-				}
+	// the SAME validator stack for every attempt (LLM-REPAIR-001): gateway
+	// invariants → JSON parse → schema → grounding gate → quote gate
+	const validateAttempt = async (
+		messages: Array<{ role: 'system' | 'user'; content: string }>,
+	): Promise<AttemptOutcome> => {
+		let response: { text: string; finishReason: string; modelId?: string }
+		try {
+			response = await input.generate({
+				messages,
+				responseFormat: 'json_object',
+				promptVersion: PROMPT_VERSION,
+			})
+		} catch (err) {
+			// gateway failure is a failed generation, never a partial draft
+			return {
+				kind: 'gateway_error',
+				text: null,
+				issues: [
+					{
+						path: '$gateway',
+						code: 'GATEWAY_ERROR',
+						message: err instanceof Error ? err.message : String(err),
+					},
+				],
 			}
 		}
-		for (const id of unknownIds) {
-			validation.issues.push({
-				path: 'claims',
-				code: 'UNKNOWN_EVIDENCE_ID',
-				message: `evidence id ${id} is not part of the pinned context manifest`,
-			})
+		pinned.modelId = response.modelId ?? pinned.modelId
+
+		if (response.finishReason !== 'stop') {
+			return {
+				kind: 'incomplete',
+				text: response.text,
+				modelId: response.modelId,
+				issues: [
+					{
+						path: '$gateway',
+						code: 'INCOMPLETE_GENERATION',
+						message: `finishReason=${response.finishReason}`,
+					},
+				],
+				finishReason: response.finishReason,
+			}
 		}
 
-		// citation-integrity gate (VAL-002 at generation time): a "direct"
-		// link claims a verbatim quote — when evidence texts are available
-		// the quote MUST appear in the cited unit text (exact or under the
-		// controlled normalization). A real reference with a fabricated or
-		// altered quote is a failed answer, never a cited one.
-		const quoteIssues: SchemaIssue[] = []
-		if (input.evidenceTexts) {
+		// parse: the model must return a single JSON object
+		let parsed: unknown
+		try {
+			parsed = JSON.parse(response.text)
+		} catch {
+			return {
+				kind: 'unparseable',
+				text: response.text,
+				modelId: response.modelId,
+				issues: [
+					{
+						path: '$',
+						code: 'UNPARSEABLE_JSON',
+						message: 'model output is not valid JSON',
+					},
+				],
+			}
+		}
+
+		// schema validation (LLM-004) — all issues collected for repair
+		const validation = validateStructuredAnswer(parsed)
+
+		// grounding gate: only manifest evidence ids are accepted — the check
+		// runs even when schema validation already failed so callers see every
+		// problem at once. Conversation history is NOT part of the manifest,
+		// so a citation of history dies here no matter what the prompt said.
+		if (validation.answer) {
+			const candidate = validation.answer
+			const unknownIds: string[] = []
 			for (const claim of candidate.claims) {
 				for (const link of claim.evidence) {
-					if (link.relation !== 'direct') continue
-					const quote = link.quote?.trim()
-					if (!quote) continue
-					const unitText = input.evidenceTexts[link.evidenceId]
-					if (unitText === undefined) continue // no text supplied (test generators)
-					const exact = unitText.includes(quote)
-					const normalized = normalizeText(unitText).includes(
-						normalizeText(quote),
-					)
-					if (!exact && !normalized) {
-						quoteIssues.push({
-							path: 'claims',
-							code: 'QUOTE_MISMATCH',
-							message: `claim ${claim.id}: quoted text does not appear in evidence ${link.evidenceId} — a paraphrase can never pass as a quotation`,
-						})
+					if (!evidenceIds.has(link.evidenceId)) {
+						unknownIds.push(link.evidenceId)
 					}
 				}
 			}
-			validation.issues.push(...quoteIssues)
+			for (const id of unknownIds) {
+				validation.issues.push({
+					path: 'claims',
+					code: 'UNKNOWN_EVIDENCE_ID',
+					message: `evidence id ${id} is not part of the pinned context manifest`,
+				})
+			}
+
+			// citation-integrity gate (VAL-002 at generation time): a "direct"
+			// link claims a verbatim quote — when evidence texts are available
+			// the quote MUST appear in the cited unit text (exact or under the
+			// controlled normalization). A real reference with a fabricated or
+			// altered quote is a failed answer, never a cited one.
+			const quoteIssues: SchemaIssue[] = []
+			if (input.evidenceTexts) {
+				for (const claim of candidate.claims) {
+					for (const link of claim.evidence) {
+						if (link.relation !== 'direct') continue
+						const quote = link.quote?.trim()
+						if (!quote) continue
+						const unitText = input.evidenceTexts[link.evidenceId]
+						if (unitText === undefined) continue // no text supplied (test generators)
+						const exact = unitText.includes(quote)
+						const normalized = normalizeText(unitText).includes(
+							normalizeText(quote),
+						)
+						if (!exact && !normalized) {
+							quoteIssues.push({
+								path: 'claims',
+								code: 'QUOTE_MISMATCH',
+								message: `claim ${claim.id}: quoted text does not appear in evidence ${link.evidenceId} — a paraphrase can never pass as a quotation`,
+							})
+						}
+					}
+				}
+				validation.issues.push(...quoteIssues)
+			}
+
+			if (unknownIds.length > 0 || quoteIssues.length > 0) {
+				validation.ok = false
+				validation.answer = null
+			}
 		}
 
-		if (unknownIds.length > 0 || quoteIssues.length > 0) {
-			validation.ok = false
-			validation.answer = null
+		if (!validation.ok || !validation.answer) {
+			return {
+				kind: 'invalid',
+				text: response.text,
+				modelId: response.modelId,
+				issues: validation.issues,
+			}
+		}
+		return {
+			kind: 'generated',
+			answer: validation.answer,
+			text: response.text,
+			modelId: response.modelId,
 		}
 	}
 
-	if (!validation.ok) {
-		// invalid output is NEVER surfaced as a valid answer — the draft
-		// dies here with its full issue list (LLM-006 may repair once)
+	// attempt 1
+	const first = await validateAttempt([
+		{ role: 'system', content: systemPrompt },
+		{ role: 'user', content: userPrompt },
+	])
+	if (first.kind === 'generated') {
+		return {
+			status: 'generated',
+			answer: first.answer,
+			issues: [],
+			pinned,
+			rawOutput: null,
+			repair: {
+				attempted: false,
+				result: 'not_needed',
+				instruction: null,
+				issueCountBefore: 0,
+				issueCountAfter: 0,
+			},
+		}
+	}
+	if (first.kind === 'gateway_error') {
 		return {
 			status: 'failed',
 			answer: null,
-			issues: validation.issues,
+			issues: first.issues,
 			pinned,
-			rawOutput: response.text,
+			rawOutput: null,
+			repair: {
+				attempted: false,
+				result: 'skipped_gateway_error',
+				instruction: null,
+				issueCountBefore: 1,
+				issueCountAfter: 1,
+			},
+		}
+	}
+	if (first.kind === 'incomplete') {
+		// a truncated draft is not repairable within the same budget — the
+		// retry would truncate again; the turn degrades explicitly
+		return {
+			status: 'failed',
+			answer: null,
+			issues: first.issues,
+			pinned,
+			rawOutput: first.text,
+			repair: {
+				attempted: false,
+				result: 'skipped_incomplete_generation',
+				instruction: null,
+				issueCountBefore: 1,
+				issueCountAfter: 1,
+			},
 		}
 	}
 
+	// LLM-REPAIR-001: ONE bounded repair attempt with the same evidence set
+	// and query, plus the explicit validation issue list. The instruction
+	// says exactly what the issue demands: correct ONLY these problems, add
+	// no claims or evidence, return the complete JSON.
+	const instruction = [
+		buildRepairInstruction(first.issues),
+		'Perbaiki HANYA masalah-masalah tersebut; jangan menambah klaim atau bukti; kembalikan JSON lengkap yang valid.',
+	].join('\n')
+	const repairUserPrompt = [
+		userPrompt,
+		'JAWABAN SEBELUMNYA (TIDAK VALID):',
+		first.text ?? '(tidak dapat di-parse)',
+		instruction,
+	].join('\n\n')
+
+	const second = await validateAttempt([
+		{ role: 'system', content: systemPrompt },
+		{ role: 'user', content: repairUserPrompt },
+	])
+	if (second.kind === 'generated') {
+		return {
+			status: 'generated',
+			answer: second.answer,
+			issues: [],
+			pinned,
+			rawOutput: null,
+			repair: {
+				attempted: true,
+				result: 'success',
+				instruction,
+				issueCountBefore: first.issues.length,
+				issueCountAfter: 0,
+			},
+		}
+	}
+
+	// still broken (or the repair call itself errored) — final, no third try
 	return {
-		status: 'generated',
-		answer: validation.answer,
-		issues: [],
+		status: 'failed',
+		answer: null,
+		issues: second.issues,
 		pinned,
-		rawOutput: null,
+		rawOutput: second.text ?? null,
+		repair: {
+			attempted: true,
+			result: 'failed',
+			instruction,
+			issueCountBefore: first.issues.length,
+			issueCountAfter: second.issues.length,
+		},
 	}
 }

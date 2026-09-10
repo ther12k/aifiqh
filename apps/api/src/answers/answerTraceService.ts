@@ -47,6 +47,17 @@ export interface FinalizeAnswerInput {
 	model?: string
 	promptVersionId?: string | null
 	modelConfigId?: string | null
+	/** LLM-REPAIR-001: the pipeline's single bounded repair attempt trace */
+	repairTrace?: {
+		attempted: boolean
+		result:
+			| 'not_needed'
+			| 'success'
+			| 'failed'
+			| 'skipped_gateway_error'
+			| 'skipped_incomplete_generation'
+		instruction: string | null
+	}
 }
 
 export interface FinalizeResult {
@@ -109,6 +120,15 @@ export async function finalizeGroundedAnswer(
 			)
 			returning id`
 		await tx`update messages set answer_id = ${answer.id}::uuid where id = ${message.id}::uuid`
+
+		// LLM-REPAIR-001: persist the single bounded repair attempt — the
+		// schema pins attempt_no = 1, so a second repair can never be stored
+		if (input.repairTrace?.attempted) {
+			await tx`
+				insert into repair_attempts (answer_id, attempt_no, instruction, result)
+				values (${answer.id}::uuid, 1, ${input.repairTrace.instruction ?? ''},
+					${input.repairTrace.result})`
+		}
 
 		// each claim persists EXACTLY ONCE, attached to the first section
 		// that surfaces it (a claim cited by several sections is still one claim)
