@@ -35,7 +35,12 @@ import { HashRerankerProvider } from '../retrieval/reranker'
 import { evaluateAnswerClaimSupport } from '../validation/claimSupportScorer'
 import { type VerificationStatus, deriveVerification } from './answerStatus'
 import { finalizeGroundedAnswer } from './answerTraceService'
+import {
+	loadConversationContext,
+	summarizeConversationContext,
+} from './conversationContext'
 import { generateGroundedAnswer } from './generationPipeline'
+import { rewriteQuery } from './queryRewriter'
 
 /**
  * Conversation + per-turn grounded answer API (CHAT-001).
@@ -462,6 +467,38 @@ async function runTurn(
 	await sql`update messages set retrieval_trace_id = ${plan.traceId}::uuid
 			where id = ${userMessageId}::uuid`
 
+	// CHAT-AI-001: recent conversation window — conversational context for
+	// UNDERSTANDING the current turn, never evidence. Consumers are exactly
+	// the query rewriter (CHAT-AI-002) and generator (CHAT-AI-004); the
+	// sanitized texts never reach retrieval, the manifest, or citations.
+	// The audit summary (no raw texts) is pinned on the turn's query plan.
+	const conversationContext = await loadConversationContext(
+		sql,
+		conversationId,
+		{
+			excludeMessageIds: [userMessageId],
+		},
+	)
+
+	// CHAT-AI-002: rewrite conversational fragments into self-contained
+	// retrieval queries. Retrieval runs on the standalone query; the RAW
+	// query stays on the trace (query_original) and the rewrite decision is
+	// audited on the plan. The pipeline never blocks on the rewriter.
+	const rewrite = await rewriteQuery(sql, content, conversationContext)
+	await sql`update query_plans
+			set plan = plan || ${sql.json({
+				conversationContext: summarizeConversationContext(conversationContext),
+				queryRewrite: {
+					method: rewrite.method,
+					standaloneQuery: rewrite.standaloneQuery,
+					madhhab: rewrite.madhhab,
+					needsClarification: rewrite.needsClarification,
+					fallbackReason: rewrite.fallbackReason,
+					version: rewrite.version,
+				},
+			} as never)}
+			where trace_id = ${plan.traceId}::uuid`
+
 	if (!indexReleaseId) {
 		// no pinned release: nothing to retrieve from — abstain explicitly
 		const decision: ResponseDecisionOutcome = {
@@ -513,9 +550,11 @@ async function runTurn(
 		}
 	}
 
-	// 2. retrieval + evidence + expansion (same composable pipeline)
+	// 2. retrieval + evidence + expansion (same composable pipeline) —
+	// retrieval runs on the STANDALONE query so follow-up fragments resolve
+	// against the conversation topic (CHAT-AI-002)
 	const outcome = await executeLanePlan(sql, principal, {
-		query: content,
+		query: rewrite.standaloneQuery,
 		indexReleaseId,
 		filters: { madhhab: options.madhhab },
 		vectorProvider: await embeddingProviderFor(
