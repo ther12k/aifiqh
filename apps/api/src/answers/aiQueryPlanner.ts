@@ -118,11 +118,18 @@ export function deterministicAiPlan(
 	}
 }
 
+/** some models wrap JSON in markdown fences despite response_format */
+function stripJsonFences(raw: string): string {
+	const trimmed = raw.trim()
+	const fenced = trimmed.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/)
+	return fenced ? fenced[1].trim() : trimmed
+}
+
 /** schema validation of the model output — everything whitelisted */
 function parseAiPlan(raw: string): AiQueryPlan | null {
 	let parsed: PlannerModelOutput
 	try {
-		parsed = JSON.parse(raw) as PlannerModelOutput
+		parsed = JSON.parse(stripJsonFences(raw)) as PlannerModelOutput
 	} catch {
 		return null
 	}
@@ -220,6 +227,7 @@ async function plannerModelAttempt(
 			],
 			temperature: 0,
 			maxTokens: 512,
+			responseFormat: 'json_object',
 		})
 		response = { text: res.text, finishReason: res.finishReason }
 	} catch {

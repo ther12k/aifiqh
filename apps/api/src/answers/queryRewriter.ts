@@ -242,6 +242,7 @@ async function llmRewrite(
 			],
 			temperature: 0,
 			maxTokens: 512,
+			responseFormat: 'json_object',
 		})
 		response = { text: res.text, finishReason: res.finishReason }
 	} catch {
@@ -253,7 +254,12 @@ async function llmRewrite(
 
 	let parsed: RewriterModelOutput
 	try {
-		parsed = JSON.parse(response.text) as RewriterModelOutput
+		const fenced = response.text
+			.trim()
+			.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/)
+		parsed = JSON.parse(
+			fenced ? fenced[1] : response.text,
+		) as RewriterModelOutput
 	} catch {
 		return { status: 'failed', reason: 'invalid_output' }
 	}
