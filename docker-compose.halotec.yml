@@ -33,6 +33,7 @@ services:
       # AI-001: LLM generation path (key only via env — never stored in DB)
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       AIFIQH_REQUIRE_CHAT_MODEL: "true"
+      AIFIQH_LLM_DEBUG: "true"
       SESSION_SECRET: aifiqh-halotec-session-secret-change-before-production-32chars
       WEB_DIST_PATH: /app/apps/web/dist
     networks:
