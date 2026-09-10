@@ -417,7 +417,11 @@ describe('model-versioned embedding and vector projection (IDX-004)', () => {
 		)
 		expect(res.status).toBe(200)
 		const body = await res.json()
-		expect(body.modelId).toBe('hash-embed')
+		// RAG-SEM-001: dev-mode hashing honors the release's pinned embedding
+		// model identity (emb-dim-<suffix> from the fixture), not a foreign
+		// default — the stored vectors must stay queryable by the vector lane
+		expect(String(body.modelId)).toMatch(/^emb-dim-/)
+		expect(body.modelVersion).toBe('1')
 		expect(body.embeddingsCreated).toBe(3)
 	})
 })

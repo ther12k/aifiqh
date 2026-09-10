@@ -4,9 +4,10 @@ import { recordAuditInTx } from '../audit/audit'
 import type { Sql } from '../db/client'
 import { normalizeText } from '../retrieval/queryNormalization'
 import {
+	EmbeddingError,
 	type EmbeddingProvider,
-	HashEmbeddingProvider,
 	embedIndexRelease,
+	resolveEmbeddingProvider,
 } from './embeddingService'
 import {
 	INDEX_COMPILER_VERSION,
@@ -293,8 +294,27 @@ export async function compileIncrementalIndexRelease(
 				on conflict do nothing`
 		}
 
-		// Run embedding generator with reuse
-		const provider = input.embeddingProvider ?? new HashEmbeddingProvider()
+		// Run embedding generator with reuse. RAG-SEM-001: resolve the
+		// provider from configuration so the identity ALWAYS matches the
+		// release's pinned embedding model (the old default hashed under a
+		// foreign identity, hiding new units from the vector lane). Hash is
+		// test/local-only; require mode refuses instead of silently hashing.
+		let provider: EmbeddingProvider | undefined = input.embeddingProvider
+		if (!provider) {
+			const resolution = await resolveEmbeddingProvider(
+				tx as unknown as Sql,
+				principal.tenantId,
+				indexRelease.id,
+				{ purpose: 'index' },
+			)
+			if (resolution.status === 'unavailable') {
+				throw new EmbeddingError(
+					'PROVIDER_NOT_CONFIGURED',
+					`embedding provider unavailable (${resolution.reason}): ${resolution.message}`,
+				)
+			}
+			provider = resolution.provider
+		}
 		const embResult = await embedIndexRelease(
 			tx as unknown as Sql,
 			principal,

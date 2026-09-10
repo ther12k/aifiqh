@@ -2,7 +2,7 @@ import type { Principal, StructuredAnswer } from '@aifiqh/shared'
 import { ModelGatewayError } from '@aifiqh/shared'
 import { recordAuditInTx } from '../audit/audit'
 import type { Sql } from '../db/client'
-import { HashEmbeddingProvider } from '../index/embeddingService'
+import { resolveEmbeddingProvider } from '../index/embeddingService'
 import { DefaultModelGateway } from '../llm/gateway'
 import {
 	type ChatModelResolution,
@@ -518,7 +518,11 @@ async function runTurn(
 		query: content,
 		indexReleaseId,
 		filters: { madhhab: options.madhhab },
-		vectorProvider: await embeddingProviderFor(sql, indexReleaseId),
+		vectorProvider: await embeddingProviderFor(
+			sql,
+			principal.tenantId,
+			indexReleaseId,
+		),
 		reranker: new HashRerankerProvider(),
 		evidence: { requestedMadhhab: options.ensureMadhhab ?? [] },
 	})
@@ -868,17 +872,24 @@ function decideFromAssessment(
 	return decideResponse(assessment, options.mode ?? 'grounded_only')
 }
 
-async function embeddingProviderFor(sql: Sql, indexReleaseId: string) {
-	const [model] = await sql<
-		{ model_id: string; version: string; dimensions: number }[]
-	>`select em.model_id, em.version, em.dimensions
-		from index_releases ir
-		join index_configurations ic on ic.id = ir.configuration_id
-		join embedding_models em on em.id = ic.embedding_model_id
-		where ir.id = ${indexReleaseId}::uuid`
-	return model
-		? new HashEmbeddingProvider(model.model_id, model.version, model.dimensions)
-		: undefined
+async function embeddingProviderFor(
+	sql: Sql,
+	tenantId: string,
+	indexReleaseId: string,
+) {
+	// RAG-SEM-001: query-time resolution honors the release's pinned
+	// embedding identity — remote when a binding exists, hash only when the
+	// identity itself was built that way; a remote identity without a
+	// binding skips the vector lane (fail-closed) instead of hashing
+	const resolution = await resolveEmbeddingProvider(
+		sql,
+		tenantId,
+		indexReleaseId,
+		{
+			purpose: 'query',
+		},
+	)
+	return resolution.status === 'unavailable' ? undefined : resolution.provider
 }
 
 export interface ConversationView {

@@ -22,6 +22,11 @@
  */
 import postgres from 'postgres'
 import {
+	type EmbeddingProviderResolution,
+	requireRealEmbeddings,
+	resolveEmbeddingProvider,
+} from '../apps/api/src/index/embeddingService'
+import {
 	type ChatModelResolution,
 	maxChatAttempts,
 	resolveChatModelCandidates,
@@ -95,6 +100,51 @@ if (!anyModel && REQUIRED) {
 if (!anyModel) {
 	console.warn(
 		'⚠ chat turns will use the deterministic built-in composer (recorded per turn as generation mode "deterministic_rag").',
+	)
+}
+
+// embedding resolution (RAG-SEM-001): reported for visibility. Hash vectors
+// keep query-time working for hash-built releases, but producing NEW
+// embeddings refuses in require mode until a binding exists — the warning
+// below is the operator's signal to run scripts/configure_embedding.ts.
+try {
+	const [aliasRow] = await sql<{ release_id: string; tenant_id: string }[]>`
+		select release_id, tenant_id from index_aliases
+		where alias = 'production' order by updated_at desc limit 1`
+	if (!aliasRow) {
+		console.log(
+			'embedding resolution: no production alias — nothing to resolve',
+		)
+	} else {
+		const resolution: EmbeddingProviderResolution =
+			await resolveEmbeddingProvider(
+				sql,
+				aliasRow.tenant_id,
+				aliasRow.release_id,
+				{
+					purpose: 'index',
+				},
+			)
+		if (resolution.status === 'remote') {
+			console.log(
+				`embedding resolution: remote — ${resolution.providerKey} / ${resolution.remoteModel} (identity ${resolution.provider.modelId} v${resolution.provider.modelVersion}, ${resolution.provider.dimensions} dims)`,
+			)
+		} else if (resolution.status === 'hash_local') {
+			const hint = requireRealEmbeddings()
+				? ''
+				: ' Producing new embeddings in require mode will REFUSE until a binding is configured.'
+			console.warn(
+				`⚠ embedding resolution: hash (${resolution.reason}) — vectors are non-semantic.${hint}`,
+			)
+		} else {
+			console.warn(
+				`⚠ embedding resolution: unavailable (${resolution.reason}) — ${resolution.message}`,
+			)
+		}
+	}
+} catch (err) {
+	console.warn(
+		`⚠ embedding resolution could not be checked: ${err instanceof Error ? err.message : String(err)}`,
 	)
 }
 

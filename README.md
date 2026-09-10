@@ -75,6 +75,17 @@ bun scripts/configure_model.ts
 # production gate: AIFIQH_REQUIRE_CHAT_MODEL=true refuses to boot without a model
 # (scripts/verify_model_config.ts); manage the chain at #/admin-models (config:manage)
 
+# optional: real semantic embeddings (RAG-SEM-001). Binds an embedding-model
+# identity to an OpenAI-compatible /embeddings endpoint; retrieval_embeddings
+# is vector(768), so the endpoint must emit 768 dims (OpenAI text-embedding-3-*:
+# pass EMBEDDING_EXTRA_BODY='{"dimensions":768}'). Live-probes the endpoint
+# before writing config. Without a binding, hashing is test/local-only — in
+# AIFIQH_REQUIRE_CHAT_MODEL=true mode embedding new vectors REFUSES (503)
+# instead of silently hashing; AIFIQH_ALLOW_HASH_EMBEDDINGS=true opts back in.
+EMBEDDING_BASE_URL=https://api.openai.com/v1 EMBEDDING_REMOTE_MODEL=text-embedding-3-small \
+EMBEDDING_SECRET_REF=env://OPENAI_API_KEY EMBEDDING_EXTRA_BODY='{"dimensions":768}' \
+bun scripts/configure_embedding.ts
+
 # dev servers (web :5174 proxies to api :3100)
 PORT=3100 bun apps/api/src/index.ts
 VITE_PORT=5174 VITE_API_TARGET=http://localhost:3100 bun run dev:web

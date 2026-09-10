@@ -121,8 +121,8 @@ import {
 } from './eval/gateService'
 import {
 	EmbeddingError,
-	HashEmbeddingProvider,
 	embedIndexRelease,
+	resolveEmbeddingProvider,
 } from './index/embeddingService'
 import { compileIncrementalIndexRelease } from './index/incrementalIndexer'
 import {
@@ -2080,14 +2080,29 @@ function sourceRoutes(deps: AppDeps) {
 				const ctx = rawCtx as unknown as HandlerCtx
 				const principal = await ctx.requirePermission('config:manage')
 				ctx.requireCsrf()
-				// deterministic hash provider is the built-in default; remote
-				// providers plug into the same EmbeddingProvider contract
+				// RAG-SEM-001: embedding requires a configured provider binding;
+				// the deterministic hash provider is test/local-only and is
+				// REFUSED in require mode instead of silently hashing
 				try {
+					const resolution = await resolveEmbeddingProvider(
+						sql,
+						principal.tenantId,
+						ctx.params.id,
+						{ purpose: 'index' },
+					)
+					if (resolution.status === 'unavailable') {
+						ctx.set.status =
+							resolution.reason === 'release_not_found' ? 404 : 503
+						return {
+							error: `EMBEDDING_${resolution.reason.toUpperCase()}`,
+							message: resolution.message,
+						}
+					}
 					return await embedIndexRelease(
 						sql,
 						principal,
 						ctx.params.id,
-						new HashEmbeddingProvider(),
+						resolution.provider,
 					)
 				} catch (err) {
 					if (err instanceof EmbeddingError) {
@@ -2161,6 +2176,12 @@ function sourceRoutes(deps: AppDeps) {
 							err.code === 'KNOWLEDGE_RELEASE_NOT_FOUND'
 								? 404
 								: 409
+						return { error: err.code, message: err.message }
+					}
+					// RAG-SEM-001: refused embedding (no binding configured,
+					// missing secret) fails the incremental build loudly
+					if (err instanceof EmbeddingError) {
+						ctx.set.status = 503
 						return { error: err.code, message: err.message }
 					}
 					throw err
@@ -3386,14 +3407,15 @@ function sourceRoutes(deps: AppDeps) {
 
 				try {
 					// vector lane uses the SAME embedding configuration the
-					// release was embedded with (model + version pinned)
-					const [model] = await sql<
-						{ model_id: string; version: string; dimensions: number }[]
-					>`select em.model_id, em.version, em.dimensions
-						from index_releases ir
-						join index_configurations ic on ic.id = ir.configuration_id
-						join embedding_models em on em.id = ic.embedding_model_id
-						where ir.id = ${indexReleaseId}::uuid`
+					// release was embedded with (model + version pinned);
+					// unavailable resolutions (broken binding on a remote
+					// identity) skip the lane fail-closed instead of hashing
+					const vectorResolution = await resolveEmbeddingProvider(
+						sql,
+						principal.tenantId,
+						indexReleaseId,
+						{ purpose: 'query' },
+					)
 
 					// all four lanes run in parallel, fuse with RRF, and every
 					// candidate is re-verified against the live access-scope
@@ -3405,13 +3427,10 @@ function sourceRoutes(deps: AppDeps) {
 						query,
 						indexReleaseId,
 						filters,
-						vectorProvider: model
-							? new HashEmbeddingProvider(
-									model.model_id,
-									model.version,
-									model.dimensions,
-								)
-							: undefined,
+						vectorProvider:
+							vectorResolution.status === 'unavailable'
+								? undefined
+								: vectorResolution.provider,
 						reranker:
 							body.rerank === false ? undefined : new HashRerankerProvider(),
 						// evidence selection stage: overlap collapse + source and
@@ -3945,12 +3964,54 @@ function sourceRoutes(deps: AppDeps) {
 			})
 			.get('/config/model', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
-				await ctx.requirePermission('config:manage')
+				const principal = await ctx.requirePermission('config:manage')
 				const [diag, chain, options] = await Promise.all([
 					resolveChatModelDiagnostics(sql),
 					listFallbackChain(sql, CHAT_MODEL_ALIAS),
 					listModelOptions(sql),
 				])
+				// RAG-SEM-001: embedding resolution against the production
+				// alias release — operators must see hash vs remote vs refused
+				let embedding: Record<string, unknown> = {
+					status: 'unavailable',
+					reason: 'no_active_release',
+				}
+				const [aliasRelease] = await sql<{ release_id: string }[]>`
+					select release_id from index_aliases
+					where tenant_id = ${principal.tenantId}::uuid and alias = 'production'
+					limit 1`
+				if (aliasRelease) {
+					const resolution = await resolveEmbeddingProvider(
+						sql,
+						principal.tenantId,
+						aliasRelease.release_id,
+						{ purpose: 'query' },
+					)
+					embedding =
+						resolution.status === 'unavailable'
+							? {
+									status: 'unavailable',
+									reason: resolution.reason,
+									message: resolution.message,
+								}
+							: {
+									status: resolution.status,
+									modelId: resolution.provider.modelId,
+									modelVersion: resolution.provider.modelVersion,
+									dimensions: resolution.provider.dimensions,
+									reason:
+										resolution.status === 'remote'
+											? undefined
+											: resolution.reason,
+									...(resolution.status === 'remote'
+										? {
+												providerKey: resolution.providerKey,
+												remoteModel: resolution.remoteModel,
+												secretSource: resolution.secretSource,
+											}
+										: {}),
+								}
+				}
 				return {
 					alias: CHAT_MODEL_ALIAS,
 					primary: diag.config
@@ -3968,6 +4029,7 @@ function sourceRoutes(deps: AppDeps) {
 					modelOptions: options,
 					maxAttempts: maxChatAttempts(),
 					requireChatModel: process.env.AIFIQH_REQUIRE_CHAT_MODEL === 'true',
+					embedding,
 				}
 			})
 			.put('/config/model/fallbacks', async (rawCtx) => {
