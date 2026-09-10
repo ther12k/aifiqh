@@ -1,4 +1,5 @@
 import type { Principal, StructuredAnswer } from '@aifiqh/shared'
+import { ModelGatewayError } from '@aifiqh/shared'
 import { recordAuditInTx } from '../audit/audit'
 import type { Sql } from '../db/client'
 import { HashEmbeddingProvider } from '../index/embeddingService'
@@ -7,7 +8,6 @@ import {
 	type ChatModelResolution,
 	resolveChatModelCandidates,
 } from '../llm/modelRouter'
-import { ModelGatewayError } from '@aifiqh/shared'
 import { resolveChatModelConfig } from '../llm/modelRouter'
 import {
 	type ResponseDecisionOutcome,
