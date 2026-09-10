@@ -438,3 +438,155 @@ export async function executeLanePlan(
 	if (options.cache) options.cache.set(cacheKey, identity, outcome)
 	return outcome
 }
+
+// ---------------------------------------------------------------------------
+// CHAT-AI-003: multi-query retrieval — per-side planner queries feeding the
+// SAME per-query lane fusion, merged with a query-level RRF so comparisons
+// ("Syafii dan Hanafi tentang ...") recall BOTH sides before evidence
+// selection
+// ---------------------------------------------------------------------------
+
+export interface MultiQueryLaneOptions
+	extends Omit<LaneExecutionOptions, 'query' | 'cache'> {
+	queries: string[]
+}
+
+/**
+ * Run the full lane plan for each planner query (per-query RRF fusion +
+ * scope re-verification happen inside executeLanePlan), then merge the
+ * per-query fused lists: exact-priority units first, the rest ranked by a
+ * query-level RRF (Σ 1/(rrfK + rank within each query's fused list)). The
+ * evidence selection stage runs ONCE over the merged list.
+ */
+export async function executeMultiQueryLanePlan(
+	sql: Sql,
+	principal: Principal,
+	options: MultiQueryLaneOptions,
+): Promise<LaneExecutionOutcome> {
+	const { queries, ...rest } = options
+	const unique = [...new Set(queries.map((q) => q.trim()))].filter(
+		(q) => q.length >= 3,
+	)
+	if (unique.length === 0) {
+		throw new LaneError(
+			'NO_VALID_QUERIES',
+			'fusion',
+			'no usable planner queries',
+		)
+	}
+	if (unique.length === 1) {
+		return executeLanePlan(sql, principal, { ...rest, query: unique[0] })
+	}
+
+	const policy = rest.policy ?? DEFAULT_FUSION_POLICY
+	const perQuery = await Promise.all(
+		unique.map((q) =>
+			executeLanePlan(sql, principal, {
+				...rest,
+				query: q,
+				evidence: undefined,
+			}),
+		),
+	)
+
+	// exact-priority: identifier/quote hits from ANY query lead the list
+	const exactOrdered: FusedCandidate[] = []
+	const seenExact = new Set<string>()
+	for (const outcome of perQuery) {
+		const exactLane = [
+			...outcome.lanes.identifier.candidates.map((c) => c.unitId),
+			...outcome.lanes.quote.candidates.map((c) => c.unitId),
+		]
+		for (const candidate of outcome.fused.candidates) {
+			if (!exactLane.includes(candidate.unitId)) continue
+			if (seenExact.has(candidate.unitId)) continue
+			seenExact.add(candidate.unitId)
+			exactOrdered.push(candidate)
+		}
+	}
+
+	// query-level RRF over the non-exact fused lists
+	const scores = new Map<
+		string,
+		{
+			candidate: FusedCandidate
+			score: number
+			queryRanks: Record<string, number>
+		}
+	>()
+	for (const [qi, outcome] of perQuery.entries()) {
+		const ranked = outcome.fused.candidates.filter(
+			(c) => !seenExact.has(c.unitId),
+		)
+		ranked.forEach((candidate, idx) => {
+			const rank = idx + 1
+			const contribution = 1 / (policy.rrfK + rank)
+			const entry = scores.get(candidate.unitId)
+			if (entry) {
+				entry.score += contribution
+				entry.queryRanks[`q${qi}`] = rank
+			} else {
+				scores.set(candidate.unitId, {
+					candidate,
+					score: contribution,
+					queryRanks: { [`q${qi}`]: rank },
+				})
+			}
+		})
+	}
+	const merged: FusedCandidate[] = [...scores.values()]
+		.sort((a, b) =>
+			b.score !== a.score
+				? b.score - a.score
+				: a.candidate.unitId < b.candidate.unitId
+					? -1
+					: 1,
+		)
+		.map(({ candidate, score, queryRanks }) => ({
+			...candidate,
+			fusedScore: score,
+			laneRanks: { ...candidate.laneRanks, ...queryRanks },
+			laneScores: { ...candidate.laneScores, multiQuery: score },
+		}))
+
+	const candidates = [...exactOrdered, ...merged].slice(0, policy.topK)
+
+	// rerank over the merged list (primary query anchors relevance signals)
+	const rerank = rest.reranker
+		? await rerankCandidates(
+				sql,
+				principal,
+				unique[0],
+				candidates,
+				rest.reranker,
+			)
+		: null
+	const finalCandidates = (
+		rerank ? (rerank.candidates as FusedCandidate[]) : candidates
+	).filter((c) => seenExact.has(c.unitId) || scores.has(c.unitId))
+
+	// evidence selection ONCE over the merged (possibly reranked) list
+	const evidence = rest.evidence
+		? await selectEvidence(
+				sql,
+				principal,
+				perQuery[0].indexReleaseId,
+				finalCandidates,
+				undefined,
+				rest.evidence.requestedMadhhab ?? [],
+			)
+		: null
+
+	return {
+		indexReleaseId: perQuery[0].indexReleaseId,
+		query: unique.join(' | '),
+		// representative lanes: the primary query's (audit surface)
+		lanes: perQuery[0].lanes,
+		fused: {
+			...perQuery[0].fused,
+			candidates: finalCandidates,
+		},
+		rerank,
+		evidence,
+	}
+}

@@ -29,10 +29,14 @@ import {
 	applyEvidencePolicy,
 	selectEvidence,
 } from '../retrieval/evidenceSelector'
-import { executeLanePlan } from '../retrieval/laneFusion'
+import {
+	executeLanePlan,
+	executeMultiQueryLanePlan,
+} from '../retrieval/laneFusion'
 import { planAndPersistQuery } from '../retrieval/queryPlanner'
 import { HashRerankerProvider } from '../retrieval/reranker'
 import { evaluateAnswerClaimSupport } from '../validation/claimSupportScorer'
+import { mapIntentToRuleVocabulary, planTurn } from './aiQueryPlanner'
 import { type VerificationStatus, deriveVerification } from './answerStatus'
 import { finalizeGroundedAnswer } from './answerTraceService'
 import {
@@ -482,11 +486,17 @@ async function runTurn(
 		},
 	)
 
-	// CHAT-AI-002: rewrite conversational fragments into self-contained
-	// retrieval queries. Retrieval runs on the standalone query; the RAW
-	// query stays on the trace (query_original) and the rewrite decision is
-	// audited on the plan. The pipeline never blocks on the rewriter.
+	// CHAT-AI-002/003: plan the turn. The rewriter (rewriteQuery) and the AI
+	// planner (planTurn) run concurrently; the planner's structured plan —
+	// intent, risk, madhhab, 1..4 retrieval queries — wins when the model
+	// produces valid output, otherwise the deterministic machinery (rule
+	// planner + rewriter stitch) is the classified fallback. The RAW query
+	// stays on the trace; every planning decision is audited on the plan.
 	const rewrite = await rewriteQuery(sql, content, conversationContext)
+	const aiPlan = await planTurn(sql, content, conversationContext, {
+		rulePlan: plan.plan,
+		rewrite,
+	})
 	await sql`update query_plans
 			set plan = plan || ${sql.json({
 				conversationContext: summarizeConversationContext(conversationContext),
@@ -498,8 +508,73 @@ async function runTurn(
 					fallbackReason: rewrite.fallbackReason,
 					version: rewrite.version,
 				},
+				aiPlan: {
+					method: aiPlan.method,
+					intent: aiPlan.plan.intent,
+					riskLevel: aiPlan.plan.riskLevel,
+					requestedMadhhab: aiPlan.plan.requestedMadhhab,
+					retrievalQueries: aiPlan.plan.retrievalQueries,
+					needsClarification: aiPlan.plan.needsClarification,
+					fallbackReason: aiPlan.fallbackReason,
+					version: aiPlan.version,
+				},
 			} as never)}
 			where trace_id = ${plan.traceId}::uuid`
+
+	// CHAT-AI-003: meta / out-ofscope intents route AWAY from corpus
+	// retrieval per the abstain policy — no lanes run, the turn abstains
+	// explicitly (only the AI planner may produce these intents)
+	if (
+		aiPlan.method === 'ai' &&
+		(aiPlan.plan.intent === 'meta' || aiPlan.plan.intent === 'out_of_scope')
+	) {
+		const decision: ResponseDecisionOutcome = {
+			decision: 'abstain',
+			languageConstraints: [
+				'STATE_ABSTENTION_EXPLICITLY',
+				'NO_NUMERIC_CONFIDENCE',
+			],
+			rationale: `planner intent "${aiPlan.plan.intent}" — routed away from corpus retrieval`,
+			assessmentStatus: 'insufficient',
+		}
+		await storeResponseDecision(sql, plan.traceId, decision)
+		const ordinal = await nextMessageOrdinal(sql, conversationId)
+		const [message] = await sql<{ id: string }[]>`
+				insert into messages (conversation_id, ordinal, role, content, retrieval_trace_id)
+				values (${conversationId}::uuid, ${ordinal}, 'assistant', 'Pertanyaan ini di luar cakupan korpus fiqih yang tersedia.', ${plan.traceId}::uuid)
+				returning id`
+		const [answer] = await sql<{ id: string }[]>`
+				insert into answers (message_id, trace_id, status)
+				values (${message.id}::uuid, ${plan.traceId}::uuid, 'abstained') returning id`
+		await sql`update messages set answer_id = ${answer.id}::uuid where id = ${message.id}::uuid`
+		return {
+			conversationId,
+			userMessageId,
+			assistantMessageId: message.id,
+			answerId: answer.id,
+			traceId: plan.traceId,
+			decision,
+			assessment: null,
+			answer: null,
+			status: 'abstained',
+			provider: '',
+			model: '',
+			verification: deriveVerification({
+				status: 'abstained',
+				decision,
+				assessment: null,
+				citationsOk: false,
+				citedCount: 0,
+			}),
+			citations: [],
+			generation: {
+				mode: 'deterministic_rag',
+				provider: '',
+				model: '',
+				fallbackReason: null,
+			},
+		}
+	}
 
 	if (!indexReleaseId) {
 		// no pinned release: nothing to retrieve from — abstain explicitly
@@ -552,13 +627,21 @@ async function runTurn(
 		}
 	}
 
-	// 2. retrieval + evidence + expansion (same composable pipeline) —
-	// retrieval runs on the STANDALONE query so follow-up fragments resolve
-	// against the conversation topic (CHAT-AI-002)
-	const outcome = await executeLanePlan(sql, principal, {
-		query: rewrite.standaloneQuery,
+	// 2. retrieval + evidence + expansion — CHAT-AI-003: the planner's
+	// retrievalQueries drive the lanes; >1 query (comparisons) runs the
+	// multi-query plan (per-query fusion merged with query-level RRF)
+	const madhhabFilter = [
+		...new Set([
+			...(options.madhhab ?? []),
+			...(aiPlan.plan.requestedMadhhab ?? []),
+		]),
+	]
+	const retrievalQueries = aiPlan.plan.retrievalQueries.filter(
+		(q) => q.trim().length >= 3,
+	)
+	const laneOptions = {
 		indexReleaseId,
-		filters: { madhhab: options.madhhab },
+		filters: { madhhab: madhhabFilter.length > 0 ? madhhabFilter : undefined },
 		vectorProvider: await embeddingProviderFor(
 			sql,
 			principal.tenantId,
@@ -566,7 +649,17 @@ async function runTurn(
 		),
 		reranker: new HashRerankerProvider(),
 		evidence: { requestedMadhhab: options.ensureMadhhab ?? [] },
-	})
+	}
+	const outcome =
+		retrievalQueries.length > 1
+			? await executeMultiQueryLanePlan(sql, principal, {
+					queries: retrievalQueries,
+					...laneOptions,
+				})
+			: await executeLanePlan(sql, principal, {
+					query: retrievalQueries[0] ?? rewrite.standaloneQuery,
+					...laneOptions,
+				})
 	const { identifier, quote } = outcome.lanes
 	const expansion = await expandEvidenceContext(
 		sql,
@@ -583,7 +676,10 @@ async function runTurn(
 		principal,
 		indexReleaseId,
 		{
-			intent: plan.plan.intent,
+			intent:
+				aiPlan.method === 'ai'
+					? mapIntentToRuleVocabulary(aiPlan.plan.intent)
+					: plan.plan.intent,
 			exactCandidatesCount:
 				identifier.candidates.length + quote.candidates.length,
 			evidence: outcome.evidence ?? applyEvidencePolicy([]),
