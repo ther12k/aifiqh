@@ -225,7 +225,9 @@ function buildAdapter(
 				apiKey: apiKey ?? undefined,
 				// per-attempt cap: thinking models need minutes, but the chain
 				// must still be able to rescue a turn inside a bounded time
-				timeoutMs: Number(process.env.AIFIQH_CHAT_ATTEMPT_TIMEOUT_MS ?? 120_000),
+				timeoutMs: Number(
+					process.env.AIFIQH_CHAT_ATTEMPT_TIMEOUT_MS ?? 120_000,
+				),
 			})
 }
 
