@@ -101,6 +101,8 @@ export interface ModelAttempt {
 	/** alias = the primary, fallback = the configured chain */
 	source: 'alias' | 'fallback'
 	outcome: 'success' | GenerationFallbackReason
+	/** first validation issue message (truncated) — ops evidence */
+	message?: string
 }
 
 /**
@@ -710,6 +712,9 @@ async function runTurn(
 			model: model.modelId,
 			source: candidate.source,
 			outcome: attemptOutcome(reason),
+			message: result.issues[0]?.message
+				? result.issues[0].message.slice(0, 240)
+				: undefined,
 		})
 		fallbackReason = reason
 		generation = null

@@ -223,8 +223,9 @@ function buildAdapter(
 				providerKey,
 				baseUrl,
 				apiKey: apiKey ?? undefined,
-				// thinking models (GLM et al) can take minutes per grounded turn
-				timeoutMs: 180_000,
+				// per-attempt cap: thinking models need minutes, but the chain
+				// must still be able to rescue a turn inside a bounded time
+				timeoutMs: Number(process.env.AIFIQH_CHAT_ATTEMPT_TIMEOUT_MS ?? 120_000),
 			})
 }
 

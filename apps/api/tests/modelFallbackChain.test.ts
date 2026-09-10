@@ -291,20 +291,13 @@ describe('AI-004: chat model fallback chain', () => {
 		expect(turn.generation.provider).toContain('fb-backup')
 		expect(turn.generation.fallbackReason).toBeNull()
 		// the chain is visible per attempt, in order
-		expect(turn.generation.attempts).toEqual([
-			{
-				provider: turn.generation.attempts?.[0]?.provider ?? '',
-				model: turn.generation.attempts?.[0]?.model ?? '',
-				source: 'alias',
-				outcome: 'provider_error',
-			},
-			{
-				provider: turn.generation.attempts?.[1]?.provider ?? '',
-				model: turn.generation.attempts?.[1]?.model ?? '',
-				source: 'fallback',
-				outcome: 'success',
-			},
+		const attempts = turn.generation.attempts ?? []
+		expect(attempts.map((a) => [a.source, a.outcome])).toEqual([
+			['alias', 'provider_error'],
+			['fallback', 'success'],
 		])
+		// the primary's failure carries the provider's error message
+		expect(attempts[0].message).toContain('boom')
 		// BOTH models were actually hit over HTTP — primary 500, fallback OK
 		expect(primaryHits).toBeGreaterThanOrEqual(1)
 		expect(fallbackHits).toBeGreaterThanOrEqual(1)
