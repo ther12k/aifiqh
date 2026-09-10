@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { ModelConfig } from './admin/ModelConfig'
 import { ChatContainer } from './chat/ChatContainer'
 import { ReviewerWorkspace } from './chat/ReviewerWorkspace'
 import { type Health, HealthPill } from './components/HealthPill'
@@ -1022,6 +1023,18 @@ export default function App() {
 							<PageQuote quote={PAGE_QUOTES['/ops']} />
 						</div>
 					)}
+					{route === '/admin-models' && (
+						<div className="page-head">
+							<div className="page-head-main">
+								<h2>Pengaturan AI</h2>
+								<p>
+									Kelola model utama dan rantai fallback untuk jawaban chat —
+									termasuk urutan model yang dicoba saat model utama gagal.
+								</p>
+							</div>
+							<PageQuote quote={PAGE_QUOTES['/ops']} />
+						</div>
+					)}
 					{route === '/studio' && (
 						<div className="page-head">
 							<div className="page-head-main">
@@ -1070,6 +1083,15 @@ export default function App() {
 							<p className="gate-note">
 								<a href="/auth/login">Masuk</a> sebagai operator untuk melihat
 								status operasional.
+							</p>
+						))}
+
+					{route === '/admin-models' &&
+						(permissions.includes('config:manage') ? (
+							<ModelConfig />
+						) : (
+							<p className="gate-note">
+								Hanya administrator yang dapat mengatur konfigurasi model.
 							</p>
 						))}
 

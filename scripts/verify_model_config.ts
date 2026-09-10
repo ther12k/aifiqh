@@ -4,8 +4,8 @@
  * Production must not be able to deploy silently with the AI path off.
  * Where scripts/configure_model.ts is the explicit configuration STEP,
  * this script is the verification GATE: it runs the REAL resolution path
- * (resolveChatModelDiagnostics — same code the chat turn uses) and fails
- * when AIFIQH_REQUIRE_CHAT_MODEL=true and the model cannot resolve.
+ * (the same resolver the chat turn uses) and fails when
+ * AIFIQH_REQUIRE_CHAT_MODEL=true and no model in the chain resolves.
  *
  * Resolution reasons reported:
  *   resolved | kill_switch | not_configured | disabled_or_empty
@@ -13,8 +13,9 @@
  *
  * Environment:
  *   DATABASE_URL / ADMIN_DATABASE_URL   Postgres connection
- *   AIFIQH_REQUIRE_CHAT_MODEL=true      exit 1 when the model cannot resolve
+ *   AIFIQH_REQUIRE_CHAT_MODEL=true      exit 1 when nothing resolves
  *   AIFIQH_CHAT_MODEL=off               explicit kill switch (reported, respected)
+ *   AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS   total attempts per turn (default 3)
  *
  * Usage: bun scripts/verify_model_config.ts
  * Exit codes: 0 verified or not-required; 1 requirement unmet; 2 DB error
@@ -22,7 +23,8 @@
 import postgres from 'postgres'
 import {
 	type ChatModelResolution,
-	resolveChatModelDiagnostics,
+	maxChatAttempts,
+	resolveChatModelCandidates,
 } from '../apps/api/src/llm/modelRouter'
 
 const DB_URL =
@@ -43,9 +45,9 @@ const REASON_SUMMARY: Record<ChatModelResolution, string> = {
 
 const sql = postgres(DB_URL, { max: 1, connect_timeout: 10 })
 
-let diag: Awaited<ReturnType<typeof resolveChatModelDiagnostics>>
+let chain: Awaited<ReturnType<typeof resolveChatModelCandidates>>
 try {
-	diag = await resolveChatModelDiagnostics(sql)
+	chain = await resolveChatModelCandidates(sql)
 } catch (err) {
 	console.error(
 		`✗ model verification could not reach the database: ${err instanceof Error ? err.message : String(err)}`,
@@ -54,25 +56,43 @@ try {
 	process.exit(2)
 }
 
-console.log(`chat model resolution: ${diag.reason}`)
-console.log(`  ${REASON_SUMMARY[diag.reason]}`)
-if (diag.config) {
+const primary = chain.candidates[0]
+const diagReason = primary ? 'resolved' : chain.primaryReason
+console.log(`chat model resolution: ${diagReason}`)
+console.log(`  ${REASON_SUMMARY[chain.primaryReason]}`)
+if (primary) {
 	console.log(
-		`  provider : ${diag.config.providerKey} (${diag.config.providerType})`,
+		`  provider : ${primary.config.providerKey} (${primary.config.providerType})`,
 	)
-	console.log(`  model    : ${diag.config.modelId}`)
-	console.log(`  secret   : ${diag.config.secretSource}`)
+	console.log(`  model    : ${primary.config.modelId}`)
+	console.log(`  secret   : ${primary.config.secretSource}`)
 }
 
-if (!diag.config && REQUIRED) {
+// the fallback chain (AI-004): attempt order after the primary
+console.log(
+	`fallback chain: ${Math.max(0, chain.candidates.length - 1)} entr` +
+		`${chain.candidates.length - 1 === 1 ? 'y' : 'ies'}` +
+		` (max ${maxChatAttempts()} attempts/turn)`,
+)
+for (const c of chain.candidates.slice(1)) {
+	console.log(
+		`  #${c.position} ${c.config.providerKey} / ${c.config.modelId} (${c.targetType})`,
+	)
+}
+for (const s of chain.skipped) {
+	console.warn(`  #${s.position} SKIPPED: ${s.reason}`)
+}
+
+const anyModel = chain.candidates.length > 0
+if (!anyModel && REQUIRED) {
 	console.error(
-		'✗ AIFIQH_REQUIRE_CHAT_MODEL=true but the chat model cannot resolve — refusing to start. Configure it with scripts/configure_model.ts (an explicit deployment step) and make sure the secret resolves in this environment.',
+		'✗ AIFIQH_REQUIRE_CHAT_MODEL=true but no model in the chain resolves — refusing to start. Configure it with scripts/configure_model.ts (an explicit deployment step) and make sure the secrets resolve in this environment.',
 	)
 	await sql.end({ timeout: 1 })
 	process.exit(1)
 }
 
-if (!diag.config) {
+if (!anyModel) {
 	console.warn(
 		'⚠ chat turns will use the deterministic built-in composer (recorded per turn as generation mode "deterministic_rag").',
 	)

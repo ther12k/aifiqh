@@ -5153,3 +5153,207 @@ h2 {
 	color: var(--text-faint);
 	font-family: ui-monospace, monospace;
 }
+
+/* ==========================================================================
+   Admin model configuration (AI-004): primary + fallback chain editor
+   ========================================================================== */
+.model-config {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	max-width: 860px;
+}
+
+.model-primary-card,
+.model-fallback-card {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-lg);
+	padding: 18px 20px;
+}
+
+.model-primary-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.model-primary-head h3,
+.model-fallback-card h3 {
+	margin: 0 0 8px;
+	font-size: 15px;
+	color: var(--text);
+}
+
+.model-primary-meta {
+	display: grid;
+	grid-template-columns: 110px 1fr;
+	gap: 4px 12px;
+	margin: 10px 0 0;
+	font-size: 13px;
+}
+
+.model-primary-meta dt {
+	color: var(--text-faint);
+	font-weight: 600;
+}
+
+.model-primary-meta dd {
+	margin: 0;
+	color: var(--text);
+}
+
+.model-primary-note,
+.model-fallback-note,
+.model-gate-note {
+	margin: 6px 0 0;
+	font-size: 12.5px;
+	color: var(--text-muted);
+	line-height: 1.5;
+}
+
+.model-gate-note {
+	margin-top: 12px;
+	padding-top: 10px;
+	border-top: 1px solid var(--border-soft);
+	color: var(--text-faint);
+}
+
+.model-fallback-list {
+	list-style: none;
+	margin: 12px 0 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.model-fallback-list li {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 8px 10px;
+	background: var(--surface-subtle, #eef4f0);
+	border: 1px solid var(--border-soft);
+	border-radius: 10px;
+}
+
+.model-fallback-pos {
+	flex: none;
+	width: 24px;
+	height: 24px;
+	border-radius: 50%;
+	background: var(--primary);
+	color: #fff;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 11.5px;
+	font-weight: 700;
+}
+
+.model-fallback-label {
+	flex: 1;
+	min-width: 0;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.model-fallback-actions {
+	display: inline-flex;
+	gap: 4px;
+}
+
+.model-fallback-actions button {
+	min-width: 28px;
+	min-height: 28px;
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	background: var(--surface);
+	color: var(--text-muted);
+	cursor: pointer;
+	font: inherit;
+	font-size: 12px;
+	padding: 0 6px;
+}
+
+.model-fallback-actions button:hover:not(:disabled) {
+	border-color: var(--primary-border);
+	color: var(--primary-strong);
+}
+
+.model-fallback-actions button:disabled {
+	opacity: 0.4;
+	cursor: default;
+}
+
+.model-fallback-add {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-top: 12px;
+}
+
+.model-fallback-add select {
+	flex: 0 1 320px;
+	padding: 8px 10px;
+	border: 1px solid var(--border);
+	border-radius: 9px;
+	background: var(--surface);
+	font: inherit;
+	font-size: 13px;
+	color: var(--text);
+}
+
+.model-fallback-add button {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border: none;
+	border-radius: 9px;
+	background: var(--primary);
+	color: #fff;
+	font: inherit;
+	font-size: 13px;
+	font-weight: 600;
+	padding: 8px 14px;
+	cursor: pointer;
+}
+
+.model-fallback-add button:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+
+.model-fallback-save {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin-top: 14px;
+}
+
+.model-fallback-save .btn-primary {
+	border: none;
+	border-radius: 9px;
+	padding: 9px 16px;
+	font: inherit;
+	font-size: 13.5px;
+	font-weight: 700;
+	cursor: pointer;
+}
+
+.model-fallback-save .btn-primary:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+
+.model-dirty-note {
+	font-size: 12px;
+	color: var(--gold-deep);
+	font-weight: 600;
+}

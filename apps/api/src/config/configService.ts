@@ -464,3 +464,172 @@ export async function resolveAlias(
 		select target_type, target_id from configuration_aliases where alias = ${alias} limit 1`
 	return row ? { targetType: row.target_type, targetId: row.target_id } : null
 }
+
+/* -------------------------------------------------------------------------
+ * Model fallback chain (AI-004): ordered backup models behind a
+ * configuration alias. The chain is consulted by the chat pipeline when
+ * the alias primary fails; writes here are config:manage-gated and
+ * audit-logged, following the same discipline as setAlias.
+ * ---------------------------------------------------------------------- */
+
+export interface FallbackEntryView {
+	position: number
+	targetType: 'provider' | 'model'
+	targetId: string
+	enabled: boolean
+	/** human-readable "provider / model" when the target still resolves */
+	resolvedLabel: string | null
+}
+
+export interface FallbackChainView {
+	alias: string
+	entries: FallbackEntryView[]
+}
+
+/** every configured provider+model pair (the admin picker's options) */
+export async function listModelOptions(sql: Sql): Promise<
+	Array<{
+		modelConfigId: string
+		providerKey: string
+		providerType: string
+		providerEnabled: boolean
+		modelId: string
+	}>
+> {
+	const rows = await sql<
+		{
+			model_config_id: string
+			provider_key: string
+			provider_type: string
+			provider_enabled: boolean
+			model_id: string
+		}[]
+	>`select mc.id::text as model_config_id, pc.key as provider_key,
+			pc.provider as provider_type, pc.enabled as provider_enabled, mc.model_id
+		from model_configs mc
+		join provider_configs pc on pc.id = mc.provider_config_id
+		order by pc.key asc, mc.model_id asc`
+	return rows.map((r) => ({
+		modelConfigId: r.model_config_id,
+		providerKey: r.provider_key,
+		providerType: r.provider_type,
+		providerEnabled: r.provider_enabled,
+		modelId: r.model_id,
+	}))
+}
+
+export async function listFallbackChain(
+	sql: Sql,
+	alias: string,
+): Promise<FallbackChainView> {
+	const rows = await sql<
+		{
+			position: number
+			target_type: string
+			target_id: string
+			enabled: boolean
+			provider_key: string | null
+			model_id: string | null
+		}[]
+	>`select cf.position, cf.target_type, cf.target_id::text as target_id, cf.enabled,
+			pc.key as provider_key, mc.model_id
+		from configuration_fallbacks cf
+		left join model_configs mc
+			on cf.target_type = 'model' and mc.id = cf.target_id
+		left join provider_configs pc
+			on (cf.target_type = 'provider' and pc.id = cf.target_id)
+			or (cf.target_type = 'model' and pc.id = mc.provider_config_id)
+		where cf.alias = ${alias}
+		order by cf.position asc`
+	return {
+		alias,
+		entries: rows.map((r) => ({
+			position: r.position,
+			targetType: r.target_type as 'provider' | 'model',
+			targetId: r.target_id,
+			enabled: r.enabled,
+			resolvedLabel:
+				r.provider_key && r.model_id
+					? `${r.provider_key} / ${r.model_id}`
+					: r.provider_key
+						? r.provider_key
+						: null,
+		})),
+	}
+}
+
+/**
+ * Replace the whole fallback chain for one alias in a single transaction.
+ * Positions are normalized 1..n in the given order; every target must
+ * exist at write time (a stale target id is a validation error, not a
+ * silent skip — resolution skips unresolvable entries per turn).
+ */
+export async function replaceFallbackChain(
+	sql: Sql,
+	principal: Principal,
+	alias: string,
+	entries: Array<{ targetType: 'provider' | 'model'; targetId: string }>,
+	traceId?: string,
+): Promise<FallbackChainView> {
+	if (entries.length > 10) {
+		throw new ConfigValidationError(
+			'VALIDATION_FAILED',
+			'at most 10 fallback entries are supported',
+		)
+	}
+	const seen = new Set<string>()
+	for (const [idx, entry] of entries.entries()) {
+		const key = `${entry.targetType}:${entry.targetId}`
+		if (seen.has(key)) {
+			throw new ConfigValidationError(
+				'VALIDATION_FAILED',
+				`duplicate fallback entry at position ${idx + 1}`,
+			)
+		}
+		seen.add(key)
+		if (entry.targetType === 'model') {
+			const [m] = await sql<{ id: string }[]>`
+				select id from model_configs where id = ${entry.targetId}::uuid limit 1`
+			if (!m) {
+				throw new ConfigValidationError(
+					'ALIAS_TARGET_INVALID',
+					`fallback target model not found (position ${idx + 1})`,
+				)
+			}
+		} else {
+			const [p] = await sql<{ id: string }[]>`
+				select id from provider_configs where id = ${entry.targetId}::uuid limit 1`
+			if (!p) {
+				throw new ConfigValidationError(
+					'ALIAS_TARGET_INVALID',
+					`fallback target provider not found (position ${idx + 1})`,
+				)
+			}
+		}
+	}
+
+	const before = await listFallbackChain(sql, alias)
+	await sql.begin(async (tx) => {
+		await tx`delete from configuration_fallbacks where alias = ${alias}`
+		for (const [idx, entry] of entries.entries()) {
+			await tx`
+				insert into configuration_fallbacks
+					(alias, target_type, target_id, position, enabled, updated_by)
+				values (${alias}, ${entry.targetType}, ${entry.targetId}::uuid,
+					${idx + 1}, true, ${principal.userId}::uuid)`
+		}
+		await recordAuditInTx(tx, {
+			tenantId: principal.tenantId,
+			actorType: principal.actorType,
+			actorId: principal.userId,
+			action: 'config.fallback_chain_replaced',
+			entityType: 'configuration_fallbacks',
+			entityId: alias,
+			beforeRef: { entries: before.entries },
+			afterRef: { entries },
+			reason: 'replace fallback chain',
+			traceId,
+		})
+	})
+	return listFallbackChain(sql, alias)
+}

@@ -5,7 +5,7 @@ import { HashEmbeddingProvider } from '../index/embeddingService'
 import { DefaultModelGateway } from '../llm/gateway'
 import {
 	type ChatModelResolution,
-	resolveChatModelDiagnostics,
+	resolveChatModelCandidates,
 } from '../llm/modelRouter'
 import { resolveChatModelConfig } from '../llm/modelRouter'
 import {
@@ -94,6 +94,15 @@ export interface TurnResult {
 /** how a turn's answer text was produced */
 export type GenerationMode = 'llm_rag' | 'deterministic_rag'
 
+/** one model attempt inside a turn (AI-004 chain diagnostics) */
+export interface ModelAttempt {
+	provider: string
+	model: string
+	/** alias = the primary, fallback = the configured chain */
+	source: 'alias' | 'fallback'
+	outcome: 'success' | GenerationFallbackReason
+}
+
 /**
  * Why the LLM path did not produce the answer (null when it did). Codes
  * are stable API surface — the UI maps them to plain language.
@@ -112,6 +121,8 @@ export interface GenerationMetadata {
 	provider: string
 	model: string
 	fallbackReason: GenerationFallbackReason | null
+	/** AI-004: the attempts this turn made before an answer was produced */
+	attempts?: ModelAttempt[]
 }
 
 /** resolution diagnostic → user-visible fallback reason */
@@ -143,6 +154,13 @@ function fallbackReasonFromGeneration(
 		return 'citation_validation_failed'
 	}
 	return 'invalid_output'
+}
+
+/** fallback reason → per-attempt outcome label (same vocabulary) */
+function attemptOutcome(
+	reason: GenerationFallbackReason,
+): ModelAttempt['outcome'] {
+	return reason
 }
 
 export interface TurnCitation {
@@ -608,19 +626,23 @@ async function runTurn(
 	}> = []
 	// AI-002: why the LLM path did not produce the answer (null when it did)
 	let fallbackReason: GenerationFallbackReason | null = null
+	// AI-004: every model attempt this turn made, in order
+	const modelAttempts: ModelAttempt[] = []
 
-	const modelDiag = await resolveChatModelDiagnostics(sql)
-	const model = modelDiag.config
-	if (!model) fallbackReason = resolutionFallbackReason(modelDiag.reason)
-	if (model) {
+	const evidenceTexts: Record<string, string> = {}
+	for (const id of includedUnitIds) {
+		const item = citable.get(id)
+		if (item) evidenceTexts[id] = item.text
+	}
+
+	// attempt order: the chat-production alias first, then the configured
+	// fallback chain (AI-004) — kill-switch empties the whole chain
+	const chain = await resolveChatModelCandidates(sql)
+	for (const candidate of chain.candidates) {
+		const model = candidate.config
 		const gateway = new DefaultModelGateway()
 		gateway.registerProvider(model.adapter)
-		const evidenceTexts: Record<string, string> = {}
-		for (const id of includedUnitIds) {
-			const item = citable.get(id)
-			if (item) evidenceTexts[id] = item.text
-		}
-		generation = await generateGroundedAnswer({
+		const result = await generateGroundedAnswer({
 			query: content,
 			context,
 			decision,
@@ -644,14 +666,15 @@ async function runTurn(
 				}
 			},
 		})
-		if (generation.status === 'generated' && generation.answer) {
+		if (result.status === 'generated' && result.answer) {
+			generation = result
 			usedProvider = model.providerKey
-			usedModel = generation.pinned?.modelId || model.modelId
+			usedModel = result.pinned?.modelId || model.modelId
 			fallbackReason = null
 			// citations follow the model's claim links — quotes stay verbatim
 			// unit text read from the pinned release, never model prose
 			const citedIds: string[] = []
-			for (const claim of generation.answer.claims) {
+			for (const claim of result.answer.claims) {
 				for (const link of claim.evidence) {
 					if (!citedIds.includes(link.evidenceId))
 						citedIds.push(link.evidenceId)
@@ -671,12 +694,30 @@ async function runTurn(
 						: null
 				})
 				.filter((c): c is NonNullable<typeof c> => c !== null)
-		} else {
-			// model output failed grounding/validation — fall back, never
-			// surface an ungrounded draft; record WHY for diagnostics
-			fallbackReason = fallbackReasonFromGeneration(generation.issues)
-			generation = null
+			modelAttempts.push({
+				provider: model.providerKey,
+				model: model.modelId,
+				source: candidate.source,
+				outcome: 'success',
+			})
+			break
 		}
+		// this candidate failed — record why and try the next one in the
+		// chain (the deterministic composer remains the final fallback)
+		const reason = fallbackReasonFromGeneration(result.issues)
+		modelAttempts.push({
+			provider: model.providerKey,
+			model: model.modelId,
+			source: candidate.source,
+			outcome: attemptOutcome(reason),
+		})
+		fallbackReason = reason
+		generation = null
+	}
+	if (chain.candidates.length === 0) {
+		// no usable model at all — the deterministic composer runs and the
+		// turn reports WHY the chain was empty
+		fallbackReason = resolutionFallbackReason(chain.primaryReason)
 	}
 
 	if (!generation) {
@@ -752,10 +793,6 @@ async function runTurn(
 
 	// middle verification layer (#109): does the cited evidence actually
 	// support the specific material claims (no polarity reversal / dropped conditions)?
-	const evidenceTexts: Record<string, string> = {}
-	for (const [id, item] of citable) {
-		evidenceTexts[id] = item.text
-	}
 	const claimSupportEval = generation.answer
 		? evaluateAnswerClaimSupport(generation.answer, evidenceTexts)
 		: { allSupported: true }
@@ -791,6 +828,7 @@ async function runTurn(
 			model: usedModel,
 			fallbackReason:
 				usedProvider === 'builtin-compose' ? fallbackReason : null,
+			attempts: modelAttempts.length > 0 ? modelAttempts : undefined,
 		},
 	}
 }

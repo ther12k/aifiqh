@@ -145,23 +145,12 @@ export async function resolveChatModelDiagnostics(
 	}
 
 	const providerKey = row.provider_key
-	const adapter: ModelProviderAdapter =
-		row.provider_type === 'anthropic' || row.provider_type === 'google'
-			? new FrontierModelAdapter({
-					providerKey,
-					providerType: row.provider_type,
-					baseUrl: row.base_url,
-					apiKey: apiKey ?? undefined,
-				})
-			: new OpenAICompatibleAdapter({
-					providerKey,
-					baseUrl: row.base_url,
-					apiKey: apiKey ?? undefined,
-					// grounded generation with a thinking model (retrieval context
-					// + reasoning tokens + JSON payload) can take minutes; a 60s
-					// cap turned real generations into provider_error fallbacks
-					timeoutMs: 180_000,
-				})
+	const adapter = buildAdapter(
+		row.provider_type,
+		providerKey,
+		row.base_url,
+		apiKey,
+	)
 
 	return {
 		config: {
@@ -180,4 +169,197 @@ export async function resolveChatModelConfig(
 	sql: Sql,
 ): Promise<ChatModelConfig | null> {
 	return (await resolveChatModelDiagnostics(sql)).config
+}
+
+/* -------------------------------------------------------------------------
+ * Fallback chain (AI-004): the chat-production alias is the PRIMARY;
+ * configuration_fallbacks rows (0044) are ordered backups tried when the
+ * primary fails. The chain is capped by AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS
+ * (total attempts, default 3) and the explicit kill-switch (AIFIQH_CHAT_
+ * MODEL=off) disables the WHOLE chain, not just the primary.
+ * ---------------------------------------------------------------------- */
+
+/** total model attempts per turn (primary + fallbacks) */
+export function maxChatAttempts(): number {
+	const n = Number(process.env.AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS ?? 3)
+	return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 3
+}
+
+export interface ChatModelCandidate {
+	config: ChatModelConfig
+	/** alias = primary, fallback = configuration_fallbacks row */
+	source: 'alias' | 'fallback'
+	/** fallback chain position (null on the primary) */
+	position: number | null
+	/** how the row resolved */
+	targetType: 'alias' | 'provider' | 'model'
+}
+
+export interface ChatModelChain {
+	/** full attempt order: primary first, then enabled fallbacks */
+	candidates: ChatModelCandidate[]
+	/** why the primary is unusable, when it is (propagates to the UI) */
+	primaryReason: ChatModelResolution
+	/** fallback rows that were loaded but could not resolve, with why */
+	skipped: Array<{ position: number; reason: string }>
+	/** true when configuration_fallbacks contributed at least one entry */
+	hasFallbackConfigured: boolean
+}
+
+function buildAdapter(
+	providerType: string,
+	providerKey: string,
+	baseUrl: string,
+	apiKey: string | null,
+): ModelProviderAdapter {
+	return providerType === 'anthropic' || providerType === 'google'
+		? new FrontierModelAdapter({
+				providerKey,
+				providerType,
+				baseUrl,
+				apiKey: apiKey ?? undefined,
+			})
+		: new OpenAICompatibleAdapter({
+				providerKey,
+				baseUrl,
+				apiKey: apiKey ?? undefined,
+				// thinking models (GLM et al) can take minutes per grounded turn
+				timeoutMs: 180_000,
+			})
+}
+
+/** resolve one (provider, model) pair into a ready candidate config */
+function configFromRow(row: {
+	provider_key: string
+	provider_type: string
+	base_url: string
+	model_id: string
+	secret_ref: string | null
+}): ChatModelConfig | null {
+	const apiKey = row.secret_ref ? resolveSecretRef(row.secret_ref) : null
+	if (row.secret_ref && !apiKey) return null
+	return {
+		providerKey: row.provider_key,
+		providerType: row.provider_type,
+		modelId: row.model_id,
+		adapter: buildAdapter(
+			row.provider_type,
+			row.provider_key,
+			row.base_url,
+			apiKey,
+		),
+		secretSource: row.secret_ref ?? 'no-secret-ref',
+	}
+}
+
+/**
+ * Resolve the full chat attempt order: the primary alias first, then the
+ * enabled fallback chain (skipping unresolvable entries with a reason).
+ * Kill-switch short-circuits everything — tests stay hermetic.
+ */
+export async function resolveChatModelCandidates(
+	sql: Sql,
+): Promise<ChatModelChain> {
+	const primary = await resolveChatModelDiagnostics(sql)
+	const chain: ChatModelChain = {
+		candidates: [],
+		primaryReason: primary.reason,
+		skipped: [],
+		hasFallbackConfigured: false,
+	}
+	if (primary.config) {
+		chain.candidates.push({
+			config: primary.config,
+			source: 'alias',
+			position: null,
+			targetType: 'alias',
+		})
+	}
+	// an explicit kill-switch disables the entire chain, not just the primary
+	if (primary.reason === 'kill_switch') return chain
+
+	const cap = maxChatAttempts()
+	const rows = await sql<
+		{
+			target_type: string
+			target_id: string
+			position: number
+		}[]
+	>`select target_type, target_id::text as target_id, position
+		from configuration_fallbacks
+		where alias = ${CHAT_MODEL_ALIAS} and enabled
+		order by position asc`
+	chain.hasFallbackConfigured = rows.length > 0
+
+	for (const row of rows) {
+		if (chain.candidates.length >= cap) break
+		const targetId = row.target_id
+
+		const rowPair =
+			row.target_type === 'model'
+				? await sql<
+						{
+							provider_key: string
+							provider_type: string
+							base_url: string
+							model_id: string
+							secret_ref: string | null
+						}[]
+					>`select pc.key as provider_key, pc.provider as provider_type,
+						pc.base_url, mc.model_id, psr.secret_ref
+					from model_configs mc
+					join provider_configs pc on pc.id = mc.provider_config_id
+					left join provider_secret_refs psr on psr.provider_config_id = pc.id
+					where mc.id = ${targetId}::uuid and pc.enabled limit 1`
+				: // provider fallback: its first enabled model (stable order)
+					await sql<
+						{
+							provider_key: string
+							provider_type: string
+							base_url: string
+							model_id: string
+							secret_ref: string | null
+						}[]
+					>`select pc.key as provider_key, pc.provider as provider_type,
+						pc.base_url, mc.model_id, psr.secret_ref
+					from provider_configs pc
+					join model_configs mc on mc.provider_config_id = pc.id
+					left join provider_secret_refs psr on psr.provider_config_id = pc.id
+					where pc.id = ${targetId}::uuid and pc.enabled
+					order by mc.model_id asc limit 1`
+
+		const m = rowPair[0]
+		if (!m) {
+			chain.skipped.push({
+				position: row.position,
+				reason:
+					row.target_type === 'model'
+						? 'model not found or provider disabled'
+						: 'provider not found or has no models',
+			})
+			continue
+		}
+		const cfg = configFromRow(m)
+		if (!cfg) {
+			chain.skipped.push({
+				position: row.position,
+				reason: 'secret_unavailable',
+			})
+			continue
+		}
+		// a fallback repeating the primary (or an earlier entry) adds nothing
+		const dup = chain.candidates.some(
+			(c) =>
+				c.config.providerKey === cfg.providerKey &&
+				c.config.modelId === cfg.modelId,
+		)
+		if (dup) continue
+		chain.candidates.push({
+			config: cfg,
+			source: 'fallback',
+			position: row.position,
+			targetType: row.target_type as 'provider' | 'model',
+		})
+	}
+	return chain
 }

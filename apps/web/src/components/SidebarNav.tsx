@@ -65,6 +65,13 @@ export const NAV_ITEMS: NavItemDef[] = [
 		permission: 'ops:read',
 		section: 'system',
 	},
+	{
+		href: '#/admin-models',
+		label: 'Pengaturan AI',
+		icon: ICON_PATHS.gear,
+		permission: 'config:manage',
+		section: 'system',
+	},
 ]
 
 /** nav items visible to the given permission set, grouped per section */

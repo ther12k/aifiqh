@@ -56,7 +56,10 @@ import {
 	ConfigValidationError,
 	addModel,
 	createProvider,
+	listFallbackChain,
+	listModelOptions,
 	listProviders,
+	replaceFallbackChain,
 	resolveAlias,
 	rollbackAlias,
 	setAlias,
@@ -173,6 +176,11 @@ import {
 	resolveAliasRelease,
 	rollbackAlias as rollbackReleaseAlias,
 } from './knowledge/releaseService'
+import {
+	CHAT_MODEL_ALIAS,
+	maxChatAttempts,
+	resolveChatModelDiagnostics,
+} from './llm/modelRouter'
 import type { Logger } from './logger'
 import { getTracer, recordSpan } from './observability/otel'
 import { newTraceId } from './observability/trace'
@@ -3934,6 +3942,68 @@ function sourceRoutes(deps: AppDeps) {
 					return { error: 'not_found' }
 				}
 				return resolved
+			})
+			.get('/config/model', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				await ctx.requirePermission('config:manage')
+				const [diag, chain, options] = await Promise.all([
+					resolveChatModelDiagnostics(sql),
+					listFallbackChain(sql, CHAT_MODEL_ALIAS),
+					listModelOptions(sql),
+				])
+				return {
+					alias: CHAT_MODEL_ALIAS,
+					primary: diag.config
+						? {
+								providerKey: diag.config.providerKey,
+								providerType: diag.config.providerType,
+								modelId: diag.config.modelId,
+								secretSource: diag.config.secretSource,
+							}
+						: null,
+					primaryReason: diag.reason,
+					// kill-switch empties the whole chain — surface it explicitly
+					killSwitch: diag.reason === 'kill_switch',
+					fallbacks: chain.entries,
+					modelOptions: options,
+					maxAttempts: maxChatAttempts(),
+					requireChatModel: process.env.AIFIQH_REQUIRE_CHAT_MODEL === 'true',
+				}
+			})
+			.put('/config/model/fallbacks', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('config:manage')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				const rawEntries = Array.isArray(body.entries) ? body.entries : []
+				const entries = rawEntries
+					.map((e, idx) => {
+						const row = (e ?? {}) as Record<string, unknown>
+						const targetType = row.targetType
+						if (targetType !== 'provider' && targetType !== 'model') return null
+						const targetId = bodyStr(row.targetId)
+						if (!targetId) return null
+						return { targetType, targetId }
+					})
+					.filter(
+						(e): e is { targetType: 'provider' | 'model'; targetId: string } =>
+							e !== null,
+					)
+				try {
+					return await replaceFallbackChain(
+						sql,
+						principal,
+						CHAT_MODEL_ALIAS,
+						entries,
+						ctx.traceId,
+					)
+				} catch (err) {
+					if (err instanceof ConfigValidationError) {
+						ctx.set.status = err.code === 'ALIAS_TARGET_INVALID' ? 400 : 422
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
 			})
 			.put('/config/aliases/:alias', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx

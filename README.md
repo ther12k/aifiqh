@@ -68,7 +68,12 @@ bun scripts/seed_benchmark.ts
 # stays in your environment — only env://NAME is stored in the database)
 LLM_BASE_URL=https://api.openai.com/v1 LLM_MODEL=gpt-4o-mini \
 LLM_SECRET_REF=env://OPENAI_API_KEY bun scripts/configure_model.ts
-# without this, chat falls back to a deterministic evidence-quoting composer
+# optional: ordered fallback models (tried in order when the primary fails)
+LLM_FALLBACKS='[{"providerKey":"glm-air","baseUrl":"https://your-endpoint/v1","model":"glm/glm-4.5-air","secretRef":"env://OPENAI_API_KEY"}]' \
+bun scripts/configure_model.ts
+# without any model, chat falls back to a deterministic evidence-quoting composer
+# production gate: AIFIQH_REQUIRE_CHAT_MODEL=true refuses to boot without a model
+# (scripts/verify_model_config.ts); manage the chain at #/admin-models (config:manage)
 
 # dev servers (web :5174 proxies to api :3100)
 PORT=3100 bun apps/api/src/index.ts

@@ -120,4 +120,73 @@ if (secretRef.startsWith('env://')) {
 	}
 }
 
+// AI-004: optional ordered fallback chain, e.g.
+//   LLM_FALLBACKS='[{"providerKey":"glm-air","baseUrl":"https://omr.rizeva.my.id/v1","model":"glm/glm-4.5-air","secretRef":"env://OPENAI_API_KEY"}]'
+// each entry provisions its provider/model rows (same idempotency as the
+// primary) and becomes configuration_fallbacks position 1..n; an existing
+// chain for the alias is REPLACED.
+const fallbacksRaw = process.env.LLM_FALLBACKS
+if (fallbacksRaw?.trim()) {
+	interface FallbackSpec {
+		providerKey?: string
+		providerType?: string
+		baseUrl: string
+		model: string
+		secretRef?: string
+		contextWindow?: number
+	}
+	let specs: FallbackSpec[]
+	try {
+		specs = JSON.parse(fallbacksRaw) as FallbackSpec[]
+	} catch {
+		fail('LLM_FALLBACKS is not valid JSON')
+	}
+	if (!Array.isArray(specs) || specs.length === 0) {
+		fail('LLM_FALLBACKS must be a non-empty array')
+	}
+	if (specs.length > 10) fail('LLM_FALLBACKS supports at most 10 entries')
+
+	await sql.begin(async (tx) => {
+		for (const [idx, spec] of specs.entries()) {
+			const fKey = spec.providerKey ?? `${providerKey}-fb${idx + 1}`
+			const fType = spec.providerType ?? providerType
+			const fUrl = spec.baseUrl ?? baseUrl
+			const fSecret = spec.secretRef ?? secretRef
+			const fCtx = spec.contextWindow ?? contextWindow
+			const [fProvider] = await tx<{ id: string }[]>`
+				insert into provider_configs (key, provider, base_url, enabled)
+				values (${fKey}, ${fType}, ${fUrl}, true)
+				on conflict (key) do update set
+					provider = excluded.provider,
+					base_url = excluded.base_url,
+					enabled = true
+				returning id`
+			await tx`
+				insert into provider_secret_refs (provider_config_id, secret_ref, updated_at)
+				values (${fProvider.id}::uuid, ${fSecret}, now())
+				on conflict (provider_config_id) do update set
+					secret_ref = excluded.secret_ref,
+					updated_at = now()`
+			const [fModel] = await tx<{ id: string }[]>`
+				insert into model_configs (provider_config_id, model_id, context_window)
+				values (${fProvider.id}::uuid, ${spec.model}, ${fCtx})
+				on conflict (provider_config_id, model_id) do update set
+					context_window = excluded.context_window
+				returning id`
+			await tx`delete from configuration_fallbacks where alias = 'chat-production' and position = ${idx + 1}`
+			await tx`
+				insert into configuration_fallbacks
+					(alias, target_type, target_id, position, enabled, updated_by)
+				values ('chat-production', 'model', ${fModel.id}::uuid, ${idx + 1}, true, null)
+				on conflict (alias, position) do update set
+					target_type = excluded.target_type,
+					target_id = excluded.target_id,
+					enabled = true,
+					updated_at = now()`
+			console.log(`  fallback ${idx + 1}: ${fKey}/${spec.model} (ctx ${fCtx})`)
+		}
+	})
+	console.log('✓ fallback chain replaced')
+}
+
 await sql.end({ timeout: 1 })
