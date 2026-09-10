@@ -157,7 +157,10 @@ export async function resolveChatModelDiagnostics(
 					providerKey,
 					baseUrl: row.base_url,
 					apiKey: apiKey ?? undefined,
-					timeoutMs: 60_000,
+					// grounded generation with a thinking model (retrieval context
+					// + reasoning tokens + JSON payload) can take minutes; a 60s
+					// cap turned real generations into provider_error fallbacks
+					timeoutMs: 180_000,
 				})
 
 	return {
