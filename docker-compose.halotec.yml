@@ -1,0 +1,45 @@
+services:
+  db:
+    container_name: aifiqh-db
+  minio:
+    container_name: aifiqh-minio
+  minio-init:
+    container_name: aifiqh-minio-init
+  oidc:
+    container_name: aifiqh-oidc
+    environment:
+      ISSUER: https://aifiqh.halotec.my.id/oidc
+      PORT: "4011"
+      OIDC_TRUST_PROXY: "true"
+      EXTRA_REDIRECT_URIS: https://aifiqh.halotec.my.id/auth/callback
+      POST_LOGOUT_URIS: https://aifiqh.halotec.my.id
+      OIDC_ACCOUNTS_FILE: /run/oidc-accounts/accounts.json
+    volumes:
+      - /home/rizky/apps/aifiqh/secrets/oidc-accounts.json:/run/oidc-accounts/accounts.json:ro
+    networks:
+      - default
+      - dokploy-network
+  app:
+    container_name: aifiqh-app
+    ports: !reset []
+    environment:
+      APP_ENV: production
+      AUTH_DEV_LOGIN_ENABLED: "false"
+      PORT: "3000"
+      DATABASE_URL: postgres://aifiqh:aifiqh@db:5432/aifiqh
+      STORAGE_ENDPOINT: http://minio:9000
+      OIDC_ISSUER: https://aifiqh.halotec.my.id/oidc
+      PUBLIC_BASE_URL: https://aifiqh.halotec.my.id
+      # AI-001: LLM generation path (key only via env — never stored in DB)
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      AIFIQH_REQUIRE_CHAT_MODEL: "true"
+      SESSION_SECRET: aifiqh-halotec-session-secret-change-before-production-32chars
+      WEB_DIST_PATH: /app/apps/web/dist
+    networks:
+      - default
+      - dokploy-network
+
+networks:
+  dokploy-network:
+    external: true
+    name: dokploy-network
