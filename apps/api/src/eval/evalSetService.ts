@@ -405,10 +405,11 @@ export async function getSetVersion(
 			const isHeldOut =
 				(c.expected_behavior as { split?: unknown })?.split === 'held_out'
 			if (isHeldOut && !principal.permissions.includes('review:approve')) {
-				const behavior = {
-					...c.expected_behavior,
-				} as Record<string, unknown>
-				delete behavior.acceptableEvidenceCriteria
+				const {
+					acceptableEvidenceCriteria: _withheld,
+					...behavior
+				} = c.expected_behavior as Record<string, unknown>
+				void _withheld
 				behavior.pinsRedacted =
 					'held-out split — reviewer (review:approve) only'
 				return {
