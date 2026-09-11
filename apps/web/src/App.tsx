@@ -7,6 +7,7 @@ import { SessionChip, roleAccent, roleLabel } from './components/SessionChip'
 import { SidebarNav, navSectionsFor } from './components/SidebarNav'
 import { BrandMark, ICON_PATHS, NavIcon, SearchIcon } from './components/icons'
 import { BRAND } from './config/brand'
+import { PinReview } from './eval/PinReview'
 import { ConceptEditor } from './knowledge/ConceptEditor'
 import {
 	authGuardDecision,
@@ -1035,6 +1036,19 @@ export default function App() {
 							<PageQuote quote={PAGE_QUOTES['/ops']} />
 						</div>
 					)}
+					{route === '/pin-review' && (
+						<div className="page-head">
+							<div className="page-head-main">
+								<h2>Tinjau Pin Benchmark</h2>
+								<p>
+									Konfirmasi bukti yang diharapkan untuk setiap kasus benchmark
+									— saran retrieval hanya akselerator; pencarian korpus manual
+									adalah jalur kebenaran yang berdiri sendiri.
+								</p>
+							</div>
+							<PageQuote quote={PAGE_QUOTES['/ops']} />
+						</div>
+					)}
 					{route === '/studio' && (
 						<div className="page-head">
 							<div className="page-head-main">
@@ -1092,6 +1106,16 @@ export default function App() {
 						) : (
 							<p className="gate-note">
 								Hanya administrator yang dapat mengatur konfigurasi model.
+							</p>
+						))}
+
+					{route === '/pin-review' &&
+						(permissions.includes('review:approve') ? (
+							<PinReview />
+						) : (
+							<p className="gate-note">
+								Konfirmasi pin benchmark memerlukan peran reviewer
+								(review:approve).
 							</p>
 						))}
 

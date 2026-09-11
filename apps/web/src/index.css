@@ -5511,3 +5511,157 @@ h2 {
 	background: var(--border-soft);
 	color: var(--text-faint);
 }
+
+/* ==========================================================================
+   Benchmark pin review workspace (CAL-008)
+   ========================================================================== */
+.pin-review {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+
+.pin-review-controls {
+	display: flex;
+	align-items: flex-end;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+
+.pin-review-controls label {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	font-size: 12px;
+	font-weight: 700;
+	color: var(--text-muted);
+	flex: 1 1 260px;
+}
+
+.pin-review-controls input {
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 8px 10px;
+	font: inherit;
+	background: var(--surface);
+}
+
+.pin-review-notice {
+	margin: 0;
+	font-size: 12.5px;
+	color: var(--text-faint);
+	background: var(--surface);
+	border: 1px dashed var(--border);
+	border-radius: 8px;
+	padding: 8px 10px;
+}
+
+.pin-worklist {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 13px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+}
+
+.pin-worklist th,
+.pin-worklist td {
+	text-align: left;
+	padding: 8px 10px;
+	border-bottom: 1px solid var(--border-soft);
+}
+
+.pin-worklist th {
+	font-size: 11.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+	color: var(--text-faint);
+}
+
+.pin-worklist tr[data-active="true"] {
+	background: var(--ok-soft);
+}
+
+.pin-case {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	padding: 14px 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.pin-case h3 {
+	margin: 0;
+	font-size: 14px;
+}
+
+.pin-candidates {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	max-height: 420px;
+	overflow-y: auto;
+}
+
+.pin-candidates li {
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 10px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.pin-candidates li[data-choice="must"] {
+	border-color: var(--ok);
+	background: var(--ok-soft);
+}
+
+.pin-candidates li[data-choice="may"] {
+	border-color: var(--warn);
+	background: var(--warn-soft);
+}
+
+.pin-candidate-text {
+	font-size: 13px;
+}
+
+.pin-candidate-text em {
+	color: var(--text-faint);
+	font-size: 11.5px;
+}
+
+.pin-candidate-actions {
+	display: flex;
+	gap: 6px;
+}
+
+.pin-candidate-actions button {
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: var(--surface);
+	font: inherit;
+	font-size: 12px;
+	padding: 4px 12px;
+	cursor: pointer;
+}
+
+.pin-candidate-actions button[aria-pressed="true"] {
+	background: var(--ink, #1f2937);
+	color: #fff;
+	border-color: transparent;
+}
+
+.pin-save-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	font-size: 13px;
+}

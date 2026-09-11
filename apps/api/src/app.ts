@@ -126,6 +126,13 @@ import {
 	overrideGateFailure,
 } from './eval/gateService'
 import {
+	PIN_REVIEW_VERSION,
+	PinReviewError,
+	listPinWorklist,
+	savePinDecisions,
+	suggestPins,
+} from './eval/pinReviewService'
+import {
 	EmbeddingError,
 	embedIndexRelease,
 	resolveEmbeddingProvider,
@@ -2979,6 +2986,81 @@ function sourceRoutes(deps: AppDeps) {
 				} catch (err) {
 					if (err instanceof EvalSetError) {
 						ctx.set.status = 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			// CAL-008: benchmark pin review workflow. Suggestions are read-only
+			// (knowledge:read); CONFIRMING pins is reviewer work (review:approve)
+			// and only draft set versions accept pin writes (0033 immutability)
+			.get('/eval/pins/worklist', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				const url = new URL(ctx.request.url)
+				const setVersionId = url.searchParams.get('setVersionId')
+				if (!setVersionId) {
+					ctx.set.status = 400
+					return {
+						error: 'SET_VERSION_REQUIRED',
+						message: 'setVersionId query parameter is required',
+					}
+				}
+				return {
+					version: PIN_REVIEW_VERSION,
+					cases: await listPinWorklist(sql, principal, { setVersionId }),
+				}
+			})
+			.post('/eval/pins/suggest', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				try {
+					return await suggestPins(sql, principal, {
+						caseId: bodyStr(body.caseId) ?? '',
+						limit: Number(body.limit ?? '') || undefined,
+					})
+				} catch (err) {
+					if (err instanceof PinReviewError) {
+						ctx.set.status = err.code === 'CASE_NOT_FOUND' ? 404 : 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
+			})
+			.put('/eval/pins/:caseId', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('review:approve')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				const rawPins = Array.isArray(body.pins) ? body.pins : []
+				const pins = rawPins
+					.map((p) => {
+						const pin = p as Record<string, unknown>
+						return {
+							unitId: typeof pin.unitId === 'string' ? pin.unitId : '',
+							mustInclude: pin.mustInclude !== false,
+							origin:
+								pin.origin === 'suggested'
+									? ('suggested' as const)
+									: ('manual' as const),
+						}
+					})
+					.filter((p) => p.unitId.length > 0)
+				try {
+					return await savePinDecisions(sql, principal, {
+						caseId: ctx.params.caseId,
+						pins,
+					})
+				} catch (err) {
+					if (err instanceof PinReviewError) {
+						ctx.set.status =
+							err.code === 'CASE_NOT_FOUND'
+								? 404
+								: err.code === 'VERSION_PUBLISHED'
+									? 409
+									: 400
 						return { error: err.code, message: err.message }
 					}
 					throw err
