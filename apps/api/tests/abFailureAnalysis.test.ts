@@ -3,8 +3,10 @@ import type { Principal } from '@aifiqh/shared'
 import postgres from 'postgres'
 import {
 	AB_ANALYSIS_VERSION,
+	aggregateCoverage,
 	analyzeStoredRuns,
 	classifyAbCase,
+	pinMatchesSuggestion,
 	renderAnalysisMarkdown,
 } from '../src/eval/abFailureAnalysis'
 import {
@@ -280,5 +282,144 @@ describe('CAL-001: analyzeStoredRuns (stored runs)', () => {
 		await expect(analyzeStoredRuns(sql, run.id, run.id)).rejects.toThrow(
 			/different runs/,
 		)
+	})
+})
+
+describe('CAL-011: held-out isolation + suggestion coverage', () => {
+	beforeAll(setup)
+
+	test('held-out cases count in aggregates but never appear as per-case detail', async () => {
+		const s = await setup()
+		const set = await createEvaluationSet(sql, s.principal, {
+			key: `abfa-ho-${crypto.randomUUID().slice(0, 8)}`,
+			ownerUserId: s.userId,
+		})
+		const ver = await createSetVersion(sql, s.principal, set.setId)
+		for (const [key, split] of [
+			['t1', 'tuning'],
+			['h1', 'held_out'],
+		] as const) {
+			await addEvaluationCase(sql, s.principal, ver.versionId, {
+				caseKey: key,
+				category: 'retrieval',
+				queryText: `query ${key}`,
+				language: 'id',
+				riskLevel: 'normal',
+				expectedBehavior: { split, expectedOutcome: 'answered' },
+				ownerUserId: s.userId,
+			})
+		}
+		const mkRun = async () => {
+			const [run] = await sql<{ id: string }[]>`
+				insert into evaluation_runs (set_version_id, mode, pins, status)
+				values (${ver.versionId}::uuid, 'retrieval_only', '{}', 'completed')
+				returning id`
+			const cases = await sql<{ id: string; case_key: string }[]>`
+				select id, case_key from evaluation_cases
+				where set_version_id = ${ver.versionId}::uuid`
+			for (const c of cases) {
+				await sql`
+					insert into evaluation_case_results (run_id, case_id, metrics)
+					values (${run.id}::uuid, ${c.id}::uuid,
+						${sql.json({ expectedCount: 0, candidateCount: 3 } as never)}::jsonb)`
+			}
+			return run.id
+		}
+		const runA = await mkRun()
+		const runB = await mkRun()
+
+		const report = await analyzeStoredRuns(sql, runA, runB)
+		expect(report.caseCount).toBe(2)
+		expect(report.heldOut.caseCount).toBe(1)
+		expect(report.heldOut.distribution.MISSING_EXPECTED_PINS).toBe(1)
+		// per-case detail: tuning only
+		expect(report.cases.map((c) => c.caseKey)).toEqual(['t1'])
+
+		const md = renderAnalysisMarkdown(report)
+		expect(md).toContain('AGREGAT SAJA')
+		expect(md).not.toContain('`h1`')
+		expect(md).toContain('`t1`')
+	})
+
+	test('coverage matcher: pin matches suggestion via shared lineage; aggregate is split-aware', () => {
+		expect(
+			pinMatchesSuggestion(
+				{ spanId: 's1', sourceRevisionId: null, knowledgeRevisionId: null },
+				{
+					unitId: 'u1',
+					spanId: 's1',
+					sourceRevisionId: null,
+					knowledgeRevisionId: null,
+				},
+			),
+		).toBeTrue()
+		expect(
+			pinMatchesSuggestion(
+				{
+					spanId: 's2',
+					sourceRevisionId: 'r9',
+					knowledgeRevisionId: null,
+				},
+				{
+					unitId: 'u1',
+					spanId: 's1',
+					sourceRevisionId: 'r9',
+					knowledgeRevisionId: null,
+				},
+			),
+		).toBeTrue()
+		expect(
+			pinMatchesSuggestion(
+				{
+					spanId: 's2',
+					sourceRevisionId: 'r2',
+					knowledgeRevisionId: null,
+				},
+				{
+					unitId: 'u1',
+					spanId: 's1',
+					sourceRevisionId: 'r1',
+					knowledgeRevisionId: null,
+				},
+			),
+		).toBeFalse()
+
+		const report = aggregateCoverage([
+			{
+				caseKey: 't1',
+				split: 'tuning',
+				pinCount: 2,
+				suggestionCount: 5,
+				hit: true,
+			},
+			{
+				caseKey: 't2',
+				split: 'tuning',
+				pinCount: 1,
+				suggestionCount: 0,
+				hit: false,
+			},
+			{
+				caseKey: 'h1',
+				split: 'held_out',
+				pinCount: 1,
+				suggestionCount: 5,
+				hit: true,
+			},
+			{
+				caseKey: 'np',
+				split: 'tuning',
+				pinCount: 0,
+				suggestionCount: 5,
+				hit: false,
+			},
+		])
+		expect(report.reviewedCases).toBe(3)
+		expect(report.coverageRate).toBeCloseTo(2 / 3, 4)
+		expect(report.tuning).toEqual({ cases: 2, hits: 1 })
+		expect(report.heldOut).toEqual({ cases: 1, hits: 1 })
+		// held-out never appears in per-case output
+		expect(report.cases.map((c) => c.caseKey)).toEqual(['t1', 't2'])
+		expect(report.missedTuningCaseKeys).toEqual(['t2'])
 	})
 })

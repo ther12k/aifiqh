@@ -38,6 +38,8 @@ export interface PinWorklistCase {
 	caseKey: string
 	queryText: string
 	category: string
+	/** tuning | held_out — reviewers see both; the label keeps them honest */
+	split: string
 	versionStatus: string
 	pinCount: number
 	/** pins carrying reviewer confirmation (reviewed_at set) */
@@ -55,11 +57,13 @@ export async function listPinWorklist(
 			case_key: string
 			query_text: string
 			category: string
+			split: string | null
 			version_status: string
 			pin_count: string
 			confirmed_count: string
 		}[]
 	>`select c.id, c.case_key, c.query_text, c.category,
+			c.expected_behavior->>'split' as split,
 			v.status as version_status,
 			count(e.id) as pin_count,
 			count(e.id) filter (where e.reviewed_at is not null) as confirmed_count
@@ -76,6 +80,7 @@ export async function listPinWorklist(
 		caseKey: r.case_key,
 		queryText: r.query_text,
 		category: r.category,
+		split: r.split ?? 'tuning',
 		versionStatus: r.version_status,
 		pinCount: Number(r.pin_count),
 		confirmedCount: Number(r.confirmed_count),

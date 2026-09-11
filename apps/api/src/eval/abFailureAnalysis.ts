@@ -147,12 +147,18 @@ export interface AbAnalysisReport {
 	caseCount: number
 	distribution: Record<AbFailureClass, number>
 	cases: AbCaseAnalysis[]
+	/** CAL-011: held-out split — aggregate counts only, per-case detail withheld */
+	heldOut: {
+		caseCount: number
+		distribution: Record<AbFailureClass, number>
+	}
 }
 
 interface StoredCaseRow {
 	case_key: string
 	category: string
 	query_text: string
+	split: string | null
 	metrics: Record<string, unknown> | null
 }
 
@@ -194,7 +200,8 @@ export async function analyzeStoredRuns(
 		runId: string,
 	): Promise<Map<string, StoredCaseRow>> => {
 		const rows = await sql<StoredCaseRow[]>`
-			select c.case_key, c.category, c.query_text, cr.metrics
+			select c.case_key, c.category, c.query_text,
+				c.expected_behavior->>'split' as split, cr.metrics
 			from evaluation_case_results cr
 			join evaluation_cases c on c.id = cr.case_id
 			where cr.run_id = ${runId}::uuid`
@@ -219,6 +226,13 @@ export async function analyzeStoredRuns(
 		RANK_IMPROVEMENT: 0,
 		UNCHANGED: 0,
 	}
+	// CAL-011: held-out counts feed the aggregate, but their per-case rows
+	// never reach `cases` — this is a developer/tuning diagnostic tool and
+	// the blind split must stay blind
+	const heldOutDistribution: Record<AbFailureClass, number> = {
+		...distribution,
+	}
+	let heldOutCount = 0
 
 	for (const key of allKeys) {
 		const b = baselineCases.get(key)
@@ -231,6 +245,12 @@ export async function analyzeStoredRuns(
 			candidate: toSide(c),
 		})
 		distribution[analysis.classification] += 1
+		const isHeldOut = (b?.split ?? c?.split) === 'held_out'
+		if (isHeldOut) {
+			heldOutCount += 1
+			heldOutDistribution[analysis.classification] += 1
+			continue
+		}
 		cases.push(analysis)
 	}
 
@@ -245,9 +265,13 @@ export async function analyzeStoredRuns(
 		version: AB_ANALYSIS_VERSION,
 		baselineRunId,
 		candidateRunId,
-		caseCount: cases.length,
+		caseCount: cases.length + heldOutCount,
 		distribution,
 		cases,
+		heldOut: {
+			caseCount: heldOutCount,
+			distribution: heldOutDistribution,
+		},
 	}
 }
 
@@ -266,6 +290,21 @@ export function renderAnalysisMarkdown(report: AbAnalysisReport): string {
 		if (n === 0) continue
 		lines.push(`| ${cls} | ${n} |`)
 	}
+	if (report.heldOut.caseCount > 0) {
+		lines.push(
+			'',
+			`## Held-out split (${report.heldOut.caseCount} kasus) — AGREGAT SAJA`,
+			'Per-case detail held-out disembunyikan (CAL-011): split ini hanya',
+			'dievaluasi sekali saat gate, bukan untuk iterasi tuning.',
+			'',
+			'| Class | Held-out count |',
+			'|---|---|',
+		)
+		for (const [cls, n] of Object.entries(report.heldOut.distribution)) {
+			if (n === 0) continue
+			lines.push(`| ${cls} | ${n} |`)
+		}
+	}
 	const grouped = new Map<string, AbCaseAnalysis[]>()
 	for (const c of report.cases) {
 		const list = grouped.get(c.classification) ?? []
@@ -283,4 +322,91 @@ export function renderAnalysisMarkdown(report: AbAnalysisReport): string {
 		}
 	}
 	return lines.join('\n')
+}
+
+// ---------------------------------------------------------------------------
+// CAL-011: suggestion coverage — REPORT-ONLY diagnostic, never a gate.
+// After scholars confirm pins, measure how often the pin-suggestion tool's
+// top-K contains a pinned passage. Two failure shapes fall out:
+//   pin exists & suggestion misses it  → retrieval problem (cheap Release B preview)
+//   manual search finds nothing either → corpus coverage problem (M6)
+// ---------------------------------------------------------------------------
+
+export interface CoveragePinRef {
+	spanId: string | null
+	sourceRevisionId: string | null
+	knowledgeRevisionId: string | null
+}
+
+export interface CoverageSuggestionRef {
+	unitId: string
+	spanId: string | null
+	sourceRevisionId: string | null
+	knowledgeRevisionId: string | null
+}
+
+/** a pin matches a suggestion when any lineage id agrees (unit ids differ per release) */
+export function pinMatchesSuggestion(
+	pin: CoveragePinRef,
+	suggestion: CoverageSuggestionRef,
+): boolean {
+	if (pin.spanId && pin.spanId === suggestion.spanId) return true
+	if (
+		pin.sourceRevisionId &&
+		pin.sourceRevisionId === suggestion.sourceRevisionId
+	)
+		return true
+	if (
+		pin.knowledgeRevisionId &&
+		pin.knowledgeRevisionId === suggestion.knowledgeRevisionId
+	)
+		return true
+	return false
+}
+
+export interface CaseCoverage {
+	caseKey: string
+	split: string
+	pinCount: number
+	suggestionCount: number
+	/** at least one pinned passage appears in the suggestion top-K */
+	hit: boolean
+}
+
+export interface CoverageReport {
+	version: string
+	reviewedCases: number
+	/** suggestion coverage = review cases whose pin appears in suggested top-K / reviewed cases */
+	coverageRate: number | null
+	tuning: { cases: number; hits: number }
+	heldOut: { cases: number; hits: number }
+	/** per-case rows for TUNING split only — held-out stays aggregate (CAL-011) */
+	cases: CaseCoverage[]
+	/** pinned tuning cases the suggestion tool missed — retrieval-problem queue */
+	missedTuningCaseKeys: string[]
+}
+
+export function aggregateCoverage(
+	cases: Array<Omit<CaseCoverage, 'hit'> & { hit: boolean }>,
+): CoverageReport {
+	const pinned = cases.filter((c) => c.pinCount > 0)
+	const hits = pinned.filter((c) => c.hit)
+	const tuning = pinned.filter((c) => c.split !== 'held_out')
+	const tuningHits = tuning.filter((c) => c.hit)
+	const heldOut = pinned.filter((c) => c.split === 'held_out')
+	const heldOutHits = heldOut.filter((c) => c.hit)
+	return {
+		version: AB_ANALYSIS_VERSION,
+		reviewedCases: pinned.length,
+		coverageRate:
+			pinned.length === 0 ? null : round4(hits.length / pinned.length),
+		tuning: { cases: tuning.length, hits: tuningHits.length },
+		heldOut: { cases: heldOut.length, hits: heldOutHits.length },
+		cases: pinned.filter((c) => c.split !== 'held_out'),
+		missedTuningCaseKeys: tuning.filter((c) => !c.hit).map((c) => c.caseKey),
+	}
+}
+
+function round4(v: number): number {
+	return Math.round(v * 10000) / 10000
 }

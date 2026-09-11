@@ -397,19 +397,48 @@ export async function getSetVersion(
 		versionId: version.version_id,
 		version: version.version,
 		status: version.status,
-		cases: cases.map((c) => ({
-			id: c.id,
-			caseKey: c.case_key,
-			category: c.category,
-			language: c.language,
-			riskLevel: c.risk_level,
-			queryText: c.query_text,
-			conversation: c.conversation,
-			ownerUserId: c.owner_user_id,
-			reviewerUserId: c.reviewer_user_id,
-			expectedBehavior: c.expected_behavior,
-			expectedEvidence: evidenceByCase.get(c.id) ?? [],
-		})),
+		cases: cases.map((c) => {
+			// CAL-011: held-out pins (and the textual evidence criteria that
+			// describe them) are reviewer-only. A tuning workflow reading the
+			// set must not see the blind split's ground truth — otherwise the
+			// 36 held-out cases silently become tuning data.
+			const isHeldOut =
+				(c.expected_behavior as { split?: unknown })?.split === 'held_out'
+			if (isHeldOut && !principal.permissions.includes('review:approve')) {
+				const behavior = {
+					...c.expected_behavior,
+				} as Record<string, unknown>
+				delete behavior.acceptableEvidenceCriteria
+				behavior.pinsRedacted =
+					'held-out split — reviewer (review:approve) only'
+				return {
+					id: c.id,
+					caseKey: c.case_key,
+					category: c.category,
+					language: c.language,
+					riskLevel: c.risk_level,
+					queryText: c.query_text,
+					conversation: c.conversation,
+					ownerUserId: c.owner_user_id,
+					reviewerUserId: c.reviewer_user_id,
+					expectedBehavior: behavior,
+					expectedEvidence: [],
+				}
+			}
+			return {
+				id: c.id,
+				caseKey: c.case_key,
+				category: c.category,
+				language: c.language,
+				riskLevel: c.risk_level,
+				queryText: c.query_text,
+				conversation: c.conversation,
+				ownerUserId: c.owner_user_id,
+				reviewerUserId: c.reviewer_user_id,
+				expectedBehavior: c.expected_behavior,
+				expectedEvidence: evidenceByCase.get(c.id) ?? [],
+			}
+		}),
 	}
 }
 
