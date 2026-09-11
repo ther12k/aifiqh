@@ -50,7 +50,7 @@ beforeAll(async () => {
 describe('reviewed benchmark suite (#112)', () => {
 	test('suite contains ~100 cases across all six families with tuning/held-out split', () => {
 		expect(REVIEWED_BENCHMARK_CASES.length).toBeGreaterThanOrEqual(100)
-		expect(BENCHMARK_SUITE_VERSION).toBe('reviewed-benchmark-v1')
+		expect(BENCHMARK_SUITE_VERSION).toBe('reviewed-benchmark-v2')
 
 		const families = new Set(REVIEWED_BENCHMARK_CASES.map((c) => c.family))
 		expect(families.has('straightforward_answerable')).toBeTrue()
@@ -59,6 +59,7 @@ describe('reviewed benchmark suite (#112)', () => {
 		expect(families.has('missing_context')).toBeTrue()
 		expect(families.has('evidence_absent')).toBeTrue()
 		expect(families.has('misleading_premise')).toBeTrue()
+		expect(families.has('conversation_followup')).toBeTrue()
 
 		const splits = new Set(REVIEWED_BENCHMARK_CASES.map((c) => c.split))
 		expect(splits.has('tuning')).toBeTrue()

@@ -28,7 +28,7 @@ import {
  *   - unacceptableClaims: statements that must NOT be made
  */
 
-export const BENCHMARK_SUITE_VERSION = 'reviewed-benchmark-v1'
+export const BENCHMARK_SUITE_VERSION = 'reviewed-benchmark-v2'
 
 export interface BenchmarkCaseDefinition {
 	caseKey: string
@@ -39,6 +39,7 @@ export interface BenchmarkCaseDefinition {
 		| 'missing_context'
 		| 'evidence_absent'
 		| 'misleading_premise'
+		| 'conversation_followup'
 	category: EvalCategory
 	queryText: string
 	split: 'tuning' | 'held_out'
@@ -47,6 +48,14 @@ export interface BenchmarkCaseDefinition {
 	acceptableEvidenceCriteria: string[]
 	requiredQualifications: string[]
 	unacceptableClaims: string[]
+	/** EVAL-CHAT-001: prior conversation turns leading up to this query */
+	conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>
+	/** expected anaphora or intent resolution behavior */
+	followUpType?:
+		| 'follow_up_resolution'
+		| 'madhhab_switch'
+		| 'ambiguous_reference'
+		| 'clarification_path'
 	notes?: string
 }
 
@@ -1100,6 +1109,463 @@ function mkCases(): BenchmarkCaseDefinition[] {
 		})
 	}
 
+	// 7. conversation_followup (16 cases: 10 tuning, 6 held_out) — EVAL-CHAT-001
+	const convData: Array<{
+		k: string
+		q: string
+		s: 'tuning' | 'held_out'
+		t: BenchmarkCaseDefinition['followUpType']
+		history: Array<{ role: 'user' | 'assistant'; content: string }>
+		outcome: 'answered' | 'needs_clarification' | 'insufficient_evidence'
+		crit: string[]
+		qual: string[]
+		unacc: string[]
+		notes?: string
+	}> = [
+		// --- Subcategory 1: follow_up_resolution (anaphora & topic continuation) ---
+		{
+			k: 'bm-cf-001',
+			q: 'Lalu bagaimana jika air tersebut terkena najis tetapi tidak berubah rasa, bau, dan warnanya?',
+			s: 'tuning',
+			t: 'follow_up_resolution',
+			history: [
+				{
+					role: 'user',
+					content: 'Apa definisi dan hukum air mutlak dalam bersuci?',
+				},
+				{
+					role: 'assistant',
+					content:
+						'Air mutlak adalah air yang suci pada dzatnya dan menyucikan yang lain, seperti air hujan, air sumur, dan air laut.',
+				},
+			],
+			outcome: 'answered',
+			crit: ['Ketentuan dua qullah', 'Hadits dua qullah (qullatain)'],
+			qual: [
+				'Membedakan air kurang dari dua qullah (menjadi najis walau tidak berubah) dan dua qullah atau lebih (tidak najis selama tidak berubah sifatnya)',
+			],
+			unacc: [
+				'Menyatakan air terkena najis mutlak selalu suci tanpa memandang volume atau perubahan',
+			],
+			notes:
+				'Anaphora "air tersebut" harus diselesaikan ke "air mutlak" dari turn sebelumnya',
+		},
+		{
+			k: 'bm-cf-002',
+			q: 'Bagaimana jika seseorang lupa berniat hingga masuk waktu Shubuh?',
+			s: 'tuning',
+			t: 'follow_up_resolution',
+			history: [
+				{
+					role: 'user',
+					content: 'Kapan waktu berniat untuk puasa Ramadhan yang diwajibkan?',
+				},
+				{
+					role: 'assistant',
+					content:
+						'Niat puasa Ramadhan wajib dilakukan pada malam hari sebelum terbit fajar (tabyit an-niyyah) menurut jumhur ulama.',
+				},
+			],
+			outcome: 'answered',
+			crit: ['Hadits man lam yubayyit ash-shiyama qabla al-fajr'],
+			qual: [
+				'Untuk puasa fardhu Ramadhan, tidak sah jika baru berniat setelah fajar; wajib mengqadha di kemudian hari',
+			],
+			unacc: ['Boleh berniat puasa Ramadhan di siang hari secara mutlak'],
+			notes:
+				'Follow-up elipsis: "lupa berniat" merujuk pada niat puasa Ramadhan dari turn sebelumnya',
+		},
+		{
+			k: 'bm-cf-003',
+			q: 'Berapakah takarannya jika dikonversi ke kilogram untuk makanan pokok beras?',
+			s: 'tuning',
+			t: 'follow_up_resolution',
+			history: [
+				{
+					role: 'user',
+					content:
+						'Berapa besaran zakat fitrah yang wajib dikeluarkan per orang?',
+				},
+				{
+					role: 'assistant',
+					content:
+						'Zakat fitrah yang wajib dikeluarkan adalah satu sha makanan pokok per jiwa.',
+				},
+			],
+			outcome: 'answered',
+			crit: ['Konversi 1 sha ke kilogram'],
+			qual: [
+				'Satu sha berkisar antara 2,5 kg hingga 3,0 kg beras tergantung ketetapan standar ulama/lembaga zakat setempat',
+			],
+			unacc: ['Satu sha setara dengan 10 kilogram beras'],
+			notes: 'Menyelesaikan rujukan "takarannya" ke "satu sha zakat fitrah"',
+		},
+		{
+			k: 'bm-cf-004',
+			q: 'Apakah hal itu juga membatalkan shalat secara otomatis?',
+			s: 'held_out',
+			t: 'follow_up_resolution',
+			history: [
+				{
+					role: 'user',
+					content: 'Apakah tertawa terbahak-bahak membatalkan wudhu seseorang?',
+				},
+				{
+					role: 'assistant',
+					content:
+						'Menurut jumhur ulama selain madzhab Hanafi, tertawa tidak membatalkan wudhu secara dzatiah di luar shalat.',
+				},
+			],
+			outcome: 'answered',
+			crit: ['Pembatal shalat: berbicara dan tertawa terbahak-bahak'],
+			qual: [
+				'Tertawa terbahak-bahak (qahaqahah) membatalkan shalat menurut kesepakatan ulama',
+			],
+			unacc: ['Tertawa terbahak-bahak tidak mempengaruhi keabsahan shalat'],
+			notes:
+				'Anaphora "hal itu" merujuk ke "tertawa terbahak-bahak (qahaqahah)"',
+		},
+
+		// --- Subcategory 2: madhhab_switch mid-conversation ---
+		{
+			k: 'bm-cf-005',
+			q: 'Lalu bagaimana menurut madzhab Hanafi dalam masalah persentuhan tersebut?',
+			s: 'tuning',
+			t: 'madhhab_switch',
+			history: [
+				{
+					role: 'user',
+					content:
+						'Apakah bersentuhan kulit antara laki-laki dan perempuan bukan mahram membatalkan wudhu menurut madzhab Syafi’i?',
+				},
+				{
+					role: 'assistant',
+					content:
+						'Dalam madzhab Syafi’i, bersentuhan kulit secara langsung antara laki-laki dan perempuan ajnabi membatalkan wudhu tanpa syarat syahwat.',
+				},
+			],
+			outcome: 'answered',
+			crit: ['Tafsir laamastum an-nisaa menurut Ibnu Abbas / Madzhab Hanafi'],
+			qual: [
+				'Madzhab Hanafi berpendapat persentuhan kulit tidak membatalkan wudhu sama sekali kecuali jika terjadi hubungan intim (jima) atau mubasyarah fasyihah',
+			],
+			unacc: [
+				'Madzhab Hanafi sepakat dengan Syafi’i bahwa setiap sentuhan membatalkan wudhu',
+			],
+			notes:
+				'Pergantian madzhab eksplisit di tengah percakapan (Syafi’i -> Hanafi)',
+		},
+		{
+			k: 'bm-cf-006',
+			q: 'Bagaimana dengan pandangan madzhab Maliki?',
+			s: 'tuning',
+			t: 'madhhab_switch',
+			history: [
+				{
+					role: 'user',
+					content:
+						'Apakah basmalah dibaca jahar atau sirr dalam shalat berjamaah menurut Syafi’i?',
+				},
+				{
+					role: 'assistant',
+					content:
+						'Menurut madzhab Syafi’i, basmalah adalah ayat pertama Al-Fatihah dan disunnahkan dibaca jahar pada shalat jahriyah.',
+				},
+			],
+			outcome: 'answered',
+			crit: ['Hukum basmalah shalat dalam Madzhab Maliki'],
+			qual: [
+				'Madzhab Maliki memandang makruh membaca basmalah pada shalat fardhu, baik secara jahar maupun sirr',
+			],
+			unacc: ['Madzhab Maliki mewajibkan membaca jahar basmalah'],
+			notes:
+				'Peralihan madzhab elipsis: menanyakan hukum basmalah menurut Maliki',
+		},
+		{
+			k: 'bm-cf-007',
+			q: 'Apakah madzhab Hanbali sependapat mengenai batalnya wudhu karena memakan daging unta?',
+			s: 'tuning',
+			t: 'madhhab_switch',
+			history: [
+				{
+					role: 'user',
+					content:
+						'Apakah memakan daging unta membatalkan wudhu menurut madzhab Syafi’i?',
+				},
+				{
+					role: 'assistant',
+					content:
+						'Menurut madzhab Syafi’i dan jumhur, memakan daging unta tidak membatalkan wudhu.',
+				},
+			],
+			outcome: 'answered',
+			crit: [
+				'Hadits Jabir bin Samurah tentang berwudhu dari daging unta',
+				'Pendapat Madzhab Hanbali',
+			],
+			qual: [
+				'Madzhab Hanbali berbeda pendapat dengan jumhur dan menegaskan memakan daging unta membatalkan wudhu',
+			],
+			unacc: ['Madzhab Hanbali sependapat dengan Syafi’i bahwa tidak batal'],
+			notes: 'Peralihan madzhab: mengonfirmasi posisi Hanbali vs Syafi’i',
+		},
+		{
+			k: 'bm-cf-008',
+			q: 'Bagaimana perbandingannya dengan madzhab Maliki mengenai pembaruan niat puasa setiap malam?',
+			s: 'held_out',
+			t: 'madhhab_switch',
+			history: [
+				{
+					role: 'user',
+					content:
+						'Apakah niat puasa Ramadhan harus diperbarui setiap malam menurut madzhab Syafi’i?',
+				},
+				{
+					role: 'assistant',
+					content:
+						'Ya, dalam madzhab Syafi’i wajib memperbarui niat pada setiap malam untuk puasa esok harinya.',
+				},
+			],
+			outcome: 'answered',
+			crit: ['Niat puasa Ramadhan Madzhab Maliki'],
+			qual: [
+				'Madzhab Maliki membolehkan cukup satu kali niat di awal bulan Ramadhan untuk sebulan penuh selama tidak terputus safar atau sakit',
+			],
+			unacc: [
+				'Madzhab Maliki mewajibkan niat diperbarui setiap malam sama persis dengan Syafi’i',
+			],
+			notes: 'Perbandingan lintas madzhab yang dipicu oleh pertanyaan lanjutan',
+		},
+
+		// --- Subcategory 3: ambiguous_references ---
+		{
+			k: 'bm-cf-009',
+			q: 'Berapakah nishabnya?',
+			s: 'tuning',
+			t: 'ambiguous_reference',
+			history: [
+				{
+					role: 'user',
+					content: 'Jelaskan perbedaan antara zakat maal dan zakat fitrah.',
+				},
+				{
+					role: 'assistant',
+					content:
+						'Zakat maal dikenakan pada harta yang mencapai nishab dan haul, sedangkan zakat fitrah diwajibkan atas setiap jiwa pada akhir Ramadhan berupa makanan pokok.',
+				},
+			],
+			outcome: 'answered',
+			crit: ['Nishab zakat emas/perak (zakat maal)'],
+			qual: [
+				'Menjelaskan nishab zakat maal (mis. setara 85 gram emas untuk emas) dan menegaskan bahwa zakat fitrah tidak mengenal nishab kepemilikan tahunan',
+			],
+			unacc: ['Menyebutkan nishab untuk zakat fitrah'],
+			notes:
+				'Menyelesaikan anaphora ambigu: zakat fitrah tidak punya nishab, sehingga rujukan ditujukan ke zakat maal dengan klarifikasi konteks',
+		},
+		{
+			k: 'bm-cf-010',
+			q: 'Bolehkah mengulanginya jika batal?',
+			s: 'tuning',
+			t: 'ambiguous_reference',
+			history: [
+				{
+					role: 'user',
+					content:
+						'Apakah tayammum diperbolehkan saat ada luka di anggota wudhu?',
+				},
+				{
+					role: 'assistant',
+					content:
+						'Boleh bertayammum untuk menggantikan basuhan pada anggota wudhu yang terluka jika terkena air membahayakan.',
+				},
+			],
+			outcome: 'answered',
+			crit: ['Hukum mengulang tayammum saat hadats'],
+			qual: [
+				'Boleh dan sah mengulangi tayammum setiap kali berhadats selama uzur sakit/luka masih ada',
+			],
+			unacc: ['Tayammum hanya boleh dilakukan satu kali seumur hidup'],
+			notes: 'Rujukan "mengulanginya" diselesaikan ke tindakan tayammum',
+		},
+		{
+			k: 'bm-cf-011',
+			q: 'Apakah hal itu tetap disyariatkan jika sujudnya di luar shalat?',
+			s: 'held_out',
+			t: 'ambiguous_reference',
+			history: [
+				{
+					role: 'user',
+					content:
+						'Bagaimana tata cara sujud tilawah saat membaca ayat sajdah?',
+				},
+				{
+					role: 'assistant',
+					content:
+						'Sujud tilawah dilakukan dengan satu kali sujud ketika membaca atau mendengar ayat sajdah, disertai takbir.',
+				},
+			],
+			outcome: 'answered',
+			crit: ['Sujud tilawah di luar shalat'],
+			qual: [
+				'Tetap disunnahkan sujud tilawah di luar shalat dengan bertakbir, sujud satu kali, lalu salam menurut mayoritas ulama',
+			],
+			unacc: ['Sujud tilawah dilarang keras di luar shalat'],
+			notes: 'Anaphora "hal itu" merujuk ke sujud tilawah dari turn sebelumnya',
+		},
+		{
+			k: 'bm-cf-012',
+			q: 'Berapa lama masa berlakunya rukhshah tersebut?',
+			s: 'held_out',
+			t: 'ambiguous_reference',
+			history: [
+				{
+					role: 'user',
+					content: 'Apakah mengusap khuf (sepatu) diperbolehkan dalam wudhu?',
+				},
+				{
+					role: 'assistant',
+					content:
+						'Ya, mengusap bagian atas khuf diperbolehkan sebagai rukhshah bersuci.',
+				},
+			],
+			outcome: 'answered',
+			crit: ['Durasi mengusap khuf bagi mukim dan musafir'],
+			qual: [
+				'Satu hari satu malam bagi yang mukim, dan tiga hari tiga malam bagi musafir',
+			],
+			unacc: ['Masa berlaku mengusap khuf selamanya tanpa batas waktu'],
+			notes: 'Menyelesaikan "rukhshah tersebut" ke rukhshah mengusap khuf',
+		},
+
+		// --- Subcategory 4: clarification_paths ---
+		{
+			k: 'bm-cf-013',
+			q: 'Apakah sah shalat saya jika dalam kondisi demikian?',
+			s: 'tuning',
+			t: 'clarification_path',
+			history: [
+				{
+					role: 'user',
+					content: 'Tadi saat shalat saya merasa ragu-ragu.',
+				},
+			],
+			outcome: 'needs_clarification',
+			crit: ['Pedoman keraguan dalam ibadah / meminta rincian keraguan'],
+			qual: [
+				'Meminta klarifikasi: ragu dalam hal apa (jumlah rakaat, wudhu, atau meninggalkan rukun)?',
+			],
+			unacc: [
+				'Memvonis shalat sah atau batal tanpa mengetahui apa yang diragukan',
+			],
+			notes:
+				'Pertanyaan terlalu ambigu/kurang konteks: wajib menempuh jalur klarifikasi',
+		},
+		{
+			k: 'bm-cf-014',
+			q: 'Kondisi yang saya maksud adalah saya ragu apakah sudah rakaat ketiga atau keempat.',
+			s: 'tuning',
+			t: 'clarification_path',
+			history: [
+				{
+					role: 'user',
+					content: 'Tadi saat shalat saya merasa ragu-ragu.',
+				},
+				{
+					role: 'assistant',
+					content:
+						'Mohon jelaskan keraguan Anda: apakah mengenai jumlah rakaat, meninggalkan rukun, atau keabsahan bersuci?',
+				},
+			],
+			outcome: 'answered',
+			crit: [
+				'Hadits Al-Bina ala al-Yaqin',
+				'Hadits Abu Said Al-Khudri tentang ragu 3 atau 4 rakaat',
+			],
+			qual: [
+				'Mengambil jumlah yang paling sedikit (yakin 3 rakaat), menambah satu rakaat, lalu melakukan sujud sahwi sebelum salam',
+			],
+			unacc: [
+				'Mengambil yang paling banyak (4 rakaat) atau membatalkan shalat',
+			],
+			notes:
+				'Resolusi klarifikasi: pengguna melengkapi konteks, sistem menjawab dengan bina ala al-yaqin',
+		},
+		{
+			k: 'bm-cf-015',
+			q: 'Lalu apakah shalatnya sah jika dilakukan tanpa wudhu dalam kondisi darurat itu?',
+			s: 'held_out',
+			t: 'clarification_path',
+			history: [
+				{
+					role: 'user',
+					content:
+						'Bagaimana hukum shalat bagi orang yang tidak menemukan air dan tidak ada debu sama sekali?',
+				},
+				{
+					role: 'assistant',
+					content:
+						'Keadaan tersebut dinamakan faqid ath-thahurain (kehilangan dua alat bersuci).',
+				},
+			],
+			outcome: 'answered',
+			crit: ['Hukum shalat Faqid ath-Thahurain'],
+			qual: [
+				'Tetap wajib shalat lihurmatil waqti (menghormati waktu shalat), dan menurut madzhab Syafi’i wajib mengulanginya (i’adah) jika sudah menemukan alat bersuci',
+			],
+			unacc: ['Boleh meninggalkan shalat sampai waktu habis tanpa konsekuensi'],
+			notes:
+				'Menyelesaikan "kondisi darurat itu" ke status faqid ath-thahurain',
+		},
+		{
+			k: 'bm-cf-016',
+			q: 'Apakah status uangnya haram bagi penerima?',
+			s: 'held_out',
+			t: 'clarification_path',
+			history: [
+				{
+					role: 'user',
+					content:
+						'Bagaimana hukum menerima hadiah dari orang yang sebagian hartanya bercampur riba?',
+				},
+				{
+					role: 'assistant',
+					content:
+						'Ulama membedakan antara harta yang haram karena dzatnya dan haram karena cara perolehannya (kasb).',
+				},
+			],
+			outcome: 'answered',
+			crit: ['Harta campur riba dan hukum menerimanya'],
+			qual: [
+				'Jika harta tidak dipastikan berasal dari dzat yang haram, penerima tidak berdosa menerimanya, namun lebih utama wara (menghindari)',
+			],
+			unacc: ['Seluruh uang mutlak haram bagi siapa pun tanpa rincian'],
+			notes:
+				'Menyelesaikan anaphora "uangnya" ke hadiah dari orang berharta campur riba',
+		},
+	]
+
+	for (const item of convData) {
+		c.push({
+			caseKey: item.k,
+			family: 'conversation_followup',
+			category:
+				item.outcome === 'needs_clarification'
+					? 'abstention'
+					: 'grounded_generation',
+			queryText: item.q,
+			split: item.s,
+			riskLevel: 'normal',
+			expectedOutcome: item.outcome,
+			acceptableEvidenceCriteria: item.crit,
+			requiredQualifications: item.qual,
+			unacceptableClaims: item.unacc,
+			conversationHistory: item.history,
+			followUpType: item.t,
+			notes: item.notes,
+		})
+	}
+
 	return c
 }
 
@@ -1126,10 +1592,10 @@ export async function seedReviewedBenchmark(
 	heldOutCount: number
 	families: Record<string, number>
 }> {
-	const setKey = options.setKey ?? 'fiqh-reviewed-benchmark-v1'
+	const setKey = options.setKey ?? 'fiqh-reviewed-benchmark-v2'
 	const setDesc =
 		options.setDescription ??
-		'Official reviewed benchmark suite (102 cases across 6 families, 70 tuning / 32 held-out) for AiFiqh release evaluation'
+		'Official reviewed benchmark suite (118 cases across 7 families, 80 tuning / 38 held-out) for AiFiqh release evaluation'
 
 	// find or create set
 	const [existingSet] = await sql<{ id: string }[]>`
@@ -1165,7 +1631,9 @@ export async function seedReviewedBenchmark(
 			queryText: def.queryText,
 			language: 'id',
 			riskLevel: def.riskLevel,
-			conversation: null,
+			conversation: def.conversationHistory
+				? { history: def.conversationHistory }
+				: null,
 			expectedBehavior: {
 				family: def.family,
 				split: def.split,
@@ -1173,6 +1641,7 @@ export async function seedReviewedBenchmark(
 				acceptableEvidenceCriteria: def.acceptableEvidenceCriteria,
 				requiredQualifications: def.requiredQualifications,
 				unacceptableClaims: def.unacceptableClaims,
+				followUpType: def.followUpType ?? null,
 				notes: def.notes ?? null,
 			},
 			ownerUserId,

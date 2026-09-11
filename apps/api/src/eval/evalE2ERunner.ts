@@ -67,6 +67,14 @@ export interface E2ECaseMetric {
 	errorStage: E2EErrorStage
 	errorDetail: string | null
 	latencyMs: number
+	/** EVAL-CHAT-001: conversational follow-up resolution */
+	followUpResolved?: boolean | null
+	/** middle-layer claim support check passed */
+	claimSupportOk?: boolean | null
+	/** whether generation fell back to deterministic composer */
+	llmFallback?: boolean
+	promptTokens?: number
+	completionTokens?: number
 }
 
 export interface E2ERunReport {
@@ -82,6 +90,14 @@ export interface E2ERunReport {
 	providerFailures: number
 	failuresByStage: Record<string, number>
 	avgLatencyMs: number
+	/** EVAL-CHAT-001: multi-turn conversational benchmark metrics */
+	followUpResolutionRate: number | null
+	claimSupportRate: number | null
+	abstentionAccuracy: number | null
+	llmFallbackRate: number | null
+	p50LatencyMs: number
+	p95LatencyMs: number
+	avgTokensPerTurn: number | null
 }
 
 export interface E2ERunOptions {
@@ -94,6 +110,10 @@ export interface E2ERunOptions {
 		sql: Sql,
 		principal: Principal,
 		query: string,
+		conversationHistory?: Array<{
+			role: 'user' | 'assistant'
+			content: string
+		}>,
 	) => Promise<TurnResult>
 	now?: Date
 }
@@ -159,6 +179,24 @@ export function aggregateE2EReport(metrics: E2ECaseMetric[]): E2ERunReport {
 			stages[m.errorStage] = (stages[m.errorStage] ?? 0) + 1
 		}
 	}
+	const followUpCases = metrics.filter(
+		(m) => m.followUpResolved !== undefined && m.followUpResolved !== null,
+	)
+	const claimEvaluated = answered.filter(
+		(m) => m.claimSupportOk !== undefined && m.claimSupportOk !== null,
+	)
+	const abstentionExpected = metrics.filter(
+		(m) => m.category === 'abstention' || m.category === 'sensitive',
+	)
+	const tokenTurns = answered.filter(
+		(m) => (m.promptTokens ?? 0) + (m.completionTokens ?? 0) > 0,
+	)
+	const latencies = metrics.map((m) => m.latencyMs).sort((a, b) => a - b)
+	const p50 =
+		latencies.length === 0 ? 0 : latencies[Math.floor(latencies.length * 0.5)]
+	const p95 =
+		latencies.length === 0 ? 0 : latencies[Math.floor(latencies.length * 0.95)]
+
 	return {
 		runnerVersion: EVAL_E2E_RUNNER_VERSION,
 		caseCount: n,
@@ -213,6 +251,45 @@ export function aggregateE2EReport(metrics: E2ECaseMetric[]): E2ERunReport {
 			n === 0 ? 0 : metrics.reduce((s, m) => s + m.latencyMs, 0) / n,
 			2,
 		),
+		followUpResolutionRate:
+			followUpCases.length === 0
+				? null
+				: round(
+						followUpCases.filter((m) => m.followUpResolved).length /
+							followUpCases.length,
+					),
+		claimSupportRate:
+			claimEvaluated.length === 0
+				? null
+				: round(
+						claimEvaluated.filter((m) => m.claimSupportOk).length /
+							claimEvaluated.length,
+					),
+		abstentionAccuracy:
+			abstentionExpected.length === 0
+				? null
+				: round(
+						abstentionExpected.filter(
+							(m) => m.status === 'abstained' || m.status === 'escalated',
+						).length / abstentionExpected.length,
+					),
+		llmFallbackRate:
+			answered.length === 0
+				? null
+				: round(answered.filter((m) => m.llmFallback).length / answered.length),
+		p50LatencyMs: p50,
+		p95LatencyMs: p95,
+		avgTokensPerTurn:
+			tokenTurns.length === 0
+				? null
+				: round(
+						tokenTurns.reduce(
+							(sum, m) =>
+								sum + (m.promptTokens ?? 0) + (m.completionTokens ?? 0),
+							0,
+						) / tokenTurns.length,
+						1,
+					),
 	}
 }
 
@@ -240,11 +317,12 @@ export async function runE2EEvaluation(
 			query_text: string
 			risk_level: string
 			expected_behavior: Record<string, unknown>
+			conversation: Record<string, unknown> | null
 		}[]
-	>`select id, case_key, category, query_text, risk_level, expected_behavior
-		from evaluation_cases
-		where set_version_id = ${options.setVersionId}::uuid
-		order by case_key`
+	>`select id, case_key, category, query_text, risk_level, expected_behavior, conversation
+			from evaluation_cases
+			where set_version_id = ${options.setVersionId}::uuid
+			order by case_key`
 	if (cases.length === 0) {
 		throw new EvalE2EError(
 			'EMPTY_VERSION',
@@ -253,20 +331,30 @@ export async function runE2EEvaluation(
 	}
 
 	const [run] = await sql<{ id: string }[]>`
-		insert into evaluation_runs (set_version_id, mode, pins, status)
-		values (${options.setVersionId}::uuid, 'end_to_end',
-			${sql.json({
-				runnerVersion: EVAL_E2E_RUNNER_VERSION,
-				indexReleaseId: options.indexReleaseId,
-				madhhab: options.madhhab ?? null,
-				mode: options.mode ?? 'grounded_only',
-			} as never)}::jsonb, 'running')
-		returning id`
+			insert into evaluation_runs (set_version_id, mode, pins, status)
+			values (${options.setVersionId}::uuid, 'end_to_end',
+				${sql.json({
+					runnerVersion: EVAL_E2E_RUNNER_VERSION,
+					indexReleaseId: options.indexReleaseId,
+					madhhab: options.madhhab ?? null,
+					mode: options.mode ?? 'grounded_only',
+				} as never)}::jsonb, 'running')
+			returning id`
 
 	const runTurnImpl =
 		options.runTurn ??
-		(async (sql2: Sql, p: Principal, query: string) => {
+		(async (
+			sql2: Sql,
+			p: Principal,
+			query: string,
+			history?: Array<{ role: 'user' | 'assistant'; content: string }>,
+		) => {
 			const conv = await startConversation(sql2, p, null)
+			for (const [idx, item] of (history ?? []).entries()) {
+				await sql2`
+						insert into messages (conversation_id, ordinal, role, content)
+						values (${conv.conversationId}::uuid, ${idx + 1}, ${item.role}, ${item.content})`
+			}
 			return postUserTurn(sql2, p, {
 				conversationId: conv.conversationId,
 				content: query,
@@ -282,11 +370,18 @@ export async function runE2EEvaluation(
 			const started = Date.now()
 			const behavior = c.expected_behavior as {
 				expectedDecision?: string
+				expectedOutcome?: string
+				family?: string
 			}
+			const convHistory = (
+				c.conversation as {
+					history?: Array<{ role: 'user' | 'assistant'; content: string }>
+				} | null
+			)?.history
 			let turn: TurnResult | null = null
 			let turnError: string | null = null
 			try {
-				turn = await runTurnImpl(sql, principal, c.query_text)
+				turn = await runTurnImpl(sql, principal, c.query_text, convHistory)
 			} catch (err) {
 				turnError = err instanceof Error ? err.message : String(err)
 			}
@@ -297,8 +392,10 @@ export async function runE2EEvaluation(
 			let quoteMismatches = 0
 			let citationsResolved = 0
 			let retrievalStatus: string | null = null
+			let promptTokens = 0
+			let completionTokens = 0
 			if (turn?.answerId) {
-				const [issueRows] = await Promise.all([
+				const [issueRows, tokenRows] = await Promise.all([
 					sql<
 						{
 							critical: string
@@ -306,17 +403,24 @@ export async function runE2EEvaluation(
 							quotes: string
 						}[]
 					>`
-						select
-							count(*) filter (where vi.severity = 'critical' and not vi.resolved) as critical,
-							count(*) filter (where vi.severity = 'critical'
-								and vi.code like 'MADHHAB%' and not vi.resolved) as attribution,
-							count(*) filter (where vi.severity = 'critical'
-								and vi.code like '%MISMATCH%' and not vi.resolved) as quotes
-						from validation_issues vi
-						join validation_runs vr on vr.id = vi.run_id
-						where vr.answer_id = ${turn.answerId}::uuid`,
-					sql<{ n: string }[]>`
-						select count(*) as n from citations where answer_id = ${turn.answerId}::uuid`,
+							select
+								count(*) filter (where vi.severity = 'critical' and not vi.resolved) as critical,
+								count(*) filter (where vi.severity = 'critical'
+									and vi.code like 'MADHHAB%' and not vi.resolved) as attribution,
+								count(*) filter (where vi.severity = 'critical'
+									and vi.code like '%MISMATCH%' and not vi.resolved) as quotes
+							from validation_issues vi
+							join validation_runs vr on vr.id = vi.run_id
+							where vr.answer_id = ${turn.answerId}::uuid`,
+					sql<
+						{
+							prompt_tokens: string | null
+							completion_tokens: string | null
+						}[]
+					>`
+							select sum(prompt_tokens) as prompt_tokens, sum(completion_tokens) as completion_tokens
+							from model_invocations
+							where answer_id = ${turn.answerId}::uuid`,
 				])
 				criticalIssues = Number(issueRows[0]?.critical ?? 0)
 				attributionErrors = Number(issueRows[0]?.attribution ?? 0)
@@ -324,9 +428,11 @@ export async function runE2EEvaluation(
 				citationsResolved = Number(
 					(
 						await sql<{ n: string }[]>`
-							select count(*) as n from citations where answer_id = ${turn.answerId}::uuid`
+								select count(*) as n from citations where answer_id = ${turn.answerId}::uuid`
 					)[0].n,
 				)
+				promptTokens = Number(tokenRows[0]?.prompt_tokens ?? 0)
+				completionTokens = Number(tokenRows[0]?.completion_tokens ?? 0)
 			}
 			if (turn?.assessment) {
 				retrievalStatus = (turn.assessment as AssessmentOutcome).verdict
@@ -341,6 +447,35 @@ export async function runE2EEvaluation(
 				expectedDecision,
 			})
 			const sensitiveCase = c.category === 'sensitive'
+
+			// conversational follow-up resolution & fallback telemetry
+			const isFollowUpCase =
+				behavior?.family === 'conversation_followup' ||
+				(convHistory && convHistory.length > 0)
+			let followUpResolved: boolean | null = null
+			if (isFollowUpCase) {
+				if (
+					behavior?.expectedOutcome === 'needs_clarification' ||
+					c.category === 'abstention'
+				) {
+					followUpResolved =
+						turn?.status === 'abstained' || turn?.status === 'escalated'
+				} else {
+					followUpResolved = turn?.status === 'answered' && criticalIssues === 0
+				}
+			}
+
+			const llmFallback =
+				turn?.generation !== undefined
+					? turn.generation.mode === 'deterministic_rag' ||
+						turn.generation.fallbackReason !== null
+					: undefined
+
+			const claimSupportOk =
+				turn?.verification !== undefined
+					? turn.verification.claimSupport === 'automated_check_passed'
+					: null
+
 			const metric: E2ECaseMetric = {
 				caseId: c.id,
 				caseKey: c.case_key,
@@ -361,16 +496,21 @@ export async function runE2EEvaluation(
 				errorStage,
 				errorDetail: turnError,
 				latencyMs,
+				followUpResolved,
+				claimSupportOk,
+				llmFallback,
+				promptTokens,
+				completionTokens,
 			}
 			caseMetrics.push(metric)
 
 			await sql`
-				insert into evaluation_case_results (run_id, case_id, metrics, error_stage, trace_id)
-				values (
-					${run.id}::uuid, ${c.id}::uuid, ${sql.json(metric as never)}::jsonb,
-					${errorStage === 'provider' || errorStage === 'generation' ? errorStage : null},
-					${turn?.traceId ?? null}::uuid)
-				on conflict (run_id, case_id) do update
+					insert into evaluation_case_results (run_id, case_id, metrics, error_stage, trace_id)
+					values (
+						${run.id}::uuid, ${c.id}::uuid, ${sql.json(metric as never)}::jsonb,
+						${errorStage === 'provider' || errorStage === 'generation' ? errorStage : null},
+						${turn?.traceId ? sql`${turn.traceId}::uuid` : null})
+					on conflict (run_id, case_id) do update
 					set metrics = excluded.metrics, error_stage = excluded.error_stage,
 						trace_id = excluded.trace_id`
 		}

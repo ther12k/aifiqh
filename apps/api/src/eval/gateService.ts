@@ -134,6 +134,14 @@ export function mergeLaunchMetrics(
 		sensitive_case_policy_compliance: num(e2eReport, 'sensitiveComplianceRate'),
 		traceability: num(e2eReport, 'traceabilityRate'),
 		rebuild_equivalence: comparisonClean(),
+		// EVAL-CHAT-001: conversational benchmark metrics
+		follow_up_resolution_min: num(e2eReport, 'followUpResolutionRate'),
+		claim_support_min: num(e2eReport, 'claimSupportRate'),
+		abstention_accuracy_min: num(e2eReport, 'abstentionAccuracy'),
+		llm_fallback_max: num(e2eReport, 'llmFallbackRate'),
+		p95_latency_max:
+			num(e2eReport, 'p95LatencyMs') ?? num(retrievalReport, 'p95LatencyMs'),
+		avg_tokens_per_turn_max: num(e2eReport, 'avgTokensPerTurn'),
 	}
 }
 
