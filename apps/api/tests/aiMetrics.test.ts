@@ -217,6 +217,32 @@ describe('getAiMetrics (OPS-AI-001)', () => {
 			report.generation.fallbackByReason.provider_error,
 		).toBeGreaterThanOrEqual(1)
 
+		// CAL-006: per-attempt breakdown
+		expect(report.attempts.total).toBe(report.generation.attempts)
+		expect(report.attempts.byOutcome.success).toBeGreaterThanOrEqual(1)
+		expect(report.attempts.byOutcome.provider_error).toBeGreaterThanOrEqual(1)
+		expect(report.attempts.byProviderModel.length).toBeGreaterThanOrEqual(1)
+		const providerAgg = report.attempts.byProviderModel[0]
+		expect(providerAgg.total).toBeGreaterThanOrEqual(2)
+		expect(providerAgg.success).toBeGreaterThanOrEqual(1)
+		// seeded failures carry no 429 markers
+		expect(report.attempts.quotaExhaustedAttempts).toBe(0)
+		expect(report.attempts.failureSamples.length).toBeGreaterThanOrEqual(1)
+		expect(report.attempts.failureSamples[0].outcome).not.toBe('success')
+
+		// CAL-009: funnel reconciles with the turn mix
+		expect(report.funnel.generationEligible).toBe(report.turns.generationStage)
+		expect(
+			report.funnel.modelAttemptTurns + report.funnel.noUsableModelTurns,
+		).toBe(report.funnel.generationEligible)
+		expect(report.funnel.modelSuccessTurns).toBeGreaterThanOrEqual(1)
+		expect(report.funnel.composerFallbackTurns).toBeGreaterThanOrEqual(1)
+		expect(
+			report.funnel.modelSuccessTurns +
+				report.funnel.composerFallbackTurns +
+				report.funnel.failedTurns,
+		).toBe(report.funnel.generationEligible)
+
 		// repair attempts
 		expect(report.generation.repair.attempted).toBeGreaterThanOrEqual(1)
 

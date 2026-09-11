@@ -31,6 +31,25 @@ export interface SloEntryLike {
 	status: 'met' | 'breached' | 'no_data'
 }
 
+/** CAL-006: bounded recent model-attempt failure sample */
+export interface AiFailureSampleLike {
+	at: string
+	provider: string
+	model: string
+	outcome: string
+	message: string | null
+}
+
+/** CAL-009: turn pipeline funnel */
+export interface AiTurnFunnelLike {
+	generationEligible: number
+	modelAttemptTurns: number
+	noUsableModelTurns: number
+	modelSuccessTurns: number
+	composerFallbackTurns: number
+	failedTurns: number
+}
+
 export interface AiMetricsReportLike {
 	version: string
 	generatedAt: string
@@ -52,6 +71,16 @@ export interface AiMetricsReportLike {
 		fallbackByReason: Record<string, number>
 		repair: { attempted: number; succeeded: number }
 	}
+	/** CAL-006: per-attempt breakdown; absent on older payloads */
+	attempts?: {
+		total: number
+		byOutcome: Record<string, number>
+		byProviderModel: Array<{ key: string; total: number; success: number }>
+		quotaExhaustedAttempts: number
+		failureSamples: AiFailureSampleLike[]
+	}
+	/** CAL-009: pipeline funnel; absent on older payloads */
+	funnel?: AiTurnFunnelLike
 	understanding: {
 		rewriteFallbackByReason: Record<string, number>
 		plannerFallbackByReason: Record<string, number>

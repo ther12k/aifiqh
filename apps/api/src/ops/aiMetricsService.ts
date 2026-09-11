@@ -79,6 +79,18 @@ export interface AiMetricsReport {
 		fallbackByReason: Record<string, number>
 		repair: { attempted: number; succeeded: number }
 	}
+	/** CAL-006: per-attempt breakdown for root-causing generation failures */
+	attempts: {
+		total: number
+		byOutcome: Record<string, number>
+		byProviderModel: Array<{ key: string; total: number; success: number }>
+		/** attempts whose error message carries a 429/usage-limit marker */
+		quotaExhaustedAttempts: number
+		/** most recent failures, newest first, capped at 5 */
+		failureSamples: AiFailureSample[]
+	}
+	/** CAL-009: pipeline funnel */
+	funnel: AiTurnFunnel
 	understanding: {
 		rewriteFallbackByReason: Record<string, number>
 		plannerFallbackByReason: Record<string, number>
@@ -133,6 +145,31 @@ export interface SloEntry {
 	unit: 'rate' | 'ms' | 'count'
 	actual: number | null
 	status: 'met' | 'breached' | 'no_data'
+}
+
+/** CAL-006: bounded recent model-attempt failure sample */
+export interface AiFailureSample {
+	at: string
+	provider: string
+	model: string
+	outcome: string
+	message: string | null
+}
+
+/** CAL-009: turn pipeline funnel — reconciles with turns/generation rates */
+export interface AiTurnFunnel {
+	/** generation-stage turns (abstain/escalate excluded) */
+	generationEligible: number
+	/** turns that made ≥1 model attempt */
+	modelAttemptTurns: number
+	/** generation-eligible turns with zero attempts (chain empty/kill-switch) */
+	noUsableModelTurns: number
+	/** answered by a model on some attempt */
+	modelSuccessTurns: number
+	/** answered by the deterministic composer after attempts failed */
+	composerFallbackTurns: number
+	/** terminal failures */
+	failedTurns: number
 }
 
 /**
@@ -327,12 +364,60 @@ export async function getAiMetrics(
 		}
 
 		// ---- chain attempts by outcome (AI-004, stored in metadata) -------
+		// one row per recorded attempt with provider/model/message so the
+		// CAL-006 breakdown (byOutcome, byProviderModel, failure samples,
+		// 429-quota detection) comes from the same source
 		const attemptRows = await tx<
 			{
+				provider: string | null
+				model: string | null
 				outcome: string | null
-				n: string
+				message: string | null
 			}[]
-		>`select att->>'outcome' as outcome, count(*) as n
+		>`select att->>'provider' as provider, att->>'model' as model,
+				att->>'outcome' as outcome, att->>'message' as message
+			from answers a
+			join messages m on m.id = a.message_id
+			join conversations c on c.id = m.conversation_id,
+			jsonb_array_elements(a.metadata->'attempts') att
+			where c.tenant_id = app_tenant()
+				and a.created_at >= ${since.toISOString()}
+				and jsonb_typeof(a.metadata->'attempts') = 'array'`
+		let attempts = 0
+		let successfulAttempts = 0
+		let citationFailedAttempts = 0
+		let quotaExhaustedAttempts = 0
+		const byOutcome: Record<string, number> = {}
+		const byProviderModel = new Map<
+			string,
+			{ total: number; success: number }
+		>()
+		for (const row of attemptRows) {
+			attempts += 1
+			const outcome = row.outcome ?? 'unknown'
+			byOutcome[outcome] = (byOutcome[outcome] ?? 0) + 1
+			if (outcome === 'success') successfulAttempts += 1
+			if (outcome === 'citation_validation_failed') citationFailedAttempts += 1
+			if (outcome !== 'success' && (row.message ?? '').includes('429'))
+				quotaExhaustedAttempts += 1
+			const key = `${row.provider ?? '?'}/${row.model ?? '?'}`
+			const agg = byProviderModel.get(key) ?? { total: 0, success: 0 }
+			agg.total += 1
+			if (outcome === 'success') agg.success += 1
+			byProviderModel.set(key, agg)
+		}
+
+		// most recent failure samples (bounded — first validation error surface)
+		const failureSampleRows = await tx<
+			{
+				created_at: string
+				provider: string | null
+				model: string | null
+				outcome: string | null
+				message: string | null
+			}[]
+		>`select a.created_at, att->>'provider' as provider, att->>'model' as model,
+				att->>'outcome' as outcome, att->>'message' as message
 			from answers a
 			join messages m on m.id = a.message_id
 			join conversations c on c.id = m.conversation_id,
@@ -340,17 +425,32 @@ export async function getAiMetrics(
 			where c.tenant_id = app_tenant()
 				and a.created_at >= ${since.toISOString()}
 				and jsonb_typeof(a.metadata->'attempts') = 'array'
-			group by 1`
-		let attempts = 0
-		let successfulAttempts = 0
-		let citationFailedAttempts = 0
-		for (const row of attemptRows) {
-			const n = Number(row.n)
-			attempts += n
-			if (row.outcome === 'success') successfulAttempts += n
-			if (row.outcome === 'citation_validation_failed')
-				citationFailedAttempts += n
-		}
+				and att->>'outcome' <> 'success'
+			order by a.created_at desc
+			limit 5`
+
+		// ---- CAL-009: turn pipeline funnel --------------------------------
+		const [funnelRow] = await tx<
+			{
+				model_attempt_turns: string
+				model_success_turns: string
+				composer_turns: string
+				failed_turns: string
+			}[]
+		>`select
+				count(*) filter (
+					where jsonb_typeof(a.metadata->'attempts') = 'array'
+						and jsonb_array_length(a.metadata->'attempts') > 0
+				) as model_attempt_turns,
+				count(*) filter (where a.metadata->>'generationSource' = 'model') as model_success_turns,
+				count(*) filter (where a.metadata->>'generationSource' = 'deterministic_composer') as composer_turns,
+				count(*) filter (where a.status = 'failed') as failed_turns
+			from answers a
+			join messages m on m.id = a.message_id
+			join conversations c on c.id = m.conversation_id
+			where c.tenant_id = app_tenant()
+				and a.created_at >= ${since.toISOString()}
+				and a.status in ('draft', 'validated', 'published', 'failed')`
 
 		// ---- claim support (middle verification layer) --------------------
 		const [claimRow] = await tx<{ evaluated: string; failed: string }[]>`
@@ -642,6 +742,32 @@ export async function getAiMetrics(
 					attempted: Number(repairRow.attempted),
 					succeeded: Number(repairRow.succeeded),
 				},
+			},
+			attempts: {
+				total: attempts,
+				byOutcome,
+				byProviderModel: [...byProviderModel.entries()]
+					.map(([key, agg]) => ({ key, ...agg }))
+					.sort((a, b) => b.total - a.total || a.key.localeCompare(b.key)),
+				quotaExhaustedAttempts,
+				failureSamples: failureSampleRows.map((r) => ({
+					at: new Date(r.created_at).toISOString(),
+					provider: r.provider ?? '?',
+					model: r.model ?? '?',
+					outcome: r.outcome ?? 'unknown',
+					message: r.message === null ? null : r.message.slice(0, 240),
+				})),
+			},
+			funnel: {
+				generationEligible: generationStageTurns,
+				modelAttemptTurns: Number(funnelRow.model_attempt_turns),
+				noUsableModelTurns: Math.max(
+					0,
+					generationStageTurns - Number(funnelRow.model_attempt_turns),
+				),
+				modelSuccessTurns: Number(funnelRow.model_success_turns),
+				composerFallbackTurns: Number(funnelRow.composer_turns),
+				failedTurns: Number(funnelRow.failed_turns),
 			},
 			understanding: {
 				rewriteFallbackByReason,

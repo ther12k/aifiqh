@@ -77,6 +77,57 @@ export function AiMetricsPanel(props: { report: AiMetricsReportLike }) {
 				</section>
 			) : null}
 
+			{report.funnel ? (
+				<section
+					className="ai-funnel"
+					aria-label="Funnel giliran"
+					data-testid="ai-funnel"
+				>
+					<h4>
+						Funnel giliran — {report.funnel.generationEligible} layak generasi
+						dari {report.turns.total} giliran
+					</h4>
+					<ul className="ai-reasons" data-testid="ai-funnel-list">
+						<li data-funnel="abstain-escalate">
+							{report.turns.abstained + report.turns.escalated} abstain/eskalasi
+							(tidak masuk generasi)
+						</li>
+						<li data-funnel="model-attempts">
+							{report.funnel.modelAttemptTurns} mencoba model ·{' '}
+							{report.funnel.noUsableModelTurns} tanpa model tersedia
+						</li>
+						<li data-funnel="model-success">
+							{report.funnel.modelSuccessTurns} terjawab oleh model
+						</li>
+						<li data-funnel="composer">
+							{report.funnel.composerFallbackTurns} fallback composer ·{' '}
+							{report.funnel.failedTurns} gagal
+						</li>
+					</ul>
+					{report.attempts && report.attempts.total > 0 ? (
+						<p className="ai-metric-meta" data-testid="ai-attempts-breakdown">
+							Upaya per keluaran:{' '}
+							{reasonEntries(report.attempts.byOutcome)
+								.map((e) => `${fallbackReasonLabel(e.reason)} ${e.count}`)
+								.join(' · ')}
+							{report.attempts.quotaExhaustedAttempts > 0
+								? ` · kuota proxy 429: ${report.attempts.quotaExhaustedAttempts}`
+								: ''}
+						</p>
+					) : null}
+					{report.attempts && report.attempts.failureSamples.length > 0 ? (
+						<ul className="ai-reasons" data-testid="ai-failure-samples">
+							{report.attempts.failureSamples.slice(0, 3).map((s) => (
+								<li key={`${s.at}-${s.provider}`}>
+									{fallbackReasonLabel(s.outcome)} · {s.provider}/{s.model}
+									{s.message ? ` — ${s.message.slice(0, 140)}` : ''}
+								</li>
+							))}
+						</ul>
+					) : null}
+				</section>
+			) : null}
+
 			<ul className="ai-metrics-cards" data-testid="ai-metric-cards">
 				<li className="ai-metric" data-metric="generation-success">
 					<span className="ai-metric-label">Keberhasilan generasi (upaya)</span>

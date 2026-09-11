@@ -232,4 +232,63 @@ describe('AiMetricsPanel', () => {
 		const html = render(h(AiMetricsPanel, { report: report() }))
 		expect(html).not.toContain('data-testid="ai-slo-table"')
 	})
+
+	test('renders the turn funnel, attempt breakdown and failure samples (CAL-006/009)', () => {
+		const html = render(
+			h(AiMetricsPanel, {
+				report: report({
+					turns: {
+						total: 41,
+						answered: 38,
+						abstained: 2,
+						escalated: 1,
+						failed: 0,
+						generationStage: 38,
+					},
+					funnel: {
+						generationEligible: 38,
+						modelAttemptTurns: 36,
+						noUsableModelTurns: 2,
+						modelSuccessTurns: 36,
+						composerFallbackTurns: 2,
+						failedTurns: 0,
+					},
+					attempts: {
+						total: 38,
+						byOutcome: { success: 36, provider_error: 2 },
+						byProviderModel: [
+							{ key: 'openai-main/glm-4.6', total: 36, success: 36 },
+						],
+						quotaExhaustedAttempts: 2,
+						failureSamples: [
+							{
+								at: '2026-09-11T07:54:08.170Z',
+								provider: 'openai-main',
+								model: 'glm/glm-4.6',
+								outcome: 'provider_error',
+								message: 'Provider returned 429: Usage limit reached',
+							},
+						],
+					},
+				}),
+			}),
+		)
+		expect(html).toContain('data-testid="ai-funnel"')
+		expect(html).toContain('38 layak generasi dari 41 giliran')
+		expect(html).toContain('3 abstain/eskalasi')
+		expect(html).toContain('36 mencoba model · 2 tanpa model tersedia')
+		expect(html).toContain('36 terjawab oleh model')
+		expect(html).toContain('2 fallback composer · 0 gagal')
+		// attempt breakdown with indonesian outcome labels + explicit 429 count
+		expect(html).toContain('Upaya per keluaran:')
+		expect(html).toContain('galat provider 2')
+		expect(html).toContain('kuota proxy 429: 2')
+		// bounded failure sample surfaces the raw provider message
+		expect(html).toContain('Provider returned 429: Usage limit reached')
+	})
+
+	test('funnel section is omitted on pre-CAL-009 payloads', () => {
+		const html = render(h(AiMetricsPanel, { report: report() }))
+		expect(html).not.toContain('data-testid="ai-funnel"')
+	})
 })
