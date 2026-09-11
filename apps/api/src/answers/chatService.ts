@@ -34,7 +34,7 @@ import {
 	executeMultiQueryLanePlan,
 } from '../retrieval/laneFusion'
 import { planAndPersistQuery } from '../retrieval/queryPlanner'
-import { HashRerankerProvider } from '../retrieval/reranker'
+import { resolveRerankerProvider } from '../retrieval/reranker'
 import { evaluateAnswerClaimSupport } from '../validation/claimSupportScorer'
 import { mapIntentToRuleVocabulary, planTurn } from './aiQueryPlanner'
 import { type VerificationStatus, deriveVerification } from './answerStatus'
@@ -657,6 +657,12 @@ async function runTurn(
 	const retrievalQueries = aiPlan.plan.retrievalQueries.filter(
 		(q) => q.trim().length >= 3,
 	)
+	// RAG-SEM-003: semantic reranker resolution (cohere, jina, cross_encoder)
+	// falls back to pure RRF fusion order when unconfigured (never crashes)
+	const rerankerResolution = await resolveRerankerProvider(
+		sql,
+		principal.tenantId,
+	)
 	const laneOptions = {
 		indexReleaseId,
 		filters: { madhhab: madhhabFilter.length > 0 ? madhhabFilter : undefined },
@@ -665,7 +671,7 @@ async function runTurn(
 			principal.tenantId,
 			indexReleaseId,
 		),
-		reranker: new HashRerankerProvider(),
+		reranker: rerankerResolution.provider ?? undefined,
 		evidence: { requestedMadhhab: options.ensureMadhhab ?? [] },
 	}
 	const outcome =
@@ -678,6 +684,27 @@ async function runTurn(
 					query: retrievalQueries[0] ?? rewrite.standaloneQuery,
 					...laneOptions,
 				})
+	// Record which reranker ran in the retrieval trace (RAG-SEM-003)
+	await sql`update query_plans
+			set plan = plan || ${sql.json({
+				rerank: outcome.rerank
+					? {
+							model: outcome.rerank.rerankerModel,
+							version: outcome.rerank.rerankerVersion,
+							fallbackUsed: outcome.rerank.fallbackUsed,
+							warning: outcome.rerank.warning ?? null,
+							batches: outcome.rerank.batches,
+							candidateCount: outcome.rerank.candidates.length,
+						}
+					: {
+							model: 'none',
+							version: 'none',
+							fallbackUsed: true,
+							warning: rerankerResolution.reason,
+						},
+			} as never)}
+			where trace_id = ${plan.traceId}::uuid`
+
 	const { identifier, quote } = outcome.lanes
 	const expansion = await expandEvidenceContext(
 		sql,

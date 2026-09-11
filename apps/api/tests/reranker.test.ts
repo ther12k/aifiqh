@@ -14,9 +14,12 @@ import { createLogger } from '../src/logger'
 import {
 	DEFAULT_RERANK_POLICY,
 	HashRerankerProvider,
+	RemoteRerankerProvider,
 	type RerankPolicy,
 	type RerankerProvider,
+	parseRerankResponse,
 	rerankCandidates,
+	resolveRerankerProvider,
 } from '../src/retrieval/reranker'
 import type { RetrievalCandidate } from '../src/retrieval/retrievalLanes'
 import { ensureMigrations } from './dbBootstrap'
@@ -361,6 +364,229 @@ describe('EVD-001: reranker adapter and relevance policy', () => {
 		)
 		for (const c of body.rerank.candidates) {
 			expect(verifiedIds.has(c.unitId)).toBeTrue()
+		}
+	})
+})
+
+describe('RAG-SEM-003: production semantic cross-encoder reranker', () => {
+	test('parseRerankResponse aligns scores by index across formats', () => {
+		// Cohere/Jina format
+		const cohereData = {
+			results: [
+				{ index: 1, relevance_score: 0.85 },
+				{ index: 0, relevance_score: 0.95 },
+			],
+		}
+		expect(parseRerankResponse(cohereData, 2)).toEqual([0.95, 0.85])
+
+		// TEI / alternative format with score
+		const teiData = {
+			data: [
+				{ index: 1, score: 0.12 },
+				{ index: 0, score: 0.88 },
+			],
+		}
+		expect(parseRerankResponse(teiData, 2)).toEqual([0.88, 0.12])
+
+		// Direct score array
+		expect(parseRerankResponse([0.9, 0.4], 2)).toEqual([0.9, 0.4])
+
+		// Empty / malformed
+		expect(parseRerankResponse(null, 2)).toEqual([0, 0])
+		expect(parseRerankResponse({}, 2)).toEqual([0, 0])
+	})
+
+	test('RemoteRerankerProvider calls mock endpoint and parses cross-encoder scores', async () => {
+		const captured: {
+			auth: string | null
+			body: Record<string, unknown> | null
+		} = { auth: null, body: null }
+
+		const mockFetch = async (
+			_url: string | URL | Request,
+			init?: RequestInit,
+		) => {
+			captured.auth =
+				(init?.headers as Record<string, string>)?.Authorization ?? null
+			captured.body = JSON.parse(init?.body as string)
+			return new Response(
+				JSON.stringify({
+					results: [
+						{ index: 0, relevance_score: 0.92 },
+						{ index: 1, relevance_score: 0.31 },
+					],
+				}),
+				{ status: 200, headers: { 'content-type': 'application/json' } },
+			)
+		}
+
+		const provider = new RemoteRerankerProvider({
+			baseUrl: 'https://api.cohere.com/v1',
+			apiKey: 'test-cohere-key',
+			modelId: 'rerank-v3.5',
+			fetchImpl: mockFetch as unknown as typeof fetch,
+		})
+
+		const scores = await provider.rerank('fiqih shalat', [
+			'bacaan fatihah dalam shalat',
+			'tata cara zakat fitrah',
+		])
+
+		expect(scores).toEqual([0.92, 0.31])
+		expect(captured.auth).toBe('Bearer test-cohere-key')
+		expect(captured.body?.model).toBe('rerank-v3.5')
+		expect(captured.body?.query).toBe('fiqih shalat')
+	})
+
+	test('RemoteRerankerProvider failure triggers fallback to fused order in rerankCandidates', async () => {
+		const failingFetch = async () => {
+			throw new Error('Connection refused to reranker host')
+		}
+
+		const provider = new RemoteRerankerProvider({
+			baseUrl: 'http://127.0.0.1:9999',
+			modelId: 'failing-reranker',
+			fetchImpl: failingFetch as unknown as typeof fetch,
+		})
+
+		const input = [
+			candidate('u1', 'dokumen satu', 0.9),
+			candidate('u2', 'dokumen dua', 0.8),
+		]
+
+		const outcome = await rerankCandidates(
+			null,
+			null,
+			'test query',
+			input,
+			provider,
+		)
+
+		// safe fallback to RRF order intact
+		expect(outcome.fallbackUsed).toBe(true)
+		expect(outcome.rerankerModel).toBe('none')
+		expect(outcome.warning).toContain('RERANKER_FAILED')
+		expect(outcome.candidates.map((c) => c.unitId)).toEqual(['u1', 'u2'])
+	})
+
+	test('resolveRerankerProvider respects kill switch AIFIQH_RERANK_MODEL=off', async () => {
+		const orig = process.env.AIFIQH_RERANK_MODEL
+		try {
+			process.env.AIFIQH_RERANK_MODEL = 'off'
+			const res = await resolveRerankerProvider(sql)
+			expect(res.status).toBe('disabled')
+			expect(res.reason).toBe('kill_switch')
+			expect(res.provider).toBeNull()
+		} finally {
+			process.env.AIFIQH_RERANK_MODEL = orig ?? ''
+		}
+	})
+
+	test('resolveRerankerProvider respects AIFIQH_RERANK_MODEL=hash', async () => {
+		const orig = process.env.AIFIQH_RERANK_MODEL
+		try {
+			process.env.AIFIQH_RERANK_MODEL = 'hash'
+			const res = await resolveRerankerProvider(sql)
+			expect(res.status).toBe('hash_local')
+			expect(res.provider).not.toBeNull()
+			expect(res.modelId).toBe('hash-rerank')
+		} finally {
+			process.env.AIFIQH_RERANK_MODEL = orig ?? ''
+		}
+	})
+
+	test('resolveRerankerProvider resolves configured alias rerank-production from database', async () => {
+		const suffix = crypto.randomUUID().slice(0, 8)
+		const providerKey = `rr-test-${suffix}`
+		const modelId = `bge-reranker-${suffix}`
+
+		process.env.TEST_RERANK_SECRET = 'secret-key-123'
+
+		const [prov] = await sql<{ id: string }[]>`
+				insert into provider_configs (key, provider, base_url, enabled)
+				values (${providerKey}, 'cross_encoder', 'https://rerank.test/v1', true)
+				returning id`
+
+		await sql`
+				insert into provider_secret_refs (provider_config_id, secret_ref, updated_at)
+				values (${prov.id}::uuid, 'env://TEST_RERANK_SECRET', now())`
+
+		const [model] = await sql<{ id: string }[]>`
+				insert into model_configs (provider_config_id, model_id, context_window)
+				values (${prov.id}::uuid, ${modelId}, 2048)
+				returning id`
+
+		await sql`
+				insert into configuration_aliases (alias, target_type, target_id, change_reason)
+				values ('rerank-production', 'model', ${model.id}::uuid, 'test reranker')
+				on conflict (alias) do update set
+					target_id = excluded.target_id,
+					change_reason = excluded.change_reason`
+
+		const orig = process.env.AIFIQH_RERANK_MODEL
+		try {
+			process.env.AIFIQH_RERANK_MODEL = ''
+			const res = await resolveRerankerProvider(sql)
+			expect(res.status).toBe('resolved')
+			expect(res.providerKey).toBe(providerKey)
+			expect(res.modelId).toBe(modelId)
+			expect(res.provider).not.toBeNull()
+			expect(res.provider?.modelId).toBe(modelId)
+		} finally {
+			process.env.AIFIQH_RERANK_MODEL = orig ?? ''
+			process.env.TEST_RERANK_SECRET = ''
+		}
+	})
+
+	test('resolveRerankerProvider returns unavailable when secret cannot be resolved', async () => {
+		const suffix = crypto.randomUUID().slice(0, 8)
+		const providerKey = `rr-nosecret-${suffix}`
+		const modelId = `bge-nosecret-${suffix}`
+
+		const [prov] = await sql<{ id: string }[]>`
+				insert into provider_configs (key, provider, base_url, enabled)
+				values (${providerKey}, 'cross_encoder', 'https://rerank.test/v1', true)
+				returning id`
+
+		await sql`
+				insert into provider_secret_refs (provider_config_id, secret_ref, updated_at)
+				values (${prov.id}::uuid, 'env://NON_EXISTENT_SECRET_VARIABLE_XYZ', now())`
+
+		const [model] = await sql<{ id: string }[]>`
+				insert into model_configs (provider_config_id, model_id, context_window)
+				values (${prov.id}::uuid, ${modelId}, 2048)
+				returning id`
+
+		await sql`
+				insert into configuration_aliases (alias, target_type, target_id, change_reason)
+				values ('rerank-production', 'model', ${model.id}::uuid, 'test reranker no secret')
+				on conflict (alias) do update set
+					target_id = excluded.target_id,
+					change_reason = excluded.change_reason`
+
+		const orig = process.env.AIFIQH_RERANK_MODEL
+		try {
+			process.env.AIFIQH_RERANK_MODEL = ''
+			const res = await resolveRerankerProvider(sql)
+			expect(res.status).toBe('unavailable')
+			expect(res.reason).toBe('secret_unavailable')
+			expect(res.provider).toBeNull()
+		} finally {
+			process.env.AIFIQH_RERANK_MODEL = orig ?? ''
+		}
+	})
+
+	test('resolveRerankerProvider falls back gracefully when alias is absent', async () => {
+		await sql`delete from configuration_aliases where alias = 'rerank-production'`
+		const orig = process.env.AIFIQH_RERANK_MODEL
+		try {
+			process.env.AIFIQH_RERANK_MODEL = ''
+			const res = await resolveRerankerProvider(sql)
+			expect(res.status).toBe('unavailable')
+			expect(res.reason).toBe('not_configured')
+			expect(res.provider).toBeNull()
+		} finally {
+			process.env.AIFIQH_RERANK_MODEL = orig ?? ''
 		}
 	})
 })
