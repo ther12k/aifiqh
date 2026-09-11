@@ -10,6 +10,12 @@ import {
 } from '../llm/modelRouter'
 import { resolveChatModelConfig } from '../llm/modelRouter'
 import {
+	closeQuotaDomain,
+	isQuotaExhaustion,
+	parseQuotaResetAt,
+	tripQuotaDomain,
+} from '../llm/quotaBreaker'
+import {
 	type ResponseDecisionOutcome,
 	decideResponse,
 	storeResponseDecision,
@@ -897,6 +903,8 @@ async function runTurn(
 			usedProvider = model.providerKey
 			usedModel = result.pinned?.modelId || model.modelId
 			fallbackReason = null
+			// CAL-010: a success proves the domain recovered — close its breaker
+			await closeQuotaDomain(sql, model.failureDomain ?? model.providerKey)
 			// citations follow the model's claim links — quotes stay verbatim
 			// unit text read from the pinned release, never model prose
 			const citedIds: string[] = []
@@ -950,6 +958,18 @@ async function runTurn(
 				completionTokens: call.completionTokens,
 				latencyMs: call.latencyMs,
 			})
+		}
+		// CAL-010: a quota-exhaustion failure trips the domain breaker —
+		// the next turns skip every candidate in the same domain until reset
+		if (reason === 'provider_error') {
+			const firstMessage = result.issues[0]?.message ?? ''
+			if (isQuotaExhaustion(firstMessage)) {
+				await tripQuotaDomain(sql, model.failureDomain ?? model.providerKey, {
+					message: firstMessage,
+					resetAt: parseQuotaResetAt(firstMessage, new Date()),
+					now: new Date(),
+				})
+			}
 		}
 		modelAttempts.push({
 			provider: model.providerKey,

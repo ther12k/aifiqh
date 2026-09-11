@@ -18,6 +18,10 @@
  *   LLM_EXTRA_BODY    JSON object merged into every request body of the
  *                     primary model (stored as capabilities.requestBody),
  *                     e.g. '{"thinking":{"type":"disabled"}}' for GLM
+ *   LLM_FAILURE_DOMAIN  failure domain label for the primary provider
+ *                     (CAL-010: the account/proxy/quota pool; default =
+ *                     the provider key). Providers sharing one quota pool
+ *                     get the SAME domain; independent ones differ.
  *
  * Usage: bun scripts/configure_model.ts
  */
@@ -34,6 +38,8 @@ const baseUrl = process.env.LLM_BASE_URL ?? 'https://api.openai.com/v1'
 const modelId = process.env.LLM_MODEL ?? 'gpt-4o-mini'
 const secretRef = process.env.LLM_SECRET_REF ?? 'env://OPENAI_API_KEY'
 const contextWindow = Number(process.env.LLM_CONTEXT_WINDOW ?? 128000)
+// CAL-010: failure domain — same value = same quota pool = NOT independent
+const failureDomain = process.env.LLM_FAILURE_DOMAIN ?? null
 // provider-specific request knobs stored on the model row as
 // capabilities.requestBody, e.g. '{"thinking":{"type":"disabled"}}' for GLM
 const extraBodyRaw = process.env.LLM_EXTRA_BODY
@@ -88,12 +94,13 @@ const masked = `${secretRef.slice(0, secretRef.indexOf('//') + 2)}••••${
 
 await sql.begin(async (tx) => {
 	const [provider] = await tx<{ id: string }[]>`
-		insert into provider_configs (key, provider, base_url, enabled)
-		values (${providerKey}, ${providerType}, ${baseUrl}, true)
+		insert into provider_configs (key, provider, base_url, enabled, failure_domain)
+		values (${providerKey}, ${providerType}, ${baseUrl}, true, ${failureDomain})
 		on conflict (key) do update set
 			provider = excluded.provider,
 			base_url = excluded.base_url,
-			enabled = true
+			enabled = true,
+			failure_domain = ${failureDomain}
 		returning id`
 
 	await tx`
@@ -155,6 +162,7 @@ if (fallbacksRaw?.trim()) {
 		secretRef?: string
 		contextWindow?: number
 		extraBody?: Record<string, unknown>
+		failureDomain?: string
 	}
 	let specs: FallbackSpec[]
 	try {
@@ -174,13 +182,15 @@ if (fallbacksRaw?.trim()) {
 			const fUrl = spec.baseUrl ?? baseUrl
 			const fSecret = spec.secretRef ?? secretRef
 			const fCtx = spec.contextWindow ?? contextWindow
+			const fDomain = spec.failureDomain ?? null
 			const [fProvider] = await tx<{ id: string }[]>`
-				insert into provider_configs (key, provider, base_url, enabled)
-				values (${fKey}, ${fType}, ${fUrl}, true)
+				insert into provider_configs (key, provider, base_url, enabled, failure_domain)
+				values (${fKey}, ${fType}, ${fUrl}, true, ${fDomain})
 				on conflict (key) do update set
 					provider = excluded.provider,
 					base_url = excluded.base_url,
-					enabled = true
+					enabled = true,
+					failure_domain = ${fDomain}
 				returning id`
 			await tx`
 				insert into provider_secret_refs (provider_config_id, secret_ref, updated_at)

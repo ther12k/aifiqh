@@ -14,6 +14,8 @@ import { OpenAICompatibleAdapter } from './openaiAdapter'
  * the deterministic built-in composer.
  */
 
+import { type DomainSkip, openQuotaDomains } from './quotaBreaker'
+
 export const CHAT_MODEL_ALIAS = 'chat-production'
 
 export interface ChatModelConfig {
@@ -24,6 +26,8 @@ export interface ChatModelConfig {
 	adapter: ModelProviderAdapter
 	/** how the api key was resolved (auditable, never the key itself) */
 	secretSource: string
+	/** CAL-010: failure domain (account/proxy/quota pool); null = the key itself */
+	failureDomain: string | null
 }
 
 /**
@@ -70,6 +74,8 @@ interface ResolvedRow {
 	model_id: string
 	secret_ref: string | null
 	capabilities: unknown
+	/** CAL-010: the account/proxy/quota pool behind this provider (null = the key itself) */
+	failure_domain: string | null
 }
 
 /**
@@ -114,7 +120,8 @@ export async function resolveChatModelDiagnostics(
 	if (aliasTarget.length > 0 && aliasTarget[0].target_type === 'model') {
 		rows = await sql<ResolvedRow[]>`
 			select pc.key as provider_key, pc.provider as provider_type,
-				pc.base_url, mc.model_id, psr.secret_ref, mc.capabilities
+				pc.base_url, mc.model_id, psr.secret_ref, mc.capabilities,
+				pc.failure_domain
 			from model_configs mc
 			join provider_configs pc on pc.id = mc.provider_config_id
 			left join provider_secret_refs psr on psr.provider_config_id = pc.id
@@ -125,7 +132,8 @@ export async function resolveChatModelDiagnostics(
 		const direct = aliasTarget.find((t) => t.target_type === 'provider')
 		rows = await sql<ResolvedRow[]>`
 			select pc.key as provider_key, pc.provider as provider_type,
-				pc.base_url, mc.model_id, psr.secret_ref, mc.capabilities
+				pc.base_url, mc.model_id, psr.secret_ref, mc.capabilities,
+				pc.failure_domain
 			from model_configs mc
 			join provider_configs pc on pc.id = mc.provider_config_id
 			left join provider_secret_refs psr on psr.provider_config_id = pc.id
@@ -161,6 +169,7 @@ export async function resolveChatModelDiagnostics(
 			modelId: row.model_id,
 			adapter,
 			secretSource: row.secret_ref ?? 'no-secret-ref',
+			failureDomain: row.failure_domain ?? null,
 		},
 		reason: 'resolved',
 	}
@@ -206,6 +215,8 @@ export interface ChatModelChain {
 	skipped: Array<{ position: number; reason: string }>
 	/** true when configuration_fallbacks contributed at least one entry */
 	hasFallbackConfigured: boolean
+	/** CAL-010: quota breaker — domains currently open (exhausted) */
+	quotaDomains: DomainSkip[]
 }
 
 /** provider knobs stored on the model row: capabilities.requestBody */
@@ -268,6 +279,7 @@ function configFromRow(row: {
 	model_id: string
 	secret_ref: string | null
 	capabilities: unknown
+	failure_domain?: string | null
 }): ChatModelConfig | null {
 	const apiKey = row.secret_ref ? resolveSecretRef(row.secret_ref) : null
 	if (row.secret_ref && !apiKey) return null
@@ -283,6 +295,7 @@ function configFromRow(row: {
 			extraBodyFromCapabilities(row.capabilities),
 		),
 		secretSource: row.secret_ref ?? 'no-secret-ref',
+		failureDomain: row.failure_domain ?? null,
 	}
 }
 
@@ -300,6 +313,7 @@ export async function resolveChatModelCandidates(
 		primaryReason: primary.reason,
 		skipped: [],
 		hasFallbackConfigured: false,
+		quotaDomains: [],
 	}
 	if (primary.config) {
 		chain.candidates.push({
@@ -341,7 +355,8 @@ export async function resolveChatModelCandidates(
 							capabilities: unknown
 						}[]
 					>`select pc.key as provider_key, pc.provider as provider_type,
-						pc.base_url, mc.model_id, psr.secret_ref, mc.capabilities
+						pc.base_url, mc.model_id, psr.secret_ref, mc.capabilities,
+						pc.failure_domain
 					from model_configs mc
 					join provider_configs pc on pc.id = mc.provider_config_id
 					left join provider_secret_refs psr on psr.provider_config_id = pc.id
@@ -357,7 +372,8 @@ export async function resolveChatModelCandidates(
 							capabilities: unknown
 						}[]
 					>`select pc.key as provider_key, pc.provider as provider_type,
-						pc.base_url, mc.model_id, psr.secret_ref, mc.capabilities
+						pc.base_url, mc.model_id, psr.secret_ref, mc.capabilities,
+						pc.failure_domain
 					from provider_configs pc
 					join model_configs mc on mc.provider_config_id = pc.id
 					left join provider_secret_refs psr on psr.provider_config_id = pc.id
@@ -396,6 +412,32 @@ export async function resolveChatModelCandidates(
 			position: row.position,
 			targetType: row.target_type as 'provider' | 'model',
 		})
+	}
+
+	// CAL-010: quota breaker — drop candidates whose failure domain is
+	// currently OPEN (429-exhausted). Fail-open: a broken breaker never skips.
+	try {
+		const open = await openQuotaDomains(sql, new Date())
+		if (open.size > 0) {
+			chain.quotaDomains = [...open.values()]
+			const kept: typeof chain.candidates = []
+			for (const candidate of chain.candidates) {
+				const domain =
+					candidate.config.failureDomain ?? candidate.config.providerKey
+				const skip = open.get(domain)
+				if (skip) {
+					chain.skipped.push({
+						position: candidate.position ?? 0,
+						reason: `quota_exhausted:${domain} (reset ${skip.resetAt ?? 'unknown'})`,
+					})
+					continue
+				}
+				kept.push(candidate)
+			}
+			chain.candidates = kept
+		}
+	} catch {
+		// breaker unavailable → attempt everything as before
 	}
 	return chain
 }

@@ -91,6 +91,13 @@ export interface AiMetricsReport {
 	}
 	/** CAL-009: pipeline funnel */
 	funnel: AiTurnFunnel
+	/** CAL-010: quota breaker state per failure domain (null reset = unknown) */
+	quotaFailureDomains: Array<{
+		domain: string
+		state: 'open' | 'closed'
+		resetAt: string | null
+		lastError: string | null
+	}>
 	understanding: {
 		rewriteFallbackByReason: Record<string, number>
 		plannerFallbackByReason: Record<string, number>
@@ -803,6 +810,29 @@ export async function getAiMetrics(
 				rewriteDegradationRate: rate(rewriteDegradations, planCount),
 				plannerDegradationRate: rate(plannerDegradations, planCount),
 			},
+			quotaFailureDomains: await (async () => {
+				try {
+					const rows = await tx<
+						{
+							key: string
+							state: 'open' | 'closed'
+							reset_at: string | null
+							last_error: string | null
+						}[]
+					>`select key, state, reset_at, last_error
+						from generation_quota_domains
+						order by state desc, key`
+					return rows.map((r) => ({
+						domain: r.key,
+						state: r.state,
+						resetAt: r.reset_at ? new Date(r.reset_at).toISOString() : null,
+						lastError:
+							r.last_error === null ? null : r.last_error.slice(0, 200),
+					}))
+				} catch {
+					return []
+				}
+			})(),
 			rerank: {
 				evaluatedPlans: rerankEvaluatedPlans,
 				fallbackRate: rate(rerankFallbacks, rerankEvaluatedPlans),
