@@ -61,7 +61,7 @@ async function setupSeed(): Promise<SeedContext> {
 		userId: user.id,
 		tenantId: tenant.id,
 		roles: ['tenant_admin'],
-		permissions: ['ops:read', 'chat:turn'],
+		permissions: ['ops:read'],
 		scopes: [],
 		actorType: 'user',
 	}
@@ -255,19 +255,23 @@ describe('getAiMetrics (OPS-AI-001)', () => {
 	test('GET /ops/ai-metrics endpoint requires ops:read and returns the report', async () => {
 		const seed = await setupSeed()
 		const sessionId = crypto.randomUUID()
+		const expiresDate = new Date(Date.now() + 600_000)
 		await issueSession(sql, {
 			sessionId,
 			userId: seed.userId,
 			tenantId: seed.tenantId,
 			issuer: 'http://localhost:4011',
 			subject: `sub-${seed.userId}`,
-			expiresAt: new Date(Date.now() + 600_000),
+			expiresAt: expiresDate,
 		})
 		const signed = signSession(
 			{
 				sessionId,
 				userId: seed.userId,
 				tenantId: seed.tenantId,
+				issuer: 'http://localhost:4011',
+				subject: `sub-${seed.userId}`,
+				expiresAt: expiresDate.toISOString(),
 			},
 			cfg.sessionSecret,
 		)
