@@ -6,7 +6,11 @@ import { newCsrfToken, signSession } from '../src/auth/session'
 import { issueSession } from '../src/auth/sessionStore'
 import { loadConfig } from '../src/config'
 import { createLogger } from '../src/logger'
-import { AI_METRICS_VERSION, getAiMetrics } from '../src/ops/aiMetricsService'
+import {
+	AI_METRICS_VERSION,
+	classifyPlannerFallbackReason,
+	getAiMetrics,
+} from '../src/ops/aiMetricsService'
 import { ensureMigrations } from './dbBootstrap'
 
 const DB_URL =
@@ -195,6 +199,20 @@ async function setupSeed(): Promise<SeedContext> {
 	return ctx
 }
 
+describe('classifyPlannerFallbackReason (CAL-007)', () => {
+	test('maps recorded reasons onto diagnosis classes; unknown → other', () => {
+		expect(classifyPlannerFallbackReason('model_failed')).toBe('provider_error')
+		expect(classifyPlannerFallbackReason('invalid_output')).toBe(
+			'invalid_json_schema',
+		)
+		expect(classifyPlannerFallbackReason('no_model')).toBe('model_unconfigured')
+		expect(classifyPlannerFallbackReason('planner_disabled')).toBe(
+			'model_unconfigured',
+		)
+		expect(classifyPlannerFallbackReason('some_future_reason')).toBe('other')
+	})
+})
+
 describe('getAiMetrics (OPS-AI-001)', () => {
 	beforeAll(async () => {
 		await setupSeed()
@@ -256,6 +274,11 @@ describe('getAiMetrics (OPS-AI-001)', () => {
 		expect(report.understanding.plannerDegradations).toBeGreaterThanOrEqual(1)
 		// no_history is benign, not counted as a degradation
 		expect(report.understanding.rewriteDegradations).toBe(0)
+
+		// CAL-007: planner fallbacks grouped into diagnosis classes
+		expect(
+			report.understanding.plannerFallbackByClass.invalid_json_schema,
+		).toBeGreaterThanOrEqual(1)
 
 		// CAL-005: degradation rates + rerank audit + end-to-end p95 latency
 		expect(report.understanding.rewriteDegradationRate).toBe(0)

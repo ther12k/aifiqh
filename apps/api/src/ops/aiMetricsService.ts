@@ -94,6 +94,9 @@ export interface AiMetricsReport {
 	understanding: {
 		rewriteFallbackByReason: Record<string, number>
 		plannerFallbackByReason: Record<string, number>
+		/** CAL-007: planner fallbacks grouped into diagnosis classes
+		 * (provider_error | invalid_json_schema | model_unconfigured | other) */
+		plannerFallbackByClass: Record<string, number>
 		/** degradations exclude the benign rewriter no_history reason */
 		rewriteDegradations: number
 		plannerDegradations: number
@@ -311,6 +314,22 @@ function parsePriceMetadata(raw: unknown): PriceMeta | null {
 /** benign rewriter fallback: the first turn of a conversation has no history */
 const BENIGN_REWRITE_REASONS = new Set(['no_history'])
 
+/**
+ * CAL-007: map recorded planner fallback reasons onto diagnosis classes so
+ * the next incident separates "shared upstream failure domain" (provider/
+ * quota — see CAL-010) from genuine planner output problems.
+ */
+const PLANNER_FALLBACK_CLASSES: Record<string, string> = {
+	model_failed: 'provider_error',
+	invalid_output: 'invalid_json_schema',
+	no_model: 'model_unconfigured',
+	planner_disabled: 'model_unconfigured',
+}
+
+export function classifyPlannerFallbackReason(reason: string): string {
+	return PLANNER_FALLBACK_CLASSES[reason] ?? 'other'
+}
+
 export async function getAiMetrics(
 	sql: Sql,
 	principal: Principal,
@@ -494,6 +513,7 @@ export async function getAiMetrics(
 				and a.created_at >= ${since.toISOString()}`
 		const rewriteFallbackByReason: Record<string, number> = {}
 		const plannerFallbackByReason: Record<string, number> = {}
+		const plannerFallbackByClass: Record<string, number> = {}
 		let rewriteDegradations = 0
 		let plannerDegradations = 0
 		let rerankEvaluatedPlans = 0
@@ -506,6 +526,11 @@ export async function getAiMetrics(
 			}
 			if (row.planner_reason !== null) {
 				bump(plannerFallbackByReason, row.planner_reason, 1)
+				bump(
+					plannerFallbackByClass,
+					classifyPlannerFallbackReason(row.planner_reason),
+					1,
+				)
 				plannerDegradations += 1
 			}
 			if (row.rerank_fallback !== null) {
@@ -772,6 +797,7 @@ export async function getAiMetrics(
 			understanding: {
 				rewriteFallbackByReason,
 				plannerFallbackByReason,
+				plannerFallbackByClass,
 				rewriteDegradations,
 				plannerDegradations,
 				rewriteDegradationRate: rate(rewriteDegradations, planCount),
