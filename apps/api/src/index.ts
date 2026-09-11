@@ -61,6 +61,10 @@ function serveStaticAsset(pathname: string): Response | null {
 
 const server = Bun.serve({
 	port: cfg.port,
+	// SSE needs room to breathe: the default 10s idle timeout resets
+	// streaming connections (e.g. UX-AI-001 progress) that go quiet between
+	// events. The progress endpoint heartbeats every 5s — 60s leaves margin.
+	idleTimeout: 60,
 	async fetch(req) {
 		const url = new URL(req.url)
 		if (

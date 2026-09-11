@@ -2508,7 +2508,8 @@ function sourceRoutes(deps: AppDeps) {
 							if (closed) return
 						}
 						const unsubscribe = turnProgress.subscribe(conversationId, send)
-						// heartbeat keeps proxies from killing the idle stream
+						// heartbeat (5s, well under Bun's 60s server idle timeout) keeps
+						// proxies and the server from killing the idle stream
 						timers.heartbeat = setInterval(() => {
 							if (closed) return
 							try {
@@ -2516,7 +2517,7 @@ function sourceRoutes(deps: AppDeps) {
 							} catch {
 								closed = true
 							}
-						}, 15_000)
+						}, 5_000)
 						// hard stop: a progress stream never outlives a turn by much
 						timers.stop = setTimeout(() => {
 							if (closed) return
