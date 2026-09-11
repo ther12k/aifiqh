@@ -150,8 +150,12 @@ export function ChatShell(props: {
 										<span />
 										<span />
 									</span>
-									<span className="typing-label">
-										Menelusuri dalil dari korpus terverifikasi…
+									<span
+										className="typing-label"
+										data-stage={state.streaming.stageLabel ? 'live' : 'idle'}
+									>
+										{state.streaming.stageLabel ??
+											'Menelusuri dalil dari korpus terverifikasi…'}
 									</span>
 								</div>
 							)}

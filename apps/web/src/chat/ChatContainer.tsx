@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { type Health, HealthPill } from '../components/HealthPill'
 import {
 	SessionChip,
@@ -16,6 +16,7 @@ import {
 	canSubmit,
 	clearError,
 	failStreaming,
+	setStreamStage,
 	startStreaming,
 } from '../lib/chatState'
 import {
@@ -34,6 +35,11 @@ import {
 } from '../lib/generationBadge'
 import { searchRouteFor } from '../lib/routes'
 import { threadTimeLabel, withDayDividers } from '../lib/threadView'
+import {
+	type TurnProgressEvent,
+	parseProgressEvent,
+	progressStageForTurn,
+} from '../lib/turnProgress'
 import { ChatShell, MessageParagraphs } from './ChatShell'
 
 function getCsrfToken(): string {
@@ -751,6 +757,8 @@ export function ChatContainer({
 	const [draft, setDraft] = useState('')
 	// the thread opens fresh immediately; only loadConversation flips this
 	const [loading, setLoading] = useState(false)
+	/** UX-AI-001: last seen progress seq per conversation (SSE replay cursor) */
+	const progressSeqRef = useRef<Map<string, number>>(new Map())
 	const [answersByMsg, setAnswersByMsg] = useState<
 		Record<string, StoredAnswer>
 	>({})
@@ -1043,6 +1051,32 @@ export function ChatContainer({
 			return startStreaming(s1, userMsgId, assistantMsgId)
 		})
 
+		// UX-AI-001: subscribe to PIPELINE STAGES (status only, never model
+		// tokens) before the POST. The per-conversation seq cursor keeps the
+		// replay to THIS turn (connect-gap coverage without clock skew); the
+		// server closes the stream on `done`.
+		const lastSeq = progressSeqRef.current.get(convId) ?? 0
+		const progressEvents: TurnProgressEvent[] = []
+		const progressSource = new EventSource(
+			`/conversations/${convId}/progress?since=${lastSeq}`,
+		)
+		progressSource.addEventListener('progress', (ev) => {
+			const parsed = parseProgressEvent((ev as MessageEvent<string>).data)
+			if (!parsed) return
+			progressSeqRef.current.set(
+				convId,
+				Math.max(progressSeqRef.current.get(convId) ?? 0, parsed.seq),
+			)
+			if (parsed.stage === 'done') {
+				progressSource.close()
+				return
+			}
+			progressEvents.push(parsed)
+			const view = progressStageForTurn(progressEvents, 0)
+			if (view) setChatState((prev) => setStreamStage(prev, view.label))
+		})
+		progressSource.onerror = () => progressSource.close()
+
 		try {
 			const res = await fetch(`/conversations/${convId}/messages`, {
 				method: 'POST',
@@ -1159,6 +1193,15 @@ export function ChatContainer({
 						: 'Terjadi kesalahan saat memproses jawaban',
 				),
 			)
+		} finally {
+			// the SSE lifecycle is bounded to the turn regardless of outcome
+			progressSource.close()
+			setChatState((prev) => {
+				if (prev.streaming && prev.streaming.stageLabel !== null) {
+					return { ...prev, streaming: { ...prev.streaming, stageLabel: null } }
+				}
+				return prev
+			})
 		}
 	}
 

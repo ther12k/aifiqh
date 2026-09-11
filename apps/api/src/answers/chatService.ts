@@ -45,6 +45,7 @@ import {
 } from './conversationContext'
 import { generateGroundedAnswer } from './generationPipeline'
 import { rewriteQuery } from './queryRewriter'
+import type { TurnStage } from './turnProgress'
 
 /**
  * Conversation + per-turn grounded answer API (CHAT-001).
@@ -213,7 +214,7 @@ export async function startConversation(
 	return { conversationId: conversation.id }
 }
 
-async function assertConversationAccess(
+export async function assertConversationAccess(
 	sql: Sql,
 	principal: Principal,
 	conversationId: string,
@@ -391,6 +392,8 @@ export interface TurnOptions {
 	ensureMadhhab?: string[]
 	contextProfile?: ContextProfileKind
 	mode?: 'grounded_only' | 'allow_general_knowledge'
+	/** UX-AI-001: pipeline stage notifications (status only, never tokens) */
+	onStage?: (stage: TurnStage) => void
 }
 
 /** Post a user turn and answer it with the full grounded pipeline. */
@@ -448,6 +451,16 @@ async function runTurn(
 	options: TurnOptions & { userMessageId: string },
 ): Promise<TurnResult> {
 	const { conversationId, content, userMessageId } = options
+	// UX-AI-001: pipeline stages are STATUS ONLY — no model tokens ever flow
+	// through this callback, and the answer still reaches the client only
+	// via the POST response after full validation
+	const emitStage = (stage: TurnStage) => {
+		try {
+			options.onStage?.(stage)
+		} catch {
+			// a broken progress subscriber never breaks the turn
+		}
+	}
 	let indexReleaseId = options.indexReleaseId
 	if (!indexReleaseId) {
 		const [aliasRow] = await sql<{ release_id: string }[]>`
@@ -630,6 +643,7 @@ async function runTurn(
 	// 2. retrieval + evidence + expansion — CHAT-AI-003: the planner's
 	// retrievalQueries drive the lanes; >1 query (comparisons) runs the
 	// multi-query plan (per-query fusion merged with query-level RRF)
+	emitStage('searching_sources')
 	const madhhabFilter = [
 		...new Set([
 			...(options.madhhab ?? []),
@@ -671,6 +685,7 @@ async function runTurn(
 		})),
 	)
 	// 3. assessment + decision
+	emitStage('checking_evidence')
 	const assessment = await assessEvidenceFromPipeline(
 		sql,
 		principal,
@@ -781,6 +796,7 @@ async function runTurn(
 
 	// attempt order: the chat-production alias first, then the configured
 	// fallback chain (AI-004) — kill-switch empties the whole chain
+	emitStage('composing_answer')
 	const chain = await resolveChatModelCandidates(sql)
 	for (const candidate of chain.candidates) {
 		const model = candidate.config
@@ -954,6 +970,9 @@ async function runTurn(
 	}
 
 	// 7. finalize: message + answer + claims + citations + trace close
+	// verification stage: covers citation integrity + claim support checks
+	// that ran inside the pipeline (incl. the single repair attempt)
+	emitStage('verifying_citations')
 	const finalized = await finalizeGroundedAnswer(sql, principal, {
 		conversationId,
 		traceId: plan.traceId,

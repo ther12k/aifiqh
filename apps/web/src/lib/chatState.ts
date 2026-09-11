@@ -30,6 +30,8 @@ export interface ChatShellState {
 		/** message the partial text belongs to */
 		messageId: string
 		text: string
+		/** UX-AI-001: live pipeline stage label; null keeps the static hint */
+		stageLabel: string | null
 	} | null
 	phase: ChatPhase
 	/** id of the in-flight request, set by the caller when starting */
@@ -111,8 +113,21 @@ export function startStreaming(
 		phase: 'streaming',
 		activeRequestId: requestId,
 		errorMessage: null,
-		streaming: { messageId: streamingMessageId, text: '' },
+		streaming: { messageId: streamingMessageId, text: '', stageLabel: null },
 	}
+}
+
+/**
+ * UX-AI-001: update the pipeline stage label while the turn runs. Status
+ * only — the answer text still arrives exclusively via the completed
+ * POST, after validation.
+ */
+export function setStreamStage(
+	state: ChatShellState,
+	stageLabel: string,
+): ChatShellState {
+	if (state.phase !== 'streaming' || !state.streaming) return state
+	return { ...state, streaming: { ...state.streaming, stageLabel } }
 }
 
 export function appendStreamChunk(

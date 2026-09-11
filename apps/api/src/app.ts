@@ -12,6 +12,7 @@ import {
 } from './answers/answerTraceService'
 import {
 	ChatError,
+	assertConversationAccess,
 	deleteConversation,
 	getConversation,
 	listConversations,
@@ -40,6 +41,11 @@ import {
 	listAnswerFeedback,
 	submitFeedback,
 } from './answers/feedbackService'
+import {
+	type TurnProgressEvent,
+	type TurnStage,
+	turnProgress,
+} from './answers/turnProgress'
 import { listAudit, recordAuditInTx } from './audit/audit'
 import type { OidcClient } from './auth/oidc'
 import { checkAccess, loadPrincipal } from './auth/policy'
@@ -2408,34 +2414,139 @@ function sourceRoutes(deps: AppDeps) {
 					ctx.set.status = 400
 					return { error: 'CONTENT_REQUIRED', message: 'content is required' }
 				}
+				// UX-AI-001: pipeline stages go to the progress bus (status
+				// only); 'done' always fires so SSE clients can close
+				const onStage = (stage: TurnStage) =>
+					turnProgress.publish(ctx.params.id, stage)
 				try {
-					return await scopedTransaction(sql, principal.tenantId, (tx) =>
-						postUserTurn(tx, principal, {
-							conversationId: ctx.params.id,
-							content,
-							indexReleaseId: bodyStr(body.indexReleaseId),
-							madhhab: bodyStrArray(body.madhhab),
-							ensureMadhhab: bodyStrArray(body.ensureMadhhab),
-							contextProfile: bodyStr(body.contextProfile) as
-								| 'exact'
-								| 'standard'
-								| 'comparative'
-								| 'research'
-								| 'document_audit'
-								| undefined,
-							mode: body.mode as
-								| 'grounded_only'
-								| 'allow_general_knowledge'
-								| undefined,
-						}),
+					const result = await scopedTransaction(
+						sql,
+						principal.tenantId,
+						(tx) =>
+							postUserTurn(tx, principal, {
+								conversationId: ctx.params.id,
+								content,
+								indexReleaseId: bodyStr(body.indexReleaseId),
+								madhhab: bodyStrArray(body.madhhab),
+								ensureMadhhab: bodyStrArray(body.ensureMadhhab),
+								contextProfile: bodyStr(body.contextProfile) as
+									| 'exact'
+									| 'standard'
+									| 'comparative'
+									| 'research'
+									| 'document_audit'
+									| undefined,
+								mode: body.mode as
+									| 'grounded_only'
+									| 'allow_general_knowledge'
+									| undefined,
+								onStage,
+							}),
 					)
+					turnProgress.publish(ctx.params.id, 'done')
+					return result
 				} catch (err) {
+					turnProgress.publish(ctx.params.id, 'done')
 					if (err instanceof ChatError) {
 						ctx.set.status = err.code === 'CONVERSATION_NOT_FOUND' ? 404 : 400
 						return { error: err.code, message: err.message }
 					}
 					throw err
 				}
+			})
+			// UX-AI-001: pipeline progress stream — SSE with replay from the
+			// `since` cursor. STATUS ONLY: no model tokens ever traverse this
+			// endpoint; the validated answer arrives via the POST response.
+			.get('/conversations/:id/progress', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				try {
+					await assertConversationAccess(sql, principal, ctx.params.id)
+				} catch (err) {
+					if (err instanceof ChatError) {
+						ctx.set.status = 404
+						return { error: 'CONVERSATION_NOT_FOUND' }
+					}
+					throw err
+				}
+				const since = Number(
+					new URL(ctx.request.url).searchParams.get('since') ?? '0',
+				)
+				let cursor =
+					Number.isFinite(since) && since >= 0 ? Math.floor(since) : 0
+				const conversationId = ctx.params.id
+				const encoder = new TextEncoder()
+				// stream-lifecycle cleanup: unsubscribe + clear timers
+				let cleanup: (() => void) | null = null
+				const stream = new ReadableStream<Uint8Array>({
+					start(controller) {
+						let closed = false
+						// declared before `send`: a replayed `done` fires during the
+						// synchronous replay loop, before the timers are created
+						const timers: {
+							heartbeat?: ReturnType<typeof setInterval>
+							stop?: ReturnType<typeof setTimeout>
+						} = {}
+						const send = (event: TurnProgressEvent) => {
+							if (closed) return
+							controller.enqueue(
+								encoder.encode(
+									`id: ${event.seq}\nevent: progress\ndata: ${JSON.stringify(event)}\n\n`,
+								),
+							)
+							cursor = Math.max(cursor, event.seq)
+							if (event.stage === 'done') {
+								closed = true
+								if (timers.heartbeat) clearInterval(timers.heartbeat)
+								if (timers.stop) clearTimeout(timers.stop)
+								controller.close()
+							}
+						}
+						// replay everything the client missed, then follow live
+						for (const event of turnProgress.replay(conversationId, cursor)) {
+							send(event)
+							if (closed) return
+						}
+						const unsubscribe = turnProgress.subscribe(conversationId, send)
+						// heartbeat keeps proxies from killing the idle stream
+						timers.heartbeat = setInterval(() => {
+							if (closed) return
+							try {
+								controller.enqueue(encoder.encode(': ping\n\n'))
+							} catch {
+								closed = true
+							}
+						}, 15_000)
+						// hard stop: a progress stream never outlives a turn by much
+						timers.stop = setTimeout(() => {
+							if (closed) return
+							closed = true
+							if (timers.heartbeat) clearInterval(timers.heartbeat)
+							try {
+								controller.close()
+							} catch {
+								// already closed
+							}
+						}, 5 * 60_000)
+						cleanup = () => {
+							unsubscribe()
+							if (timers.heartbeat) clearInterval(timers.heartbeat)
+							if (timers.stop) clearTimeout(timers.stop)
+						}
+					},
+					cancel() {
+						cleanup?.()
+						cleanup = null
+					},
+				})
+				return new Response(stream, {
+					headers: {
+						'content-type': 'text/event-stream; charset=utf-8',
+						'cache-control': 'no-cache, no-transform',
+						connection: 'keep-alive',
+						'x-accel-buffering': 'no',
+					},
+				})
 			})
 			.post('/conversations/:id/retry', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
