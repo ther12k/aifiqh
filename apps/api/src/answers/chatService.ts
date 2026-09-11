@@ -38,7 +38,11 @@ import { HashRerankerProvider } from '../retrieval/reranker'
 import { evaluateAnswerClaimSupport } from '../validation/claimSupportScorer'
 import { mapIntentToRuleVocabulary, planTurn } from './aiQueryPlanner'
 import { type VerificationStatus, deriveVerification } from './answerStatus'
-import { finalizeGroundedAnswer } from './answerTraceService'
+import {
+	type AnswerTurnMetadata,
+	type TurnInvocationRecord,
+	finalizeGroundedAnswer,
+} from './answerTraceService'
 import {
 	loadConversationContext,
 	summarizeConversationContext,
@@ -787,6 +791,8 @@ async function runTurn(
 	let fallbackReason: GenerationFallbackReason | null = null
 	// AI-004: every model attempt this turn made, in order
 	const modelAttempts: ModelAttempt[] = []
+	// OPS-AI-001: every real model call of this turn, with usage/latency
+	const invocationRecords: TurnInvocationRecord[] = []
 
 	const evidenceTexts: Record<string, string> = {}
 	for (const id of includedUnitIds) {
@@ -833,6 +839,10 @@ async function runTurn(
 						text: res.text,
 						finishReason: res.finishReason,
 						modelId: res.modelId,
+						usage: {
+							promptTokens: res.usage.promptTokens,
+							completionTokens: res.usage.completionTokens,
+						},
 					}
 				} catch (err) {
 					// provider without stream support → classic non-streaming call
@@ -845,6 +855,10 @@ async function runTurn(
 							text: res.text,
 							finishReason: res.finishReason,
 							modelId: res.modelId,
+							usage: {
+								promptTokens: res.usage.promptTokens,
+								completionTokens: res.usage.completionTokens,
+							},
 						}
 					}
 					throw err
@@ -879,6 +893,16 @@ async function runTurn(
 						: null
 				})
 				.filter((c): c is NonNullable<typeof c> => c !== null)
+			// OPS-AI-001: usage/latency of each call this attempt made
+			for (const call of result.invocations) {
+				invocationRecords.push({
+					provider: model.providerKey,
+					model: model.modelId,
+					promptTokens: call.promptTokens,
+					completionTokens: call.completionTokens,
+					latencyMs: call.latencyMs,
+				})
+			}
 			modelAttempts.push({
 				provider: model.providerKey,
 				model: model.modelId,
@@ -890,6 +914,16 @@ async function runTurn(
 		// this candidate failed — record why and try the next one in the
 		// chain (the deterministic composer remains the final fallback)
 		const reason = fallbackReasonFromGeneration(result.issues)
+		// OPS-AI-001: the failed attempt's calls still cost tokens
+		for (const call of result.invocations) {
+			invocationRecords.push({
+				provider: model.providerKey,
+				model: model.modelId,
+				promptTokens: call.promptTokens,
+				completionTokens: call.completionTokens,
+				latencyMs: call.latencyMs,
+			})
+		}
 		modelAttempts.push({
 			provider: model.providerKey,
 			model: model.modelId,
@@ -927,6 +961,17 @@ async function runTurn(
 				modelId: 'compose-from-evidence',
 			}),
 		})
+		// OPS-AI-001: the deterministic composer's pass is recorded too, so
+		// fallback turns are visible in the per-turn series
+		for (const call of generation.invocations) {
+			invocationRecords.push({
+				provider: 'builtin-compose',
+				model: 'compose-from-evidence',
+				promptTokens: call.promptTokens,
+				completionTokens: call.completionTokens,
+				latencyMs: call.latencyMs,
+			})
+		}
 	}
 
 	if (generation.status !== 'generated' || !generation.answer) {
@@ -937,9 +982,24 @@ async function runTurn(
 			values (${conversationId}::uuid, ${ordinal}, 'assistant', 'Gagal menyusun jawaban.', ${plan.traceId}::uuid)
 			returning id`
 		const [answerRow] = await sql<{ id: string }[]>`
-			insert into answers (message_id, trace_id, status)
-			values (${message.id}::uuid, ${plan.traceId}::uuid, 'failed') returning id`
+			insert into answers (message_id, trace_id, status, metadata)
+			values (${message.id}::uuid, ${plan.traceId}::uuid, 'failed',
+				${sql.json({
+					fallbackReason,
+					generationSource: 'none',
+					attempts: modelAttempts,
+				} as never)})
+			returning id`
 		await sql`update messages set answer_id = ${answerRow.id}::uuid where id = ${message.id}::uuid`
+		for (const inv of invocationRecords) {
+			await sql`
+				insert into model_invocations (
+					answer_id, provider, model, prompt_tokens, completion_tokens, latency_ms
+				) values (
+					${answerRow.id}::uuid, ${inv.provider}, ${inv.model},
+					${inv.promptTokens ?? 0}, ${inv.completionTokens ?? 0}, ${inv.latencyMs ?? null}
+				)`
+		}
 		return {
 			conversationId,
 			userMessageId,
@@ -973,6 +1033,26 @@ async function runTurn(
 	// verification stage: covers citation integrity + claim support checks
 	// that ran inside the pipeline (incl. the single repair attempt)
 	emitStage('verifying_citations')
+	// middle verification layer (#109): does the cited evidence actually
+	// support the specific material claims (no polarity reversal / dropped
+	// conditions)? Pure — computed BEFORE finalize so the verdict travels
+	// with the answer metadata (OPS-AI-001).
+	const claimSupportEval = generation.answer
+		? evaluateAnswerClaimSupport(generation.answer, evidenceTexts)
+		: { allSupported: true, claimScores: [] }
+	// OPS-AI-001: turn-level generation summary for the ops dashboard
+	const turnMetadata: AnswerTurnMetadata = {
+		fallbackReason,
+		generationSource:
+			usedProvider === 'builtin-compose' ? 'deterministic_composer' : 'model',
+		attempts: modelAttempts,
+		claimSupport: {
+			allSupported: claimSupportEval.allSupported,
+			unsupportedLinks: claimSupportEval.claimScores.filter(
+				(s) => s.verdict !== 'supported',
+			).length,
+		},
+	}
 	const finalized = await finalizeGroundedAnswer(sql, principal, {
 		conversationId,
 		traceId: plan.traceId,
@@ -982,13 +1062,10 @@ async function runTurn(
 		model: usedModel,
 		// LLM-REPAIR-001: the attempt is auditable on the answer row
 		repairTrace: generation.repair,
+		// OPS-AI-001: usage series + turn summary persisted on the answer
+		invocations: invocationRecords,
+		metadata: turnMetadata,
 	})
-
-	// middle verification layer (#109): does the cited evidence actually
-	// support the specific material claims (no polarity reversal / dropped conditions)?
-	const claimSupportEval = generation.answer
-		? evaluateAnswerClaimSupport(generation.answer, evidenceTexts)
-		: { allSupported: true }
 
 	return {
 		conversationId,

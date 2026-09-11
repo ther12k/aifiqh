@@ -29,6 +29,35 @@ export class AnswerTraceError extends Error {
 	}
 }
 
+/** OPS-AI-001: one real model call of this turn (provider latency / tokens series) */
+export interface TurnInvocationRecord {
+	provider: string
+	model: string
+	promptTokens: number | null
+	completionTokens: number | null
+	latencyMs: number | null
+}
+
+/**
+ * OPS-AI-001: turn-level generation summary stored on answers.metadata and
+ * aggregated by the ops dashboard. The fallback vocabulary is AI-002's.
+ */
+export interface AnswerTurnMetadata {
+	/** AI-002 structured fallback reason (null when a model produced the answer) */
+	fallbackReason: string | null
+	generationSource: 'model' | 'deterministic_composer' | 'none'
+	/** AI-004 chain attempts with their per-attempt outcome */
+	attempts: Array<{
+		provider: string
+		model: string
+		source: string
+		outcome: string
+	}>
+	/** middle verification layer: do cited passages support the material claims
+	 * (unsupportedLinks = claim-evidence pairs the scorer rejected) */
+	claimSupport?: { allSupported: boolean; unsupportedLinks: number }
+}
+
 export interface FinalizeAnswerInput {
 	conversationId: string
 	/** retrieval trace created by the retrieval pipeline (must be running) */
@@ -58,6 +87,10 @@ export interface FinalizeAnswerInput {
 			| 'skipped_incomplete_generation'
 		instruction: string | null
 	}
+	/** OPS-AI-001: model calls to persist (tokens + latency series) */
+	invocations?: TurnInvocationRecord[]
+	/** OPS-AI-001: turn-level generation summary for the ops dashboard */
+	metadata?: AnswerTurnMetadata
 }
 
 export interface FinalizeResult {
@@ -111,15 +144,28 @@ export async function finalizeGroundedAnswer(
 		const [answer] = await tx<{ id: string }[]>`
 			insert into answers (
 				message_id, trace_id, prompt_version_id, model_config_id,
-				provider, model, status
+				provider, model, status, metadata
 			) values (
 				${message.id}::uuid, ${input.traceId}::uuid,
 				${input.promptVersionId ? sql`${input.promptVersionId}::uuid` : null},
 				${input.modelConfigId ? sql`${input.modelConfigId}::uuid` : null},
-				${input.provider ?? null}, ${input.model ?? null}, 'draft'
+				${input.provider ?? null}, ${input.model ?? null}, 'draft',
+				${sql.json((input.metadata ?? {}) as never)}
 			)
 			returning id`
 		await tx`update messages set answer_id = ${answer.id}::uuid where id = ${message.id}::uuid`
+
+		// OPS-AI-001: one row per real model call — the provider latency and
+		// tokens-per-turn series on the ops dashboard aggregate these
+		for (const inv of input.invocations ?? []) {
+			await tx`
+				insert into model_invocations (
+					answer_id, provider, model, prompt_tokens, completion_tokens, latency_ms
+				) values (
+					${answer.id}::uuid, ${inv.provider}, ${inv.model},
+					${inv.promptTokens ?? 0}, ${inv.completionTokens ?? 0}, ${inv.latencyMs ?? null}
+				)`
+		}
 
 		// LLM-REPAIR-001: persist the single bounded repair attempt — the
 		// schema pins attempt_no = 1, so a second repair can never be stored

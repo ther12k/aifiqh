@@ -63,10 +63,24 @@ export interface GenerateAnswerInput {
 		messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
 		responseFormat: 'text' | 'json_object'
 		promptVersion: string
-	}) => Promise<{ text: string; finishReason: string; modelId?: string }>
+	}) => Promise<{
+		text: string
+		finishReason: string
+		modelId?: string
+		/** OPS-AI-001: usage from the gateway when the provider reports it */
+		usage?: { promptTokens: number; completionTokens: number }
+	}>
 }
 
 export type GenerationStatus = 'generated' | 'abstained' | 'failed'
+
+/** OPS-AI-001: usage/latency of ONE real model call, in call order */
+export interface ModelCallTrace {
+	role: 'generation' | 'repair'
+	promptTokens: number | null
+	completionTokens: number | null
+	latencyMs: number
+}
 
 /** LLM-REPAIR-001: exactly one bounded repair attempt, fully traced */
 export interface RepairTrace {
@@ -90,6 +104,8 @@ export interface GenerationResult {
 	/** the raw model output of the LAST attempt, kept for failure forensics */
 	rawOutput: string | null
 	repair: RepairTrace
+	/** OPS-AI-001: every model call this pipeline run made, in order */
+	invocations: ModelCallTrace[]
 }
 
 /** CHAT-AI-004: separated understanding block — never cited, never evidence */
@@ -197,6 +213,7 @@ export async function generateGroundedAnswer(
 				issueCountBefore: 0,
 				issueCountAfter: 0,
 			},
+			invocations: [],
 		}
 	}
 
@@ -244,11 +261,20 @@ export async function generateGroundedAnswer(
 		  }
 
 	// the SAME validator stack for every attempt (LLM-REPAIR-001): gateway
-	// invariants → JSON parse → schema → grounding gate → quote gate
+	// invariants → JSON parse → schema → grounding gate → quote gate.
+	// OPS-AI-001: every call is timed and its usage recorded in call order.
+	const callTrace: ModelCallTrace[] = []
 	const validateAttempt = async (
 		messages: Array<{ role: 'system' | 'user'; content: string }>,
+		role: ModelCallTrace['role'],
 	): Promise<AttemptOutcome> => {
-		let response: { text: string; finishReason: string; modelId?: string }
+		const startedAt = Date.now()
+		let response: {
+			text: string
+			finishReason: string
+			modelId?: string
+			usage?: { promptTokens: number; completionTokens: number }
+		}
 		try {
 			response = await input.generate({
 				messages,
@@ -256,6 +282,12 @@ export async function generateGroundedAnswer(
 				promptVersion: PROMPT_VERSION,
 			})
 		} catch (err) {
+			callTrace.push({
+				role,
+				promptTokens: null,
+				completionTokens: null,
+				latencyMs: Date.now() - startedAt,
+			})
 			// gateway failure is a failed generation, never a partial draft
 			return {
 				kind: 'gateway_error',
@@ -269,6 +301,12 @@ export async function generateGroundedAnswer(
 				],
 			}
 		}
+		callTrace.push({
+			role,
+			promptTokens: response.usage?.promptTokens ?? null,
+			completionTokens: response.usage?.completionTokens ?? null,
+			latencyMs: Date.now() - startedAt,
+		})
 		pinned.modelId = response.modelId ?? pinned.modelId
 
 		if (response.finishReason !== 'stop') {
@@ -384,10 +422,13 @@ export async function generateGroundedAnswer(
 	}
 
 	// attempt 1
-	const first = await validateAttempt([
-		{ role: 'system', content: systemPrompt },
-		{ role: 'user', content: userPrompt },
-	])
+	const first = await validateAttempt(
+		[
+			{ role: 'system', content: systemPrompt },
+			{ role: 'user', content: userPrompt },
+		],
+		'generation',
+	)
 	if (first.kind === 'generated') {
 		return {
 			status: 'generated',
@@ -402,6 +443,7 @@ export async function generateGroundedAnswer(
 				issueCountBefore: 0,
 				issueCountAfter: 0,
 			},
+			invocations: callTrace,
 		}
 	}
 	if (first.kind === 'gateway_error') {
@@ -418,6 +460,7 @@ export async function generateGroundedAnswer(
 				issueCountBefore: 1,
 				issueCountAfter: 1,
 			},
+			invocations: callTrace,
 		}
 	}
 	if (first.kind === 'incomplete') {
@@ -436,6 +479,7 @@ export async function generateGroundedAnswer(
 				issueCountBefore: 1,
 				issueCountAfter: 1,
 			},
+			invocations: callTrace,
 		}
 	}
 
@@ -454,10 +498,13 @@ export async function generateGroundedAnswer(
 		instruction,
 	].join('\n\n')
 
-	const second = await validateAttempt([
-		{ role: 'system', content: systemPrompt },
-		{ role: 'user', content: repairUserPrompt },
-	])
+	const second = await validateAttempt(
+		[
+			{ role: 'system', content: systemPrompt },
+			{ role: 'user', content: repairUserPrompt },
+		],
+		'repair',
+	)
 	if (second.kind === 'generated') {
 		return {
 			status: 'generated',
@@ -472,6 +519,7 @@ export async function generateGroundedAnswer(
 				issueCountBefore: first.issues.length,
 				issueCountAfter: 0,
 			},
+			invocations: callTrace,
 		}
 	}
 
@@ -489,5 +537,6 @@ export async function generateGroundedAnswer(
 			issueCountBefore: first.issues.length,
 			issueCountAfter: second.issues.length,
 		},
+		invocations: callTrace,
 	}
 }

@@ -196,6 +196,7 @@ import {
 	restoreCorrection,
 	saveCorrection,
 } from './ocr/ocrCorrectionService'
+import { getAiMetrics } from './ops/aiMetricsService'
 import {
 	OpsError,
 	getOpsStatus,
@@ -2955,6 +2956,14 @@ function sourceRoutes(deps: AppDeps) {
 				const ctx = rawCtx as unknown as HandlerCtx
 				const principal = await ctx.requirePermission('ops:read')
 				return getOpsStatus(sql, principal)
+			})
+			.get('/ops/ai-metrics', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('ops:read')
+				const url = new URL(ctx.request.url)
+				const windowHours =
+					Number(url.searchParams.get('windowHours') ?? '') || undefined
+				return getAiMetrics(sql, principal, { windowHours })
 			})
 			.post('/eval/sets', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx

@@ -5357,3 +5357,137 @@ h2 {
 	color: var(--gold-deep);
 	font-weight: 600;
 }
+
+/* ==========================================================================
+   AI/RAG telemetry on the ops dashboard (OPS-AI-001)
+   ========================================================================== */
+.ai-metrics {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	margin-top: 8px;
+}
+
+.ai-metrics h3 {
+	margin: 0;
+	font-size: 15px;
+}
+
+.ai-metrics h4 {
+	margin: 0 0 8px;
+	font-size: 13px;
+	color: var(--text-muted);
+}
+
+.ai-metrics-cards {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+	gap: 12px;
+}
+
+.ai-metric {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	padding: 14px 16px;
+	box-shadow: var(--shadow-sm);
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.ai-metric-label {
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: 0.02em;
+	color: var(--text-muted);
+}
+
+.ai-metric-value {
+	font-size: 22px;
+	font-weight: 800;
+	font-variant-numeric: tabular-nums;
+}
+
+.ai-metric-meta {
+	font-size: 12px;
+	color: var(--text-faint);
+}
+
+.ai-metrics-detail {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+	gap: 12px;
+}
+
+.ai-metrics-col {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	padding: 14px 16px;
+	box-shadow: var(--shadow-sm);
+}
+
+.ai-reasons {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	font-size: 13px;
+}
+
+.ai-reasons li[data-reason] {
+	display: flex;
+	justify-content: space-between;
+	gap: 10px;
+	border-bottom: 1px dashed var(--border-soft);
+	padding-bottom: 4px;
+}
+
+.ai-reasons-empty {
+	color: var(--text-faint);
+}
+
+.ai-providers {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	padding: 14px 16px;
+	box-shadow: var(--shadow-sm);
+}
+
+.ai-provider-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 13px;
+}
+
+.ai-provider-table th,
+.ai-provider-table td {
+	text-align: left;
+	padding: 6px 10px 6px 0;
+	border-bottom: 1px solid var(--border-soft);
+	font-variant-numeric: tabular-nums;
+}
+
+.ai-provider-table th {
+	font-size: 11.5px;
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+	color: var(--text-faint);
+}
+
+.ai-providers-empty td {
+	color: var(--text-faint);
+}
+
+.ai-generated {
+	margin: 0;
+	font-size: 12.5px;
+	color: var(--text-faint);
+}
