@@ -5491,3 +5491,23 @@ h2 {
 	font-size: 12.5px;
 	color: var(--text-faint);
 }
+
+/* CAL-005: SLO status chips inside the AI telemetry panel */
+.ai-slos {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	padding: 14px 16px;
+	box-shadow: var(--shadow-sm);
+}
+
+.ai-slos h4 {
+	margin: 0 0 8px;
+	font-size: 13px;
+	color: var(--text-muted);
+}
+
+.ai-slo-nodata {
+	background: var(--border-soft);
+	color: var(--text-faint);
+}

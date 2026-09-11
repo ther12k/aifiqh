@@ -9,7 +9,10 @@ import {
 	fallbackReasonLabel,
 	formatCost,
 	formatRate,
+	formatSloTarget,
+	formatSloValue,
 	reasonEntries,
+	sloStatusLabel,
 } from '../src/lib/aiMetrics'
 import { AiMetricsPanel } from '../src/ops/AiMetricsPanel'
 
@@ -115,6 +118,19 @@ describe('aiMetrics lib', () => {
 		expect(formatCost(null, 'USD')).toBe('—')
 		expect(formatCost(1.5, null)).toBe('1,5000 USD')
 	})
+
+	test('SLO helpers format targets and statuses in Indonesian', () => {
+		expect(sloStatusLabel('met')).toBe('terpenuhi')
+		expect(sloStatusLabel('breached')).toBe('melewati batas')
+		expect(sloStatusLabel('no_data')).toBe('belum ada data')
+		expect(formatSloTarget(0.95, '>', 'rate')).toBe('≥ 95,0%')
+		expect(formatSloTarget(0.05, '<', 'rate')).toBe('< 5,0%')
+		expect(formatSloTarget(15000, '<', 'ms')).toBe('< 15.000 ms')
+		expect(formatSloTarget(0, '=', 'count')).toBe('= 0')
+		expect(formatSloValue(null, 'rate')).toBe('—')
+		expect(formatSloValue(0.031, 'rate')).toBe('3,1%')
+		expect(formatSloValue(4200.5, 'ms')).toBe('4.200,5 ms')
+	})
 })
 
 describe('AiMetricsPanel', () => {
@@ -162,5 +178,58 @@ describe('AiMetricsPanel', () => {
 		expect(html).toContain('belum ada run evaluasi')
 		expect(html).toContain('Tidak ada fallback.')
 		expect(html).toContain('—')
+	})
+
+	test('renders the SLO table with met/breached/no-data chips (CAL-005)', () => {
+		const html = render(
+			h(AiMetricsPanel, {
+				report: report({
+					slos: [
+						{
+							key: 'generation_attempt_success',
+							label: 'Keberhasilan generasi (upaya model)',
+							target: 0.95,
+							comparator: '>',
+							unit: 'rate',
+							actual: 0.97,
+							status: 'met',
+						},
+						{
+							key: 'reranker_fallback',
+							label: 'Fallback reranker produksi',
+							target: 0.01,
+							comparator: '<',
+							unit: 'rate',
+							actual: 1,
+							status: 'breached',
+						},
+						{
+							key: 'chat_p95_latency',
+							label: 'Latensi p95 giliran obrolan',
+							target: 15000,
+							comparator: '<',
+							unit: 'ms',
+							actual: null,
+							status: 'no_data',
+						},
+					],
+				}),
+			}),
+		)
+		expect(html).toContain('data-testid="ai-slo-table"')
+		expect(html).toContain('1/3 terpenuhi')
+		expect(html).toContain('data-slo-status="met"')
+		expect(html).toContain('data-slo-status="breached"')
+		expect(html).toContain('data-slo-status="no_data"')
+		expect(html).toContain('terpenuhi')
+		expect(html).toContain('melewati batas')
+		expect(html).toContain('belum ada data')
+		expect(html).toContain('≥ 95,0%')
+		expect(html).toContain('&lt; 15.000 ms')
+	})
+
+	test('omits the SLO section entirely on pre-CAL-005 payloads', () => {
+		const html = render(h(AiMetricsPanel, { report: report() }))
+		expect(html).not.toContain('data-testid="ai-slo-table"')
 	})
 })

@@ -21,6 +21,16 @@ export interface AiProviderUsageLike {
 	costUsd: number | null
 }
 
+export interface SloEntryLike {
+	key: string
+	label: string
+	target: number
+	comparator: '<' | '>' | '='
+	unit: 'rate' | 'ms' | 'count'
+	actual: number | null
+	status: 'met' | 'breached' | 'no_data'
+}
+
 export interface AiMetricsReportLike {
 	version: string
 	generatedAt: string
@@ -47,7 +57,14 @@ export interface AiMetricsReportLike {
 		plannerFallbackByReason: Record<string, number>
 		rewriteDegradations: number
 		plannerDegradations: number
+		rewriteDegradationRate?: number | null
+		plannerDegradationRate?: number | null
 	}
+	rerank?: {
+		evaluatedPlans: number
+		fallbackRate: number | null
+	}
+	chatP95LatencyMs?: number | null
 	citationValidation: {
 		attempts: number
 		failedAttempts: number
@@ -81,6 +98,8 @@ export interface AiMetricsReportLike {
 		totalCost: number | null
 		currency: string | null
 	}
+	/** CAL-005: target-vs-actual SLO rows; absent on older API payloads */
+	slos?: SloEntryLike[]
 }
 
 const REASON_LABELS: Record<string, string> = {
@@ -133,4 +152,36 @@ export function formatCost(
 	if (cost === null) return '—'
 	const unit = currency ?? 'USD'
 	return `${cost.toFixed(4).replace('.', ',')} ${unit}`
+}
+
+/** CAL-005: SLO status chips and value formatting (rates %, ms, counts) */
+export function sloStatusLabel(status: SloEntryLike['status']): string {
+	if (status === 'met') return 'terpenuhi'
+	if (status === 'breached') return 'melewati batas'
+	return 'belum ada data'
+}
+
+export function formatSloValue(
+	actual: number | null,
+	unit: SloEntryLike['unit'],
+): string {
+	if (actual === null) return '—'
+	if (unit === 'rate') return formatRate(actual)
+	if (unit === 'ms') return `${actual.toLocaleString('id-ID')} ms`
+	return actual.toLocaleString('id-ID')
+}
+
+export function formatSloTarget(
+	target: number,
+	comparator: SloEntryLike['comparator'],
+	unit: SloEntryLike['unit'],
+): string {
+	const op = comparator === '>' ? '≥' : comparator === '<' ? '<' : '='
+	const value =
+		unit === 'rate'
+			? `${(target * 100).toFixed(1).replace('.', ',')}%`
+			: unit === 'ms'
+				? `${target.toLocaleString('id-ID')} ms`
+				: target.toLocaleString('id-ID')
+	return `${op} ${value}`
 }

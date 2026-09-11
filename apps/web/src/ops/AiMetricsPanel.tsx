@@ -4,8 +4,11 @@ import {
 	formatCost,
 	formatCount,
 	formatRate,
+	formatSloTarget,
+	formatSloValue,
 	formatTokens,
 	reasonEntries,
+	sloStatusLabel,
 } from '../lib/aiMetrics'
 import { formatTimestampId } from '../lib/format'
 
@@ -27,6 +30,52 @@ export function AiMetricsPanel(props: { report: AiMetricsReportLike }) {
 				{report.turns.abstained} abstain, {report.turns.escalated} eskalasi,{' '}
 				{report.turns.failed} gagal)
 			</h3>
+
+			{report.slos && report.slos.length > 0 ? (
+				<section
+					className="ai-slos"
+					aria-label="SLO produksi"
+					data-testid="ai-slos"
+				>
+					<h4>
+						SLO Produksi —{' '}
+						{report.slos.filter((s) => s.status === 'met').length}/
+						{report.slos.length} terpenuhi ·{' '}
+						{report.slos.filter((s) => s.status === 'breached').length} melewati
+						batas · {report.slos.filter((s) => s.status === 'no_data').length}{' '}
+						belum ada data
+					</h4>
+					<table className="ai-provider-table" data-testid="ai-slo-table">
+						<thead>
+							<tr>
+								<th scope="col">SLO</th>
+								<th scope="col">Target</th>
+								<th scope="col">Aktual</th>
+								<th scope="col">Status</th>
+							</tr>
+						</thead>
+						<tbody>
+							{report.slos.map((s) => (
+								<tr key={s.key} data-slo={s.key} data-slo-status={s.status}>
+									<td>{s.label}</td>
+									<td>{formatSloTarget(s.target, s.comparator, s.unit)}</td>
+									<td>{formatSloValue(s.actual, s.unit)}</td>
+									<td>
+										<span
+											className={`ops-state ${
+												s.status === 'no_data' ? 'ai-slo-nodata' : ''
+											}`}
+											data-testid="ai-slo-status"
+										>
+											{sloStatusLabel(s.status)}
+										</span>
+									</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+				</section>
+			) : null}
 
 			<ul className="ai-metrics-cards" data-testid="ai-metric-cards">
 				<li className="ai-metric" data-metric="generation-success">

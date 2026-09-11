@@ -85,7 +85,18 @@ export interface AiMetricsReport {
 		/** degradations exclude the benign rewriter no_history reason */
 		rewriteDegradations: number
 		plannerDegradations: number
+		/** degradations / planned turns (CAL-005 SLO inputs) */
+		rewriteDegradationRate: number | null
+		plannerDegradationRate: number | null
 	}
+	rerank: {
+		/** plans carrying a rerank audit block */
+		evaluatedPlans: number
+		/** share of evaluated plans that fell back to RRF order */
+		fallbackRate: number | null
+	}
+	/** p95 over answers.created_at - retrieval_traces.started_at (end-to-end turn) */
+	chatP95LatencyMs: number | null
 	citationValidation: {
 		attempts: number
 		failedAttempts: number
@@ -109,6 +120,112 @@ export interface AiMetricsReport {
 		totalCost: number | null
 		currency: string | null
 	}
+	/** CAL-005: target-vs-actual service level objectives; no_data when a
+	 * metric has no samples in the window — never a fabricated green */
+	slos: SloEntry[]
+}
+
+export interface SloEntry {
+	key: string
+	label: string
+	target: number
+	comparator: '<' | '>' | '='
+	unit: 'rate' | 'ms' | 'count'
+	actual: number | null
+	status: 'met' | 'breached' | 'no_data'
+}
+
+/**
+ * Initial production SLO targets (CAL-005) — calibration baselines, not
+ * marketing numbers. Adjust from measured reality via this table only;
+ * benchmark gates stay independent and may be stricter.
+ */
+export const SLO_TARGETS: ReadonlyArray<{
+	key: string
+	label: string
+	target: number
+	comparator: '<' | '>' | '='
+	unit: 'rate' | 'ms' | 'count'
+}> = [
+	{
+		key: 'generation_attempt_success',
+		label: 'Keberhasilan generasi (upaya model)',
+		target: 0.95,
+		comparator: '>',
+		unit: 'rate',
+	},
+	{
+		key: 'deterministic_fallback',
+		label: 'Fallback deterministik',
+		target: 0.05,
+		comparator: '<',
+		unit: 'rate',
+	},
+	{
+		key: 'citation_validation_failure',
+		label: 'Kegagalan validasi sitasi',
+		target: 0.02,
+		comparator: '<',
+		unit: 'rate',
+	},
+	{
+		key: 'claim_support_failure',
+		label: 'Kegagalan dukungan klaim',
+		target: 0.05,
+		comparator: '<',
+		unit: 'rate',
+	},
+	{
+		key: 'rewrite_degradation',
+		label: 'Degradasi rewriter',
+		target: 0.03,
+		comparator: '<',
+		unit: 'rate',
+	},
+	{
+		key: 'planner_degradation',
+		label: 'Degradasi planner',
+		target: 0.03,
+		comparator: '<',
+		unit: 'rate',
+	},
+	{
+		key: 'chat_p95_latency',
+		label: 'Latensi p95 giliran obrolan',
+		target: 15_000,
+		comparator: '<',
+		unit: 'ms',
+	},
+	{
+		key: 'unpriced_model_calls',
+		label: 'Panggilan model tanpa harga',
+		target: 0,
+		comparator: '=',
+		unit: 'count',
+	},
+	{
+		key: 'reranker_fallback',
+		label: 'Fallback reranker produksi',
+		target: 0.01,
+		comparator: '<',
+		unit: 'rate',
+	},
+]
+
+function evaluateSlo(
+	target: (typeof SLO_TARGETS)[number],
+	actual: number | null,
+): SloEntry {
+	if (actual === null) {
+		return { ...target, actual: null, status: 'no_data' }
+	}
+	const met =
+		target.comparator === '>'
+			? actual >= target.target
+			: target.comparator === '<'
+				? actual < target.target
+				: actual === target.target
+	return { ...target, actual, status: met ? 'met' : 'breached' }
 }
 
 function round(value: number, decimals = 4): number {
@@ -259,11 +376,16 @@ export async function getAiMetrics(
 			where c.tenant_id = app_tenant()
 				and ra.created_at >= ${since.toISOString()}`
 
-		// ---- understanding-stage fallbacks (query_plans.plan) -------------
+		// ---- understanding-stage fallbacks + rerank audit (query_plans) ---
 		const planRows = await tx<
-			{ rewrite_reason: string | null; planner_reason: string | null }[]
+			{
+				rewrite_reason: string | null
+				planner_reason: string | null
+				rerank_fallback: string | null
+			}[]
 		>`select qp.plan->'queryRewrite'->>'fallbackReason' as rewrite_reason,
-				qp.plan->'aiPlan'->>'fallbackReason' as planner_reason
+				qp.plan->'aiPlan'->>'fallbackReason' as planner_reason,
+				qp.plan->'rerank'->>'fallbackUsed' as rerank_fallback
 			from query_plans qp
 			join answers a on a.trace_id = qp.trace_id
 			join messages m on m.id = a.message_id
@@ -274,6 +396,8 @@ export async function getAiMetrics(
 		const plannerFallbackByReason: Record<string, number> = {}
 		let rewriteDegradations = 0
 		let plannerDegradations = 0
+		let rerankEvaluatedPlans = 0
+		let rerankFallbacks = 0
 		for (const row of planRows) {
 			if (row.rewrite_reason !== null) {
 				bump(rewriteFallbackByReason, row.rewrite_reason, 1)
@@ -284,7 +408,28 @@ export async function getAiMetrics(
 				bump(plannerFallbackByReason, row.planner_reason, 1)
 				plannerDegradations += 1
 			}
+			if (row.rerank_fallback !== null) {
+				rerankEvaluatedPlans += 1
+				if (row.rerank_fallback === 'true') rerankFallbacks += 1
+			}
 		}
+		const planCount = planRows.length
+
+		// ---- end-to-end turn latency (answers.created_at - trace started) --
+		const [latencyRow] = await tx<{ p95_seconds: string | null }[]>`
+			select percentile_cont(0.95) within group (
+				order by extract(epoch from (a.created_at - t.started_at))
+			) as p95_seconds
+			from answers a
+			join retrieval_traces t on t.id = a.trace_id
+			join messages m on m.id = a.message_id
+			join conversations c on c.id = m.conversation_id
+			where c.tenant_id = app_tenant()
+				and a.created_at >= ${since.toISOString()}`
+		const chatP95LatencyMs =
+			latencyRow?.p95_seconds === null || latencyRow?.p95_seconds === undefined
+				? null
+				: round(Number(latencyRow.p95_seconds) * 1000, 1)
 
 		// ---- provider usage series (model_invocations) --------------------
 		const usageRows = await tx<
@@ -457,6 +602,23 @@ export async function getAiMetrics(
 			}
 		}
 
+		// CAL-005: map computed metrics onto SLO target keys; null (no
+		// samples) stays no_data — never a fabricated green
+		const sloActuals: Record<string, number | null> = {
+			generation_attempt_success: rate(successfulAttempts, attempts),
+			deterministic_fallback: rate(fallbackTurns, generationStageTurns),
+			citation_validation_failure: rate(citationFailedAttempts, attempts),
+			claim_support_failure: rate(
+				Number(claimRow.failed),
+				Number(claimRow.evaluated),
+			),
+			rewrite_degradation: rate(rewriteDegradations, planCount),
+			planner_degradation: rate(plannerDegradations, planCount),
+			chat_p95_latency: chatP95LatencyMs,
+			unpriced_model_calls: unpricedCalls,
+			reranker_fallback: rate(rerankFallbacks, rerankEvaluatedPlans),
+		}
+
 		return {
 			version: AI_METRICS_VERSION,
 			generatedAt: now.toISOString(),
@@ -486,7 +648,14 @@ export async function getAiMetrics(
 				plannerFallbackByReason,
 				rewriteDegradations,
 				plannerDegradations,
+				rewriteDegradationRate: rate(rewriteDegradations, planCount),
+				plannerDegradationRate: rate(plannerDegradations, planCount),
 			},
+			rerank: {
+				evaluatedPlans: rerankEvaluatedPlans,
+				fallbackRate: rate(rerankFallbacks, rerankEvaluatedPlans),
+			},
+			chatP95LatencyMs,
 			citationValidation: {
 				attempts,
 				failedAttempts: citationFailedAttempts,
@@ -514,6 +683,7 @@ export async function getAiMetrics(
 				totalCost: pricedCalls === 0 ? null : round(totalCost, 6),
 				currency,
 			},
+			slos: SLO_TARGETS.map((t) => evaluateSlo(t, sloActuals[t.key] ?? null)),
 		}
 	})
 }

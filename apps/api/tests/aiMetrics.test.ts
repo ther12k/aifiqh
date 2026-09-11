@@ -139,13 +139,19 @@ async function setupSeed(): Promise<SeedContext> {
 		insert into repair_attempts (answer_id, attempt_no, instruction, result)
 		values (${a2.id}::uuid, 1, 'fix citations', 'failed')`
 
-	// Plan on turn 2: includes rewriter + planner fallbacks
+	// Plan on turn 2: includes rewriter + planner fallbacks and a rerank
+	// audit block shaped like chatService writes it (RAG-SEM-003)
 	await sql`
 		insert into query_plans (trace_id, plan, planner_version)
 		values (${t2.id}::uuid,
 			${sql.json({
 				queryRewrite: { fallbackReason: 'no_history' },
 				aiPlan: { fallbackReason: 'invalid_output' },
+				rerank: {
+					model: 'none',
+					fallbackUsed: true,
+					warning: 'not_configured',
+				},
 			} as never)},
 			'ai-query-planner-v1')`
 
@@ -224,6 +230,35 @@ describe('getAiMetrics (OPS-AI-001)', () => {
 		expect(report.understanding.plannerDegradations).toBeGreaterThanOrEqual(1)
 		// no_history is benign, not counted as a degradation
 		expect(report.understanding.rewriteDegradations).toBe(0)
+
+		// CAL-005: degradation rates + rerank audit + end-to-end p95 latency
+		expect(report.understanding.rewriteDegradationRate).toBe(0)
+		expect(report.understanding.plannerDegradationRate).toBeGreaterThanOrEqual(
+			1,
+		)
+		// the seeded plan carries a rerank audit block that fell back (production
+		// reality while the cross-encoder is unconfigured) → rate 1.0
+		expect(report.rerank.evaluatedPlans).toBeGreaterThanOrEqual(1)
+		expect(report.rerank.fallbackRate).toBeGreaterThanOrEqual(1)
+		expect(report.chatP95LatencyMs).not.toBeNull()
+		expect(report.chatP95LatencyMs as number).toBeLessThan(15_000)
+
+		// CAL-005: SLO target-vs-actual with honest statuses
+		const sloByKey = new Map(report.slos.map((s) => [s.key, s]))
+		expect(report.slos.length).toBe(9)
+		// seeded mix: planner degrades on the only plan → breached
+		expect(sloByKey.get('planner_degradation')?.status).toBe('breached')
+		// rewrite degradation is benign-only → met
+		expect(sloByKey.get('rewrite_degradation')?.status).toBe('met')
+		// reranker fell back on the only evaluated plan → breached, not no_data
+		expect(sloByKey.get('reranker_fallback')?.status).toBe('breached')
+		expect(sloByKey.get('reranker_fallback')?.actual).toBeGreaterThanOrEqual(1)
+		// both providers priced → zero unpriced calls → met
+		expect(sloByKey.get('unpriced_model_calls')?.status).toBe('met')
+		// chat p95 within target → met
+		expect(sloByKey.get('chat_p95_latency')?.status).toBe('met')
+		// attempt success 1/2 → breached against ≥95%
+		expect(sloByKey.get('generation_attempt_success')?.status).toBe('breached')
 
 		// claim support
 		expect(report.claimSupport.evaluated).toBeGreaterThanOrEqual(2)
