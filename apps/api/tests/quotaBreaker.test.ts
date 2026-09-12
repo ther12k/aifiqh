@@ -2,10 +2,12 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import postgres from 'postgres'
 import { resolveChatModelCandidates } from '../src/llm/modelRouter'
 import {
+	classifyRateLimit,
 	closeQuotaDomain,
 	isQuotaExhaustion,
 	openQuotaDomains,
 	parseQuotaResetAt,
+	parseRetryAfterMs,
 	tripQuotaDomain,
 } from '../src/llm/quotaBreaker'
 import { ensureMigrations } from './dbBootstrap'
@@ -42,6 +44,40 @@ describe('CAL-010/#145: quota breaker primitives', () => {
 		const relative = parseQuotaResetAt('reset after 2h 15m', now)
 		expect(relative?.toISOString()).toBe('2026-09-11T10:09:08.000Z')
 		expect(parseQuotaResetAt('no reset info here', now)).toBeNull()
+	})
+
+	test('classifyRateLimit separates sustained quota exhaustion from transient throttling', () => {
+		// the real GLM message: sustained account-level exhaustion
+		expect(
+			classifyRateLimit(
+				'Provider returned 429: {"error":{"message":"[glm/glm-4.6] [429]: Usage limit reached for 5 hour. Your limit will reset at ..."}}',
+			),
+		).toBe('quota_exhausted')
+		expect(classifyRateLimit('quota exceeded for this billing period')).toBe(
+			'quota_exhausted',
+		)
+		// plain 429 / rate-limit wording WITHOUT sustained-quota markers:
+		// transient throttling — must NOT arm the 30-minute breaker
+		expect(
+			classifyRateLimit(
+				'Provider returned 429: Too Many Requests, retry after 30s',
+			),
+		).toBe('transient_throttle')
+		expect(classifyRateLimit('rate limit exceeded, slow down')).toBe(
+			'transient_throttle',
+		)
+		expect(
+			classifyRateLimit('Provider returned 500: internal error'),
+		).toBeNull()
+		// backward-compat helper reflects the classification
+		expect(isQuotaExhaustion('429 Too Many Requests')).toBeFalse()
+	})
+
+	test('parseRetryAfterMs honors provider retry hints in seconds and minutes', () => {
+		expect(parseRetryAfterMs('retry after 30s')).toBe(30_000)
+		expect(parseRetryAfterMs('Retry-After: 120')).toBe(120_000)
+		expect(parseRetryAfterMs('please retry after 2 minutes')).toBe(120_000)
+		expect(parseRetryAfterMs('no hint here')).toBeNull()
 	})
 
 	test('trip → open → skip → close round-trip persists across reads', async () => {
@@ -172,6 +208,34 @@ describe('CAL-010/#145: chain simulation — domain A exhausted skips the whole 
 			where key = 'quota-a'`
 		expect(rows[0].state).toBe('open')
 	}
+
+	test('scenario 2: skipped domain-A candidates do NOT consume the attempt budget (B loads even at maxAttempts=2)', async () => {
+		// chain is A1(primary), A2(fb1), B1(fb2) with A open; budget 2 must
+		// apply to ATTEMPTABLE candidates — B1 survives the slice
+		const savedSwitch = process.env.AIFIQH_CHAT_MODEL
+		const savedMax = process.env.AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS
+		process.env.AIFIQH_CHAT_MODEL = ''
+		process.env.AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS = '2'
+		try {
+			// re-trip A (the earlier test may have left it closed)
+			await tripQuotaDomain(sql, 'quota-a', {
+				message: 'Provider returned 429: Usage limit reached for 5 hour',
+				resetAt: new Date(Date.now() + 3_600_000),
+				now: new Date(),
+			})
+			const chain = await resolveChatModelCandidates(sql)
+			const domains = chain.candidates.map(
+				(c) => c.config.failureDomain ?? c.config.providerKey,
+			)
+			// only the independent domain remains, and it fits the budget
+			expect(domains).toEqual(['quota-b'])
+			expect(chain.candidates.length).toBeLessThanOrEqual(2)
+		} finally {
+			process.env.AIFIQH_CHAT_MODEL = savedSwitch ?? 'off'
+			process.env.AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS = savedMax ?? ''
+			await closeQuotaDomain(sql, 'quota-a')
+		}
+	})
 
 	afterAll(async () => {
 		// restore: close breaker + clean the simulation rows so other suites

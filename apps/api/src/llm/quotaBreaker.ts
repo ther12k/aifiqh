@@ -16,18 +16,61 @@ import type { Sql } from '../db/client'
 
 export const QUOTA_BREAKER_VERSION = 'quota-breaker-v1'
 
-/** message fragments that mark a quota-exhaustion response (provider-specific) */
-const QUOTA_MARKERS = [
-	'429',
+/** message fragments that mark SUSTAINED quota exhaustion (account-level) */
+const QUOTA_EXHAUSTED_MARKERS = [
 	'usage limit reached',
 	'quota exceeded',
-	'rate limit exceeded',
+	'quota exhausted',
+	'quota limit reached',
+	'billing limit',
 ]
+
+/** markers for a short-lived rate limit (per-request/minute throttling) */
+const THROTTLE_MARKERS = ['429', 'rate limit', 'too many requests']
+
+/**
+ * CAL-010 residual: classify a rate-limit failure precisely.
+ *  - quota_exhausted: the account's quota pool is drained for a sustained
+ *    period (GLM: "Usage limit reached for 5 hour") → domain breaker.
+ *  - transient_throttle: a 429 without sustained-quota wording (per-minute
+ *    throttling, retry-after hints) → short cooldown, never the 30-min
+ *    breaker.
+ *  - null: not a rate limit at all.
+ */
+export type RateLimitKind = 'quota_exhausted' | 'transient_throttle'
+
+export function classifyRateLimit(message: string): RateLimitKind | null {
+	const lower = message.toLowerCase()
+	if (QUOTA_EXHAUSTED_MARKERS.some((m) => lower.includes(m))) {
+		return 'quota_exhausted'
+	}
+	if (THROTTLE_MARKERS.some((m) => lower.includes(m))) {
+		return 'transient_throttle'
+	}
+	return null
+}
 
 /** does this gateway error message indicate a quota-exhausted domain? */
 export function isQuotaExhaustion(message: string): boolean {
-	const lower = message.toLowerCase()
-	return QUOTA_MARKERS.some((m) => lower.includes(m))
+	return classifyRateLimit(message) === 'quota_exhausted'
+}
+
+/** short cooldown for transient throttling when the provider states none */
+export const DEFAULT_THROTTLE_SECONDS = 60
+
+/**
+ * Parse a provider retry hint ("retry after 30s", "retry-after: 120") in
+ * MILLISECONDS. Null when absent — the caller applies the 60s default.
+ */
+export function parseRetryAfterMs(message: string): number | null {
+	const match = message.match(
+		/retry[- ]?after[:\s]+(\d+)\s*(s|sec|secs|seconds|m|min|mins|minutes)?/i,
+	)
+	if (!match) return null
+	const n = Number(match[1])
+	if (!Number.isFinite(n) || n <= 0) return null
+	const unit = (match[2] ?? 's').toLowerCase()
+	return unit.startsWith('m') ? n * 60_000 : n * 1000
 }
 
 /**

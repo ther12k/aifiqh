@@ -398,18 +398,15 @@ export async function getSetVersion(
 		version: version.version,
 		status: version.status,
 		cases: cases.map((c) => {
-			// CAL-011: held-out pins (and the textual evidence criteria that
-			// describe them) are reviewer-only. A tuning workflow reading the
-			// set must not see the blind split's ground truth — otherwise the
-			// 36 held-out cases silently become tuning data.
+			// CAL-011: for held-out cases the developer DTO is an ALLOWLIST,
+			// not a redaction — only administrative metadata survives.
+			// requiredQualifications / unacceptableClaims / notes / followUpType
+			// describe the expected ANSWER, so they are ground truth just as
+			// much as the pins. (Repo-source visibility is a separate boundary:
+			// see benchmarkCorpus.ts — this control covers API + export only.)
 			const isHeldOut =
 				(c.expected_behavior as { split?: unknown })?.split === 'held_out'
 			if (isHeldOut && !principal.permissions.includes('review:approve')) {
-				const { acceptableEvidenceCriteria: _withheld, ...behavior } =
-					c.expected_behavior as Record<string, unknown>
-				void _withheld
-				behavior.pinsRedacted =
-					'held-out split — reviewer (review:approve) only'
 				return {
 					id: c.id,
 					caseKey: c.case_key,
@@ -420,7 +417,10 @@ export async function getSetVersion(
 					conversation: c.conversation,
 					ownerUserId: c.owner_user_id,
 					reviewerUserId: c.reviewer_user_id,
-					expectedBehavior: behavior,
+					expectedBehavior: {
+						split: 'held_out',
+						pinsRedacted: true,
+					},
 					expectedEvidence: [],
 				}
 			}

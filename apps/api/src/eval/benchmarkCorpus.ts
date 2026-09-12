@@ -28,6 +28,17 @@ import {
  *   - unacceptableClaims: statements that must NOT be made
  */
 
+/**
+ * ISOLATION BOUNDARY (CAL-011, on record): these cases — including the 36
+ * labeled held_out — live in PUBLIC repository source. App-layer controls
+ * (getSetVersion allowlist redaction, analyzer aggregates) hide held-out
+ * ground truth from developer workflows THROUGH THE API, but they cannot
+ * un-publish what is readable in git history. Therefore this corpus is a
+ * TRANSPARENT regression benchmark (all 118 cases); a genuinely BLIND
+ * evaluation claim requires a separate, privately managed set created
+ * after this commit and kept out of the repository.
+ */
+
 export const BENCHMARK_SUITE_VERSION = 'reviewed-benchmark-v2'
 
 export interface BenchmarkCaseDefinition {

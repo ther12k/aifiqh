@@ -10,9 +10,11 @@ import {
 } from '../llm/modelRouter'
 import { resolveChatModelConfig } from '../llm/modelRouter'
 import {
+	DEFAULT_THROTTLE_SECONDS,
+	classifyRateLimit,
 	closeQuotaDomain,
-	isQuotaExhaustion,
 	parseQuotaResetAt,
+	parseRetryAfterMs,
 	tripQuotaDomain,
 } from '../llm/quotaBreaker'
 import {
@@ -837,8 +839,17 @@ async function runTurn(
 	// fallback chain (AI-004) — kill-switch empties the whole chain
 	emitStage('composing_answer')
 	const chain = await resolveChatModelCandidates(sql)
+	// CAL-010 residual: a domain that trips MID-TURN must also shield the
+	// remaining candidates of THIS turn, not only the next ones — the chain
+	// is resolved once, so track freshly-tripped domains locally
+	const trippedThisTurn = new Set<string>()
 	for (const candidate of chain.candidates) {
 		const model = candidate.config
+		const domain = model.failureDomain ?? model.providerKey
+		if (trippedThisTurn.has(domain)) {
+			// not an attempt: skipped candidates never touch the attempt metrics
+			continue
+		}
 		const gateway = new DefaultModelGateway()
 		gateway.registerProvider(model.adapter)
 		const result = await generateGroundedAnswer({
@@ -959,14 +970,27 @@ async function runTurn(
 				latencyMs: call.latencyMs,
 			})
 		}
-		// CAL-010: a quota-exhaustion failure trips the domain breaker —
-		// the next turns skip every candidate in the same domain until reset
+		// CAL-010: sustained quota exhaustion trips the domain breaker —
+		// the next turns skip every candidate in the same domain until reset;
+		// transient throttling gets a SHORT cooldown (provider retry-after or
+		// 60s default), never the 30-minute quota breaker
 		if (reason === 'provider_error') {
 			const firstMessage = result.issues[0]?.message ?? ''
-			if (isQuotaExhaustion(firstMessage)) {
-				await tripQuotaDomain(sql, model.failureDomain ?? model.providerKey, {
+			const rateKind = classifyRateLimit(firstMessage)
+			if (rateKind === 'quota_exhausted') {
+				trippedThisTurn.add(domain)
+				await tripQuotaDomain(sql, domain, {
 					message: firstMessage,
 					resetAt: parseQuotaResetAt(firstMessage, new Date()),
+					now: new Date(),
+				})
+			} else if (rateKind === 'transient_throttle') {
+				trippedThisTurn.add(domain)
+				const cooldownMs =
+					parseRetryAfterMs(firstMessage) ?? DEFAULT_THROTTLE_SECONDS * 1000
+				await tripQuotaDomain(sql, domain, {
+					message: `transient_throttle: ${firstMessage.slice(0, 400)}`,
+					resetAt: new Date(Date.now() + cooldownMs),
 					now: new Date(),
 				})
 			}

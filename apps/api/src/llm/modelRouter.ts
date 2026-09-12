@@ -339,8 +339,10 @@ export async function resolveChatModelCandidates(
 		order by position asc`
 	chain.hasFallbackConfigured = rows.length > 0
 
+	// CAL-010 residual: load the FULL chain first — the attempt budget is
+	// applied AFTER quota-domain filtering, so skipped candidates never
+	// consume slots an independent domain could have used
 	for (const row of rows) {
-		if (chain.candidates.length >= cap) break
 		const targetId = row.target_id
 
 		const rowPair =
@@ -434,7 +436,7 @@ export async function resolveChatModelCandidates(
 				}
 				kept.push(candidate)
 			}
-			chain.candidates = kept
+			chain.candidates = kept.slice(0, cap)
 		}
 	} catch {
 		// breaker unavailable → attempt everything as before

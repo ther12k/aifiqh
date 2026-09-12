@@ -365,14 +365,23 @@ describe('CAL-011: held-out benchmark isolation', () => {
 		const f = await setup()
 		const headers = await authHeaders(f)
 
-		// add a held-out variant case to the same version
+		// add a held-out variant case carrying the same substantive fields the
+		// reviewed corpus seeds — the developer DTO must drop them ALL
 		await addEvaluationCase(sql, f.principal, f.versionId, {
 			caseKey: 'pin-case-heldout',
 			category: 'retrieval',
 			queryText: 'hukum tayammum debu suci',
 			language: 'id',
 			riskLevel: 'normal',
-			expectedBehavior: { split: 'held_out', expectedOutcome: 'answered' },
+			expectedBehavior: {
+				split: 'held_out',
+				expectedOutcome: 'answered',
+				acceptableEvidenceCriteria: ['QS An-Nisa 43'],
+				requiredQualifications: ['wajib debu suci'],
+				unacceptableClaims: ['tayammum dengan air'],
+				notes: 'hint substantif',
+				followUpType: null,
+			},
 			ownerUserId: f.userId,
 		})
 
@@ -422,8 +431,12 @@ describe('CAL-011: held-out benchmark isolation', () => {
 		}
 		const heldDev = devBody.cases.find((c) => c.caseKey === 'pin-case-heldout')
 		expect(heldDev?.expectedEvidence).toEqual([])
-		expect(heldDev?.expectedBehavior.acceptableEvidenceCriteria).toBeUndefined()
-		expect(heldDev?.expectedBehavior.pinsRedacted).toContain('held-out')
+		// ALLOWLIST, not redaction: only split + pinsRedacted survive —
+		// qualifications/claims/notes are answer ground truth and must go too
+		expect(heldDev?.expectedBehavior).toEqual({
+			split: 'held_out',
+			pinsRedacted: true,
+		})
 		// export path leaks nothing either — inspect the held-out case's row
 		const exportRes = await testApp.handle(
 			new Request(`http://localhost/eval/set-versions/${f.versionId}/export`, {
@@ -441,10 +454,15 @@ describe('CAL-011: held-out benchmark isolation', () => {
 			(c) => c.caseKey === 'pin-case-heldout',
 		)
 		expect(heldExport?.expectedEvidence).toEqual([])
-		expect(
-			heldExport?.expectedBehavior.acceptableEvidenceCriteria,
-		).toBeUndefined()
-		expect(heldExport?.expectedBehavior.pinsRedacted).toContain('held-out')
+		expect(heldExport?.expectedBehavior).toEqual({
+			split: 'held_out',
+			pinsRedacted: true,
+		})
+		// no substantive ground-truth field survives anywhere in the export
+		const serialized = JSON.stringify(exported)
+		expect(serialized).not.toContain('wajib debu suci')
+		expect(serialized).not.toContain('tayammum dengan air')
+		expect(serialized).not.toContain('QS An-Nisa 43')
 
 		// reviewer path intact
 		const revHeaders = await authHeaders(f)
@@ -454,10 +472,18 @@ describe('CAL-011: held-out benchmark isolation', () => {
 			}),
 		)
 		const revBody = (await rev.json()) as {
-			cases: Array<{ caseKey: string; expectedEvidence: unknown[] }>
+			cases: Array<{
+				caseKey: string
+				expectedEvidence: unknown[]
+				expectedBehavior: Record<string, unknown>
+			}>
 		}
 		const heldRev = revBody.cases.find((c) => c.caseKey === 'pin-case-heldout')
 		expect((heldRev?.expectedEvidence ?? []).length).toBe(1)
+		// reviewer keeps the full gold data (the internal evaluator relies on it)
+		const revBehavior = heldRev?.expectedBehavior as Record<string, unknown>
+		expect(revBehavior.requiredQualifications).toEqual(['wajib debu suci'])
+		expect(revBehavior.unacceptableClaims).toEqual(['tayammum dengan air'])
 	})
 })
 
