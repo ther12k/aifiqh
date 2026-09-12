@@ -118,6 +118,15 @@ export interface TurnResult {
 /** how a turn's answer text was produced */
 export type GenerationMode = 'llm_rag' | 'deterministic_rag'
 
+/**
+ * ANS-DUMP-001 (#148): assistant copy when no validated synthesized answer
+ * could be produced. Says the SERVICE failed to compose an answer — it must
+ * never read as "the corpus has no answer" (that is the abstain path's
+ * claim) and never silently substitute retrieved passages.
+ */
+export const ANSWER_GENERATION_FAILED_TEXT =
+	'Jawaban belum berhasil disusun.\n\nSistem belum berhasil menyusun jawaban yang tervalidasi untuk pertanyaan ini. Silakan coba lagi.'
+
 /** one model attempt inside a turn (AI-004 chain diagnostics) */
 export interface ModelAttempt {
 	provider: string
@@ -1025,6 +1034,76 @@ async function runTurn(
 	}
 
 	if (!generation) {
+		// ANS-DUMP-001 (#148): a turn with NO validated synthesized answer must
+		// not present retrieved passages as an answer. Retrieved text is not a
+		// conclusion: claims copied from evidence trivially pass claim-support
+		// (they compare a passage to itself) and "answered" then lies about
+		// what happened. Verbatim lookup profiles are the one exception — the
+		// user explicitly asked for quotes, so composing them is the product
+		// behavior (labeled as quotes downstream, never as synthesis).
+		const verbatimLookup =
+			options.contextProfile === 'exact' ||
+			options.contextProfile === 'document_audit'
+		if (!verbatimLookup) {
+			// honest service failure — retryable, and explicitly NOT "the
+			// corpus has no answer" (that is the abstain path's claim to make)
+			const ordinal = await nextMessageOrdinal(sql, conversationId)
+			const [message] = await sql<{ id: string }[]>`
+				insert into messages (conversation_id, ordinal, role, content, retrieval_trace_id)
+				values (${conversationId}::uuid, ${ordinal}, 'assistant', ${ANSWER_GENERATION_FAILED_TEXT}, ${plan.traceId}::uuid)
+				returning id`
+			const [answerRow] = await sql<{ id: string }[]>`
+				insert into answers (message_id, trace_id, status, metadata)
+				values (${message.id}::uuid, ${plan.traceId}::uuid, 'failed',
+					${sql.json({
+						fallbackReason,
+						generationSource: 'none',
+						attempts: modelAttempts,
+					} as never)})
+				returning id`
+			await sql`update messages set answer_id = ${answerRow.id}::uuid where id = ${message.id}::uuid`
+			// retrieval itself finished fine — the trace closes complete so
+			// the raw evidence stays diagnosable without the answer faking it
+			await sql`update retrieval_traces set status = 'completed', completed_at = now()
+				where id = ${plan.traceId}::uuid`
+			for (const inv of invocationRecords) {
+				await sql`
+					insert into model_invocations (
+						answer_id, provider, model, prompt_tokens, completion_tokens, latency_ms
+					) values (
+						${answerRow.id}::uuid, ${inv.provider}, ${inv.model},
+						${inv.promptTokens ?? 0}, ${inv.completionTokens ?? 0}, ${inv.latencyMs ?? null}
+					)`
+			}
+			return {
+				conversationId,
+				userMessageId,
+				assistantMessageId: message.id,
+				answerId: answerRow.id,
+				traceId: plan.traceId,
+				decision,
+				assessment,
+				answer: null,
+				status: 'failed',
+				provider: '',
+				model: '',
+				verification: deriveVerification({
+					status: 'failed',
+					decision,
+					assessment,
+					citationsOk: false,
+					citedCount: 0,
+				}),
+				citations: [],
+				generation: {
+					mode: 'deterministic_rag',
+					provider: '',
+					model: '',
+					fallbackReason,
+					attempts: modelAttempts.length > 0 ? modelAttempts : undefined,
+				},
+			}
+		}
 		const composed = await composeFromEvidence(
 			sql,
 			principal,

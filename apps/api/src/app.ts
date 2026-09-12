@@ -2649,11 +2649,13 @@ function sourceRoutes(deps: AppDeps) {
 								created_at: string
 								question: string | null
 								answer_text: string | null
+								provider: string | null
+								metadata: unknown
 							}[]
 						>`
 							select a.id, cv.id as conversation_id, a.created_at::text,
 								(select content from messages where conversation_id = cv.id and role = 'user' order by ordinal asc limit 1) as question,
-								m.content as answer_text
+								m.content as answer_text, a.provider, a.metadata
 							from answers a
 							join messages m on m.id = a.message_id
 							join conversations cv on cv.id = m.conversation_id
@@ -2727,6 +2729,29 @@ function sourceRoutes(deps: AppDeps) {
 							question: ans.question ?? 'Tanya jawab fiqih',
 							answerText: ans.answer_text,
 							scholarlyReview,
+							// ANS-DUMP-001: result-kind provenance so the reviewer UI can
+							// label quote-composed results as quotes, not AI synthesis
+							generation: {
+								provider: ans.provider ?? '',
+								generationSource:
+									typeof ans.metadata === 'object' &&
+									ans.metadata !== null &&
+									'generationSource' in ans.metadata
+										? String(
+												(ans.metadata as Record<string, unknown>)
+													.generationSource,
+											)
+										: null,
+								fallbackReason:
+									typeof ans.metadata === 'object' &&
+									ans.metadata !== null &&
+									'fallbackReason' in ans.metadata
+										? String(
+												(ans.metadata as Record<string, unknown>)
+													.fallbackReason,
+											)
+										: null,
+							},
 							claims: claims.map((c) => ({
 								id: c.id,
 								text: c.claim_text,

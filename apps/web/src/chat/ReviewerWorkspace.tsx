@@ -40,6 +40,13 @@ export interface AnswerClaimsResponse {
 	question: string
 	answerText: string | null
 	scholarlyReview: 'not_reviewed' | 'scholar_reviewed' | 'scholar_contested'
+	/** ANS-DUMP-001: result-kind provenance — quote-composed results are
+	 * labeled as quotes so a reviewer never mistakes them for AI synthesis */
+	generation?: {
+		provider: string
+		generationSource: string | null
+		fallbackReason: string | null
+	}
 	claims: AnswerClaimDetail[]
 }
 
@@ -270,6 +277,24 @@ export function ReviewerWorkspace({ permissions }: { permissions: string[] }) {
 									</span>
 								</div>
 							</header>
+
+							{detail.generation?.generationSource ===
+								'deterministic_composer' && (
+								<div
+									className="alert alert-warn"
+									data-testid="composer-result-banner"
+								>
+									<strong>Kutipan otomatis — bukan kesimpulan AI.</strong> Hasil
+									ini disusun mekanis dari passage yang ditemukan (fallback
+									generasi
+									{detail.generation.fallbackReason
+										? `: ${detail.generation.fallbackReason}`
+										: ''}
+									). Setiap klaim di bawah adalah salinan teks sumber, bukan
+									sintesis model — tinjau relevansi passage terhadap pertanyaan,
+									bukan hanya kecocokan kutipan.
+								</div>
+							)}
 
 							<h4>Klaim & Bukti Dalil Berdampingan ({detail.claims.length})</h4>
 							<div className="claims-list">

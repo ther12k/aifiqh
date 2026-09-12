@@ -31,7 +31,7 @@ describe('generation mode badge (AI-003)', () => {
 		).toBeNull()
 	})
 
-	test('deterministic answers disclose the fallback reason in plain language', () => {
+	test('deterministic answers are labeled as automatic quotes, not AI conclusions', () => {
 		const badge = generationBadge(
 			{
 				mode: 'deterministic_rag',
@@ -41,8 +41,10 @@ describe('generation mode badge (AI-003)', () => {
 			},
 			false,
 		)
-		expect(badge?.label).toBe('Sumber saja')
+		// ANS-DUMP-001: the label must deny synthesis, not just name the source
+		expect(badge?.label).toBe('Kutipan otomatis — bukan kesimpulan AI')
 		expect(badge?.tone).toBe('sources')
+		expect(badge?.title).toContain('bukan kesimpulan AI')
 		expect(badge?.title).toContain('model AI belum dikonfigurasi')
 		// raw codes stay out of user-facing text
 		expect(badge?.title).not.toContain('model_not_configured')
@@ -58,8 +60,8 @@ describe('generation mode badge (AI-003)', () => {
 			},
 			false,
 		)
-		expect(badge?.label).toBe('Sumber saja')
-		expect(badge?.title).toContain('disusun langsung dari sumber')
+		expect(badge?.label).toBe('Kutipan otomatis — bukan kesimpulan AI')
+		expect(badge?.title).toContain('kutipan sumber yang diambil otomatis')
 	})
 
 	test('answers without generation metadata render nothing (pre-AI-002 rows)', () => {

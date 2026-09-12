@@ -12,6 +12,10 @@ import { loadConfig } from '../src/config'
 import { compileIndexRelease } from '../src/index/indexCompiler'
 import { createLogger } from '../src/logger'
 import { ensureMigrations } from './dbBootstrap'
+import {
+	startGroundedAnswerModel,
+	withChatModel,
+} from './helpers/fakeChatModel'
 import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
@@ -161,12 +165,23 @@ beforeAll(async () => {
 		principal,
 		'reviewer workspace test',
 	)
-	const turn = await postUserTurn(sql, principal, {
-		conversationId: conv.conversationId,
-		content: 'apakah air sumur suci menyucikan',
-		indexReleaseId: compiled.indexReleaseId,
-	})
-	answerId = turn.answerId!
+	// ANS-DUMP-001: claims come from a model synthesis (the composer no
+	// longer supplies copied-passage claims by default)
+	const groundedModel = startGroundedAnswerModel()
+	let turn: Awaited<ReturnType<typeof postUserTurn>>
+	try {
+		turn = await withChatModel(sql, groundedModel.url, async () =>
+			postUserTurn(sql, principal, {
+				conversationId: conv.conversationId,
+				content: 'apakah air sumur suci menyucikan',
+				indexReleaseId: compiled.indexReleaseId,
+			}),
+		)
+	} finally {
+		groundedModel.stop()
+	}
+	expect(turn!.status).toBe('answered')
+	answerId = turn!.answerId!
 	const [c] = await sql<
 		{ id: string }[]
 	>`select id from answer_claims where answer_id = ${answerId}::uuid limit 1`
@@ -210,6 +225,9 @@ describe('Reviewer workspace API (#119)', () => {
 		const body = await res.json()
 		expect(body.answerId).toBe(answerId)
 		expect(body.scholarlyReview).toBe('not_reviewed')
+		// ANS-DUMP-001: result-kind provenance so the reviewer UI can label
+		// quote-composed results as quotes, not AI synthesis
+		expect(body.generation.generationSource).toBe('model')
 		expect(Array.isArray(body.claims)).toBeTrue()
 		expect(body.claims.length).toBeGreaterThanOrEqual(1)
 

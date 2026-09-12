@@ -61,11 +61,11 @@ export function generationBadge(
 	}
 	const phrase = reasonPhrase(generation.fallbackReason)
 	return {
-		label: 'Sumber saja',
+		label: 'Kutipan otomatis — bukan kesimpulan AI',
 		tone: 'sources',
 		title: phrase
-			? `Jawaban disusun langsung dari sumber — ${phrase}.`
-			: 'Jawaban disusun langsung dari sumber terverifikasi.',
+			? `Hasil ini adalah kutipan sumber yang diambil otomatis, bukan kesimpulan AI — ${phrase}.`
+			: 'Hasil ini adalah kutipan sumber yang diambil otomatis, bukan kesimpulan AI.',
 		detail: isOperator
 			? [
 					[generation.provider, generation.model].filter(Boolean).join(' / '),

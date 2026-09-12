@@ -1,7 +1,8 @@
-import { beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { Principal } from '@aifiqh/shared'
 import postgres from 'postgres'
 import {
+	ANSWER_GENERATION_FAILED_TEXT,
 	ChatError as CE,
 	type ChatError,
 	getConversation,
@@ -16,6 +17,10 @@ import { loadConfig } from '../src/config'
 import { compileIndexRelease } from '../src/index/indexCompiler'
 import { createLogger } from '../src/logger'
 import { ensureMigrations } from './dbBootstrap'
+import {
+	startGroundedAnswerModel,
+	withChatModel,
+} from './helpers/fakeChatModel'
 import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
@@ -45,6 +50,13 @@ const testApp = buildApp({ cfg, log: silentLog, sql, oidc: fakeOidc })
 const TOPIC_A_TEXT =
 	'Siamang hukum makannya tidak boleh menurut sebagian ulama.'
 const TOPIC_B_TEXT = 'Kura-kura sungai hukum makannya berbeda pendapat.'
+
+/** grounded fake model: answered turns come from here, not the composer */
+const groundedModel = startGroundedAnswerModel()
+
+afterAll(() => {
+	groundedModel.stop()
+})
 
 interface ChatFixture {
 	principal: Principal
@@ -182,102 +194,114 @@ describe('CHAT-001: conversation + per-turn grounded answers', () => {
 
 	test('every answer turn has its own unique retrieval trace', async () => {
 		const f = await setupFixture()
-		const conv = await startConversation(sql, f.principal, 'traces')
-		const turn1 = await postUserTurn(sql, f.principal, {
-			conversationId: conv.conversationId,
-			content: 'hukum makan siamang',
-			indexReleaseId: f.releaseId,
+		await withChatModel(sql, groundedModel.url, async () => {
+			const conv = await startConversation(sql, f.principal, 'traces')
+			const turn1 = await postUserTurn(sql, f.principal, {
+				conversationId: conv.conversationId,
+				content: 'hukum makan siamang',
+				indexReleaseId: f.releaseId,
+			})
+			const turn2 = await postUserTurn(sql, f.principal, {
+				conversationId: conv.conversationId,
+				content: 'hukum makan kura-kura sungai',
+				indexReleaseId: f.releaseId,
+			})
+			expect(turn1.status).toBe('answered')
+			expect(turn2.status).toBe('answered')
+			expect(turn1.traceId).not.toBe(turn2.traceId)
+			const traces = await sql<
+				{ id: string; conversation_id: string | null; status: string }[]
+			>`select id, conversation_id::text, status from retrieval_traces
+				where id in (${turn1.traceId}::uuid, ${turn2.traceId}::uuid)`
+			expect(traces).toHaveLength(2)
+			for (const t of traces) {
+				expect(t.conversation_id).toBe(conv.conversationId)
+				expect(t.status).toBe('completed')
+			}
 		})
-		const turn2 = await postUserTurn(sql, f.principal, {
-			conversationId: conv.conversationId,
-			content: 'hukum makan kura-kura sungai',
-			indexReleaseId: f.releaseId,
-		})
-		expect(turn1.status).toBe('answered')
-		expect(turn2.status).toBe('answered')
-		expect(turn1.traceId).not.toBe(turn2.traceId)
-		const traces = await sql<
-			{ id: string; conversation_id: string | null; status: string }[]
-		>`select id, conversation_id::text, status from retrieval_traces
-			where id in (${turn1.traceId}::uuid, ${turn2.traceId}::uuid)`
-		expect(traces).toHaveLength(2)
-		for (const t of traces) {
-			expect(t.conversation_id).toBe(conv.conversationId)
-			expect(t.status).toBe('completed')
-		}
 	})
 
-	test('AI-002: every turn reports how it was generated (no silent fallback)', async () => {
+	test('AI-002 + ANS-DUMP-001: no model → honest failure, never a silent evidence dump', async () => {
 		const f = await setupFixture()
 		const conv = await startConversation(sql, f.principal, 'gen-meta')
 
-		// tests run with AIFIQH_CHAT_MODEL=off — the deterministic composer
-		// must say so explicitly instead of degrading silently
+		// tests run with AIFIQH_CHAT_MODEL=off — the turn must SAY the
+		// service failed instead of dressing retrieved passages up as an
+		// answer (the pre-fix behavior silently composed an "answer")
 		const turn = await postUserTurn(sql, f.principal, {
 			conversationId: conv.conversationId,
 			content: 'hukum makan siamang',
 			indexReleaseId: f.releaseId,
 		})
-		expect(turn.status).toBe('answered')
+		expect(turn.status).toBe('failed')
+		expect(turn.answer).toBeNull()
+		expect(turn.citations).toHaveLength(0)
 		expect(turn.generation.mode).toBe('deterministic_rag')
-		expect(turn.generation.provider).toBe('builtin-compose')
-		expect(turn.generation.model).toBe('compose-from-evidence')
+		expect(turn.generation.provider).toBe('')
 		expect(turn.generation.fallbackReason).toBe('kill_switch')
+		expect(turn.verification.userOutcome).toBe('system_error')
+		const [msg] = await sql<{ content: string }[]>`
+			select content from messages where id = ${turn.assistantMessageId}::uuid`
+		expect(msg.content).toBe(ANSWER_GENERATION_FAILED_TEXT)
 
-		// the conversation view derives the same metadata from the stored
-		// provider so LOADED answers stay distinguishable too
+		// the conversation view keeps the honesty on reload: no answer data
 		const view = await getConversation(sql, f.principal, conv.conversationId)
-		const answered = view.messages.find((m) => m.answer)
-		expect(answered?.answer?.generation.mode).toBe('deterministic_rag')
-		expect(answered?.answer?.generation.provider).toBe('builtin-compose')
+		const assistant = view.messages.find(
+			(m) => m.id === turn.assistantMessageId,
+		)
+		expect(assistant?.answer).toBeNull()
+		expect(assistant?.answerStatus).toBe('failed')
 	})
 
 	test('prior messages cannot supply uncited facts — turns cite only their own manifest', async () => {
 		const f = await setupFixture()
-		const conv = await startConversation(sql, f.principal, 'isolation')
+		await withChatModel(sql, groundedModel.url, async () => {
+			const conv = await startConversation(sql, f.principal, 'isolation')
 
-		// a token that exists ONLY in the user's turn-1 phrasing — never in
-		// any corpus span — must never leak into later answers
-		const turn1 = await postUserTurn(sql, f.principal, {
-			conversationId: conv.conversationId,
-			content: 'hukum makan siamang kalimantan',
-			indexReleaseId: f.releaseId,
-		})
-		const turn2 = await postUserTurn(sql, f.principal, {
-			conversationId: conv.conversationId,
-			content: 'hukum makan kura-kura sungai',
-			indexReleaseId: f.releaseId,
-		})
+			// a token that exists ONLY in the user's turn-1 phrasing — never in
+			// any corpus span — must never leak into later answers
+			const turn1 = await postUserTurn(sql, f.principal, {
+				conversationId: conv.conversationId,
+				content: 'hukum makan siamang kalimantan',
+				indexReleaseId: f.releaseId,
+			})
+			const turn2 = await postUserTurn(sql, f.principal, {
+				conversationId: conv.conversationId,
+				content: 'hukum makan kura-kura sungai',
+				indexReleaseId: f.releaseId,
+			})
+			expect(turn2.status).toBe('answered')
 
-		// every cited evidence id belongs to TURN 2's context manifest
-		const manifestItems = await sql<{ unit_id: string | null }[]>`
+			// every cited evidence id belongs to TURN 2's context manifest
+			const manifestItems = await sql<{ unit_id: string | null }[]>`
 			select cmi.unit_id from context_manifest_items cmi
 			join context_manifests cm on cm.id = cmi.manifest_id
 			where cm.trace_id = ${turn2.traceId}::uuid`
-		const turn2Manifest = new Set(
-			manifestItems
-				.map((m) => m.unit_id)
-				.filter((id): id is string => id !== null),
-		)
-		const cited = new Set(
-			turn2.answer?.claims.flatMap((c) =>
-				c.evidence.map((l) => l.evidenceId),
-			) ?? [],
-		)
-		expect(cited.size).toBeGreaterThan(0)
-		for (const id of cited) {
-			expect(turn2Manifest.has(id)).toBeTrue()
-		}
-		// history-only token never surfaces
-		expect(JSON.stringify(turn2.answer)).not.toContain('kalimantan')
-		// facts in the answer come from the corpus, verbatim
-		expect(JSON.stringify(turn2.answer)).toContain('Kura-kura')
-		// turn 1 keeps its own manifest on its own trace
-		const turn1Manifest = await sql<{ n: string }[]>`
-			select count(*) as n from context_manifest_items cmi
-			join context_manifests cm on cm.id = cmi.manifest_id
-			where cm.trace_id = ${turn1.traceId}::uuid`
-		expect(Number(turn1Manifest[0].n)).toBeGreaterThan(0)
+			const turn2Manifest = new Set(
+				manifestItems
+					.map((m) => m.unit_id)
+					.filter((id): id is string => id !== null),
+			)
+			const cited = new Set(
+				turn2.answer?.claims.flatMap((c) =>
+					c.evidence.map((l) => l.evidenceId),
+				) ?? [],
+			)
+			expect(cited.size).toBeGreaterThan(0)
+			for (const id of cited) {
+				expect(turn2Manifest.has(id)).toBeTrue()
+			}
+			// history-only token never surfaces
+			expect(JSON.stringify(turn2.answer)).not.toContain('kalimantan')
+			// facts in the answer come from the corpus, verbatim
+			expect(JSON.stringify(turn2.answer)).toContain('Kura-kura')
+			// turn 1 keeps its own manifest on its own trace
+			const turn1Manifest = await sql<{ n: string }[]>`
+				select count(*) as n from context_manifest_items cmi
+				join context_manifests cm on cm.id = cmi.manifest_id
+				where cm.trace_id = ${turn1.traceId}::uuid`
+			expect(Number(turn1Manifest[0].n)).toBeGreaterThan(0)
+		})
 	})
 
 	test('retry has lineage: fresh trace, earlier attempt preserved', async () => {
@@ -364,21 +388,26 @@ describe('CHAT-001: conversation + per-turn grounded answers', () => {
 			conversationId: string
 		}
 
-		const turn = await testApp.handle(
-			new Request(`http://localhost/conversations/${conversationId}/messages`, {
-				method: 'POST',
-				headers: auth,
-				body: JSON.stringify({
-					content: 'hukum makan kura-kura sungai',
-					indexReleaseId: f.releaseId,
-				}),
-			}),
-		)
-		expect(turn.status).toBe(200)
-		const turnBody = await turn.json()
-		expect(turnBody.status).toBe('answered')
-		expect(turnBody.traceId).toBeTruthy()
-		expect(turnBody.answer.claims.length).toBeGreaterThanOrEqual(1)
+		await withChatModel(sql, groundedModel.url, async () => {
+			const turn = await testApp.handle(
+				new Request(
+					`http://localhost/conversations/${conversationId}/messages`,
+					{
+						method: 'POST',
+						headers: auth,
+						body: JSON.stringify({
+							content: 'hukum makan kura-kura sungai',
+							indexReleaseId: f.releaseId,
+						}),
+					},
+				),
+			)
+			expect(turn.status).toBe(200)
+			const turnBody = await turn.json()
+			expect(turnBody.status).toBe('answered')
+			expect(turnBody.traceId).toBeTruthy()
+			expect(turnBody.answer.claims.length).toBeGreaterThanOrEqual(1)
+		})
 
 		const view = await testApp.handle(
 			new Request(`http://localhost/conversations/${conversationId}`, {

@@ -17,6 +17,10 @@ import {
 } from '../src/eval/evalSetService'
 import { compileIndexRelease } from '../src/index/indexCompiler'
 import { ensureMigrations } from './dbBootstrap'
+import {
+	startGroundedAnswerModel,
+	withChatModel,
+} from './helpers/fakeChatModel'
 import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
@@ -202,14 +206,23 @@ beforeAll(async () => {
 	await sql`insert into index_aliases (tenant_id, alias, release_id, updated_by)
 		values (${tenantId}::uuid, 'production', ${indexReleaseId}::uuid, ${adminUserId}::uuid)`
 
-	// one answered turn: trace + manifest + answer + citations
+	// one answered turn: trace + manifest + answer + citations — from a
+	// model synthesis (ANS-DUMP-001: the composer no longer answers by default)
 	const conv = await startConversation(sql, principal, 'restore drill')
-	const turn = await postUserTurn(sql, principal, {
-		conversationId: conv.conversationId,
-		content: 'hukum makan siamang',
-		indexReleaseId,
-	})
-	expect(turn.status).toBe('answered')
+	const groundedModel = startGroundedAnswerModel()
+	let turn: Awaited<ReturnType<typeof postUserTurn>>
+	try {
+		turn = await withChatModel(sql, groundedModel.url, async () =>
+			postUserTurn(sql, principal, {
+				conversationId: conv.conversationId,
+				content: 'hukum makan siamang',
+				indexReleaseId,
+			}),
+		)
+	} finally {
+		groundedModel.stop()
+	}
+	expect(turn!.status).toBe('answered')
 	answerId = turn.answerId!
 	traceId = turn.traceId
 
@@ -397,9 +410,10 @@ describe('REL-HARD-004: database restore and answer replay drill', () => {
 		// capture the full explanation BEFORE the disaster
 		const origin = await buildAnswerForensics(sql, principal, answerId)
 		expect(origin.graph.pins.every((p) => p.present)).toBeTrue()
-		// the drill runs hermetic: the honest explanation is that the builtin
-		// composer produced the text — generation pins stay empty
-		expect(origin.graph.answer.provider).toBe('builtin-compose')
+		// the drill's answered turn came from the fake grounded model, so the
+		// forensic explanation names that provider (ANS-DUMP-001 migrated the
+		// fixture away from the builtin composer)
+		expect(origin.graph.answer.provider).toContain('fake-chat-')
 
 		dumpDatabase('/tmp/restore_drill_forensics.dump')
 		psqlAdmin(`drop database if exists ${RESTORE_DB}`)

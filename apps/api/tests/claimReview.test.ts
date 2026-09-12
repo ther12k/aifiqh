@@ -17,6 +17,10 @@ import {
 } from '../src/answers/claimReviewService'
 import { compileIndexRelease } from '../src/index/indexCompiler'
 import { ensureMigrations } from './dbBootstrap'
+import {
+	startGroundedAnswerModel,
+	withChatModel,
+} from './helpers/fakeChatModel'
 import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
@@ -112,13 +116,23 @@ beforeAll(async () => {
 	})
 
 	const conv = await startConversation(sql, principal, 'claim review drill')
-	const turn = await postUserTurn(sql, principal, {
-		conversationId: conv.conversationId,
-		content: 'hukum makan siamang',
-		indexReleaseId: compiled.indexReleaseId,
-	})
-	expect(turn.status).toBe('answered')
-	answerId = turn.answerId!
+	// ANS-DUMP-001: claims come from a model synthesis over the evidence —
+	// the composer no longer supplies copied-passage claims by default
+	const groundedModel = startGroundedAnswerModel()
+	let turn: Awaited<ReturnType<typeof postUserTurn>>
+	try {
+		turn = await withChatModel(sql, groundedModel.url, async () =>
+			postUserTurn(sql, principal, {
+				conversationId: conv.conversationId,
+				content: 'hukum makan siamang',
+				indexReleaseId: compiled.indexReleaseId,
+			}),
+		)
+	} finally {
+		groundedModel.stop()
+	}
+	expect(turn!.status).toBe('answered')
+	answerId = turn!.answerId!
 	const [claim] = await sql<{ id: string }[]>`
 		select id from answer_claims where answer_id = ${answerId}::uuid
 		order by ordinal limit 1`

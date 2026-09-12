@@ -21,11 +21,18 @@ import { loadConfig } from '../src/config'
 import { compileIndexRelease } from '../src/index/indexCompiler'
 import { createLogger } from '../src/logger'
 import { ensureMigrations } from './dbBootstrap'
+import {
+	startGroundedAnswerModel,
+	withChatModel,
+} from './helpers/fakeChatModel'
 import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
 const sql = postgres(DB_URL, { max: 5 })
+
+/** grounded fake model — answered turns need synthesis (ANS-DUMP-001) */
+const groundedModel = startGroundedAnswerModel()
 
 const fakeOidc = {
 	clientId: 'aifiqh-api',
@@ -224,26 +231,28 @@ describe('runTurn stage sequence + SSE endpoint (#133)', () => {
 
 	test('runTurn emits the full pipeline stage sequence and never tokens', async () => {
 		const f = await setupFixture()
-		const conv = await startConversation(sql, f.principal, 'stages')
-		const stages: string[] = []
-		const turn = await postUserTurn(sql, f.principal, {
-			conversationId: conv.conversationId,
-			content:
-				'Hukum jamak dan qashar shalat dalam perjalanan safar apa? Jelaskan dengan dalilnya.',
-			indexReleaseId: f.releaseId,
-			onStage: (stage) => stages.push(stage),
+		await withChatModel(sql, groundedModel.url, async () => {
+			const conv = await startConversation(sql, f.principal, 'stages')
+			const stages: string[] = []
+			const turn = await postUserTurn(sql, f.principal, {
+				conversationId: conv.conversationId,
+				content:
+					'Hukum jamak dan qashar shalat dalam perjalanan safar apa? Jelaskan dengan dalilnya.',
+				indexReleaseId: f.releaseId,
+				onStage: (stage) => stages.push(stage),
+			})
+			expect(turn.status).toBe('answered')
+			expect(stages).toEqual([
+				'searching_sources',
+				'checking_evidence',
+				'composing_answer',
+				'verifying_citations',
+			])
+			// status only: no stage ever carries model text
+			expect(stages.every((s) => typeof s === 'string' && s.length < 40)).toBe(
+				true,
+			)
 		})
-		expect(turn.status).toBe('answered')
-		expect(stages).toEqual([
-			'searching_sources',
-			'checking_evidence',
-			'composing_answer',
-			'verifying_citations',
-		])
-		// status only: no stage ever carries model text
-		expect(stages.every((s) => typeof s === 'string' && s.length < 40)).toBe(
-			true,
-		)
 	})
 
 	test('SSE endpoint replays events with stream headers and closes on done', async () => {
@@ -308,4 +317,8 @@ describe('runTurn stage sequence + SSE endpoint (#133)', () => {
 		)
 		expect(res.status).toBe(404)
 	})
+})
+
+afterAll(() => {
+	groundedModel.stop()
 })

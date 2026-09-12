@@ -31,6 +31,10 @@ import {
 } from '../src/answers/queryRewriter'
 import { compileIndexRelease } from '../src/index/indexCompiler'
 import { ensureMigrations } from './dbBootstrap'
+import {
+	startGroundedAnswerModel,
+	withChatModel,
+} from './helpers/fakeChatModel'
 import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
@@ -45,6 +49,9 @@ let lastRewriterBody: {
 	messages: Array<{ role: string; content: string }>
 } | null = null
 let rewriterResponse = 'valid'
+/** grounded fake model — answered turns need synthesis (ANS-DUMP-001) */
+const groundedModel = startGroundedAnswerModel()
+
 const rewriterServer = Bun.serve({
 	port: 0,
 	async fetch(req) {
@@ -304,9 +311,14 @@ describe('CHAT-AI-001: history never becomes evidence (#126 boundary)', () => {
 			indexReleaseId: f.releaseId,
 		})
 
-		expect(['answered', 'answered_with_caveats', 'abstained']).toContain(
-			turn.status,
-		)
+		// ANS-DUMP-001: with no model the turn fails honestly — the boundary
+		// assertions below hold for every terminal status
+		expect([
+			'answered',
+			'answered_with_caveats',
+			'abstained',
+			'failed',
+		]).toContain(turn.status)
 		// the boundary: every citation references a real retrieval unit of
 		// THIS turn — nothing sourced from the poisoned history
 		for (const c of turn.citations) {
@@ -428,47 +440,51 @@ describe('CHAT-AI-002: standalone query rewriter (#127)', () => {
 
 	test('a turn retrieves on the standalone query and audits the rewrite on the plan', async () => {
 		const f = await setupFixture()
-		const conv = await startConversation(sql, f.principal, 'rewrite audit')
-		const first = await postUserTurn(sql, f.principal, {
-			conversationId: conv.conversationId,
-			content: 'Apa hukum jamak dan qashar shalat dalam perjalanan safar?',
-			indexReleaseId: f.releaseId,
-		})
-		expect(first.status).toBe('answered')
-		const followUp = await postUserTurn(sql, f.principal, {
-			conversationId: conv.conversationId,
-			content: 'Kalau perjalanannya cuma 50 km bagaimana?',
-			indexReleaseId: f.releaseId,
-		})
+		await withChatModel(sql, groundedModel.url, async () => {
+			const conv = await startConversation(sql, f.principal, 'rewrite audit')
+			const first = await postUserTurn(sql, f.principal, {
+				conversationId: conv.conversationId,
+				content: 'Apa hukum jamak dan qashar shalat dalam perjalanan safar?',
+				indexReleaseId: f.releaseId,
+			})
+			expect(first.status).toBe('answered')
+			const followUp = await postUserTurn(sql, f.principal, {
+				conversationId: conv.conversationId,
+				content: 'Kalau perjalanannya cuma 50 km bagaimana?',
+				indexReleaseId: f.releaseId,
+			})
 
-		// raw query preserved on the trace
-		const [trace] = await sql<{ query_original: string }[]>`
+			// raw query preserved on the trace
+			const [trace] = await sql<{ query_original: string }[]>`
 			select query_original from retrieval_traces where id = ${followUp.traceId}::uuid`
-		expect(trace.query_original).toBe(
-			'Kalau perjalanannya cuma 50 km bagaimana?',
-		)
+			expect(trace.query_original).toBe(
+				'Kalau perjalanannya cuma 50 km bagaimana?',
+			)
 
-		// rewrite decision audited on the plan (kill-switch → deterministic)
-		const [planRow] = await sql<{ plan: unknown }[]>`
+			// rewrite decision audited on the plan (kill-switch → deterministic)
+			const [planRow] = await sql<{ plan: unknown }[]>`
 			select plan from query_plans where trace_id = ${followUp.traceId}::uuid`
-		const planObj =
-			typeof planRow.plan === 'string' ? JSON.parse(planRow.plan) : planRow.plan
-		const qr = (
-			planObj as {
-				queryRewrite?: {
-					method: string
-					standaloneQuery: string
-					fallbackReason: string
+			const planObj =
+				typeof planRow.plan === 'string'
+					? JSON.parse(planRow.plan)
+					: planRow.plan
+			const qr = (
+				planObj as {
+					queryRewrite?: {
+						method: string
+						standaloneQuery: string
+						fallbackReason: string
+					}
 				}
-			}
-		).queryRewrite
-		expect(qr).toBeDefined()
-		expect(qr?.method).toBe('deterministic')
-		expect(qr?.standaloneQuery).toContain('safar')
-		expect(qr?.standaloneQuery).toContain('50 km')
+			).queryRewrite
+			expect(qr).toBeDefined()
+			expect(qr?.method).toBe('deterministic')
+			expect(qr?.standaloneQuery).toContain('safar')
+			expect(qr?.standaloneQuery).toContain('50 km')
 
-		// and the turn answered from the REAL evidence (jamak unit), not history
-		expect(followUp.status).toBe('answered')
+			// and the turn answered from the REAL evidence (jamak unit), not history
+			expect(followUp.status).toBe('answered')
+		})
 	})
 
 	test('LLM rewriter resolves the fragment; failures degrade deterministically', async () => {
@@ -559,6 +575,7 @@ describe('CHAT-AI-002: standalone query rewriter (#127)', () => {
 
 const savedChatModel = process.env.AIFIQH_CHAT_MODEL
 afterAll(() => {
+	groundedModel.stop()
 	process.env.AIFIQH_CHAT_MODEL = savedChatModel ?? 'off'
 	rewriterServer.stop(true)
 })
