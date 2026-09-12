@@ -251,6 +251,32 @@ describe('CAL-010/#145: chain simulation — domain A exhausted skips the whole 
 		}
 	})
 
+	test('scenario 2c: ignoreQuotaBreaker returns the full chain — an open breaker is transient, not a config defect (#148)', async () => {
+		// the startup verification gate resolves WITH this option: deployment
+		// during a quota outage window must not refuse to boot just because
+		// every configured domain is currently tripped
+		const savedSwitch = process.env.AIFIQH_CHAT_MODEL
+		process.env.AIFIQH_CHAT_MODEL = ''
+		try {
+			await tripQuotaDomain(sql, 'quota-a', {
+				message: 'Provider returned 429: Usage limit reached for 5 hour',
+				resetAt: new Date(Date.now() + 3_600_000),
+				now: new Date(),
+			})
+			const chain = await resolveChatModelCandidates(sql, {
+				ignoreQuotaBreaker: true,
+			})
+			expect(chain.candidates.map((c) => c.config.modelId)).toEqual([
+				'glm-a-1',
+				'glm-a-2',
+				'other-model-1',
+			])
+		} finally {
+			process.env.AIFIQH_CHAT_MODEL = savedSwitch ?? 'off'
+			await closeQuotaDomain(sql, 'quota-a')
+		}
+	})
+
 	afterAll(async () => {
 		// restore: close breaker + clean the simulation rows so other suites
 		// see the configured production chain, not this tenant's alias

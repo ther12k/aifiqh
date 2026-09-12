@@ -52,7 +52,11 @@ const sql = postgres(DB_URL, { max: 1, connect_timeout: 10 })
 
 let chain: Awaited<ReturnType<typeof resolveChatModelCandidates>>
 try {
-	chain = await resolveChatModelCandidates(sql)
+	// the startup gate judges CONFIGURATION resolvability, not transient
+	// runtime state: an open quota breaker (bounded reset_at) must never
+	// block deployment (#148 — the entrypoint refused to boot during a
+	// quota outage window)
+	chain = await resolveChatModelCandidates(sql, { ignoreQuotaBreaker: true })
 } catch (err) {
 	console.error(
 		`✗ model verification could not reach the database: ${err instanceof Error ? err.message : String(err)}`,
@@ -99,8 +103,22 @@ if (!anyModel && REQUIRED) {
 
 if (!anyModel) {
 	console.warn(
-		'⚠ chat turns will use the deterministic built-in composer (recorded per turn as generation mode "deterministic_rag").',
+		'⚠ chat turns will fail honestly (system_error) until a model resolves — the composer no longer substitutes for synthesis (ANS-DUMP-001).',
 	)
+}
+
+// transient breaker state: reported for visibility, never gating — the
+// runtime chat path re-filters candidates per turn and auto-expires
+try {
+	const { openQuotaDomains } = await import('../apps/api/src/llm/quotaBreaker')
+	const open = await openQuotaDomains(sql, new Date())
+	for (const d of open.values()) {
+		console.warn(
+			`⚠ quota breaker OPEN (transient, auto-expires): ${d.domain} — reset ${d.resetAt ?? 'unknown'}`,
+		)
+	}
+} catch {
+	// breaker table unavailable — nothing to report
 }
 
 // embedding resolution (RAG-SEM-001): reported for visibility. Hash vectors

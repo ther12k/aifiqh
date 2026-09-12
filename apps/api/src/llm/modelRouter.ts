@@ -305,9 +305,16 @@ function configFromRow(row: {
  * Resolve the full chat attempt order: the primary alias first, then the
  * enabled fallback chain (skipping unresolvable entries with a reason).
  * Kill-switch short-circuits everything — tests stay hermetic.
+ *
+ * `ignoreQuotaBreaker` returns the FULL configuration-resolvable chain
+ * WITHOUT the open-domain filter: the startup verification gate uses it,
+ * because an open breaker is a TRANSIENT runtime state (bounded reset_at)
+ * that must never block deployment (ANS-DUMP-001/#148 found the production
+ * entrypoint refusing to boot during a quota outage window).
  */
 export async function resolveChatModelCandidates(
 	sql: Sql,
+	opts: { ignoreQuotaBreaker?: boolean } = {},
 ): Promise<ChatModelChain> {
 	const primary = await resolveChatModelDiagnostics(sql)
 	const chain: ChatModelChain = {
@@ -422,28 +429,32 @@ export async function resolveChatModelCandidates(
 	// CAL-010: quota breaker — drop candidates whose failure domain is
 	// currently OPEN (429-exhausted). Fail-open: a broken breaker never
 	// skips. No cap here: the budget counts actual attempts downstream.
-	try {
-		const open = await openQuotaDomains(sql, new Date())
-		if (open.size > 0) {
-			chain.quotaDomains = [...open.values()]
-			const kept: typeof chain.candidates = []
-			for (const candidate of chain.candidates) {
-				const domain =
-					candidate.config.failureDomain ?? candidate.config.providerKey
-				const skip = open.get(domain)
-				if (skip) {
-					chain.skipped.push({
-						position: candidate.position ?? 0,
-						reason: `quota_exhausted:${domain} (reset ${skip.resetAt ?? 'unknown'})`,
-					})
-					continue
+	// Startup verification passes ignoreQuotaBreaker — an open breaker is
+	// transient, not a configuration defect.
+	if (!opts.ignoreQuotaBreaker) {
+		try {
+			const open = await openQuotaDomains(sql, new Date())
+			if (open.size > 0) {
+				chain.quotaDomains = [...open.values()]
+				const kept: typeof chain.candidates = []
+				for (const candidate of chain.candidates) {
+					const domain =
+						candidate.config.failureDomain ?? candidate.config.providerKey
+					const skip = open.get(domain)
+					if (skip) {
+						chain.skipped.push({
+							position: candidate.position ?? 0,
+							reason: `quota_exhausted:${domain} (reset ${skip.resetAt ?? 'unknown'})`,
+						})
+						continue
+					}
+					kept.push(candidate)
 				}
-				kept.push(candidate)
+				chain.candidates = kept
 			}
-			chain.candidates = kept
+		} catch {
+			// breaker unavailable → attempt everything as before
 		}
-	} catch {
-		// breaker unavailable → attempt everything as before
 	}
 	return chain
 }
