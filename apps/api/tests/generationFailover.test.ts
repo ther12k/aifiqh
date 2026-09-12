@@ -8,18 +8,30 @@ import { ensureMigrations } from './dbBootstrap'
 import { approveTestRevision } from './revisionSeed'
 
 /**
- * CAL-010 residual acceptance (#145): prove FULL failover, not just candidate
- * selection. Real chat turn with fake HTTP providers:
+ * CAL-010 residual acceptance (#145): prove FULL failover semantics with a
+ * real chat turn over fake HTTP providers.
  *
- *   domain A (proxy account, two models A1+A2 — both would 429)
- *     → A1 returns the real GLM "Usage limit reached" 429
- *     → the domain trips MID-TURN → A2 is NEVER CALLED (same turn)
- *   domain B (independent account)
- *     → B1 is called and produces a schema-valid, quote-verified answer
+ *   scenario 1 — first 429 on A trips the domain MID-TURN: A2 is never
+ *     called, B1 (independent domain) generates a schema-valid, quote-
+ *     verified answer. Asserted PER MODEL: A1=+1, A2=+0, B1=+1 generation
+ *     calls (helper planner/rewriter calls counted separately).
  *
- * planner/rewriter calls also hit domain A first (same chain) — they may 429
- * and degrade deterministically; that is fine, the turn's GENERATION is what
- * this test asserts.
+ *   scenario 2 — the attempt budget counts ACTUAL attempts: with
+ *     maxAttempts=2, A1's mid-turn trip makes A2's skip FREE, so B1 still
+ *     gets the second budget slot.
+ *
+ *   scenario 2b — with ALL breakers closed and every A attempt failing
+ *     non-quota, the budget still caps attempts (A1+A2 consume it; B1 is
+ *     never attempted; the deterministic composer answers).
+ *
+ *   scenario 3 — unit policy: throttle vs sustained-quota classification.
+ *
+ *   scenario 4 — an HTTP `Retry-After` HEADER (body carries no retry hint)
+ *     reaches the cooldown decision: the breaker arms at the header value
+ *     (30s), not the 60s default.
+ *
+ * planner/rewriter helper calls also ride the same chain — they may fail
+ * and degrade deterministically; the turn's GENERATION is what is asserted.
  */
 
 const DB_URL =
@@ -29,6 +41,8 @@ const sql = postgres(DB_URL, { max: 5 })
 const TEXT = 'Air mutlak adalah air suci dan menyucikan untuk bersuci.'
 const PROMPT_EVIDENCE =
 	/- id: ([0-9a-f-]{36}) \[[^\]]*\][^\n]*\n\s*teks: ([^\n]*)/g
+/** system-prompt marker of the GROUNDED GENERATION call (not helpers) */
+const GEN_MARKER = 'BUKTI (satu-satunya sumber'
 
 const QUOTA_429 = JSON.stringify({
 	error: {
@@ -36,9 +50,17 @@ const QUOTA_429 = JSON.stringify({
 			'[glm/glm-4.6] [429]: Usage limit reached for 5 hour. Your limit will reset at 2030-01-01 00:00:00',
 	},
 })
+/** throttle body WITHOUT any retry hint — the hint lives in the header only */
+const THROTTLE_429_BODY = JSON.stringify({
+	error: { message: 'Requests are being throttled' },
+})
 
-// --- fake domain-A proxy: every generation call 429s with quota exhaustion
+// --- fake domain-A proxy -------------------------------------------------
+type AMode = 'quota_429' | 'server_error' | 'throttle_header'
+let aMode: AMode = 'quota_429'
 let aCalls = 0
+/** generation calls per MODEL on domain A (helpers excluded) */
+const aGenCalls: Record<string, number> = {}
 const serverA = Bun.serve({
 	port: 0,
 	async fetch(req) {
@@ -47,20 +69,31 @@ const serverA = Bun.serve({
 			return new Response('not found', { status: 404 })
 		}
 		const body = (await req.json()) as {
+			model?: string
 			messages: Array<{ role: string; content: string }>
 		}
 		const system = body.messages.find((m) => m.role === 'system')?.content ?? ''
 		aCalls += 1
-		// helper calls (planner/rewriter) also fail — same account
-		if (!system.includes('BUKTI (satu-satunya sumber')) {
-			return new Response(QUOTA_429, { status: 429 })
+		if (system.includes(GEN_MARKER)) {
+			const model = body.model ?? 'unknown'
+			aGenCalls[model] = (aGenCalls[model] ?? 0) + 1
+		}
+		if (aMode === 'server_error') {
+			return new Response('boom', { status: 500 })
+		}
+		if (aMode === 'throttle_header') {
+			return new Response(THROTTLE_429_BODY, {
+				status: 429,
+				headers: { 'retry-after': '30' },
+			})
 		}
 		return new Response(QUOTA_429, { status: 429 })
 	},
 })
 
-// --- fake domain-B provider: planner/rewriter degrade-safe, generator valid
-let bGenerationCalls = 0
+// --- fake domain-B provider: helpers degrade-safe, generator valid -------
+/** generation calls per MODEL on domain B (helpers excluded) */
+const bGenCalls: Record<string, number> = {}
 const serverB = Bun.serve({
 	port: 0,
 	async fetch(req) {
@@ -69,6 +102,7 @@ const serverB = Bun.serve({
 			return new Response('not found', { status: 404 })
 		}
 		const body = (await req.json()) as {
+			model?: string
 			messages: Array<{ role: string; content: string }>
 			stream?: boolean
 		}
@@ -121,12 +155,13 @@ const serverB = Bun.serve({
 			})
 		}
 
-		// helper calls: return garbage → deterministic fallback upstream; the
-		// 429 marker is deliberately absent so domain B never trips
-		if (!system.includes('BUKTI (satu-satunya sumber')) {
+		// helper calls: return garbage → deterministic fallback upstream; no
+		// 429 marker, so domain B never trips
+		if (!system.includes(GEN_MARKER)) {
 			return reply('bukan json', 'stop')
 		}
-		bGenerationCalls += 1
+		const model = body.model ?? 'unknown'
+		bGenCalls[model] = (bGenCalls[model] ?? 0) + 1
 		PROMPT_EVIDENCE.lastIndex = 0
 		const match = PROMPT_EVIDENCE.exec(system)
 		if (!match) return new Response('no evidence', { status: 502 })
@@ -165,9 +200,31 @@ interface Fixture {
 	releaseId: string
 	domainAProviderKey: string
 	domainBProviderKey: string
+	a1Id: string
+	a2Id: string
+	b1Id: string
 }
 
 let fixture: Fixture | undefined
+
+/** (re)point chat-production at A1 with fallbacks A2 (same quota) then B1 */
+async function configureChain(f: Fixture): Promise<void> {
+	await sql`
+		insert into configuration_aliases (alias, target_type, target_id, change_reason)
+		values ('chat-production', 'model', ${f.a1Id}::uuid, 'failover test')
+		on conflict (alias) do update set target_type = excluded.target_type, target_id = excluded.target_id`
+	await sql`delete from configuration_fallbacks where alias = 'chat-production'`
+	await sql`
+		insert into configuration_fallbacks (alias, target_type, target_id, position, enabled)
+		values ('chat-production', 'model', ${f.a2Id}::uuid, 1, true),
+		       ('chat-production', 'model', ${f.b1Id}::uuid, 2, true)`
+}
+
+async function clearChain(): Promise<void> {
+	await sql`delete from generation_quota_domains`
+	await sql`delete from configuration_fallbacks where alias = 'chat-production'`
+	await sql`delete from configuration_aliases where alias = 'chat-production'`
+}
 
 async function setup(): Promise<Fixture> {
 	if (fixture) return fixture
@@ -267,7 +324,6 @@ async function setup(): Promise<Fixture> {
 		insert into model_configs (provider_config_id, model_id, context_window)
 		values (${provB.id}::uuid, 'b-model', 8192)`
 
-	// alias → A1; fallbacks → A2 (same domain) then B1 (independent)
 	const [a1] = await sql<{ id: string }[]>`
 		select mc.id from model_configs mc join provider_configs pc on pc.id = mc.provider_config_id
 		where pc.key = ${keyA} and mc.model_id = 'a1-model'`
@@ -277,46 +333,58 @@ async function setup(): Promise<Fixture> {
 	const [b1] = await sql<{ id: string }[]>`
 		select mc.id from model_configs mc join provider_configs pc on pc.id = mc.provider_config_id
 		where pc.key = ${keyB} and mc.model_id = 'b-model'`
-	await sql`
-		insert into configuration_aliases (alias, target_type, target_id, change_reason)
-		values ('chat-production', 'model', ${a1.id}::uuid, 'failover test')
-		on conflict (alias) do update set target_type = excluded.target_type, target_id = excluded.target_id`
-	await sql`delete from configuration_fallbacks where alias = 'chat-production'`
-	await sql`
-		insert into configuration_fallbacks (alias, target_type, target_id, position, enabled)
-		values ('chat-production', 'model', ${a2.id}::uuid, 1, true),
-		       ('chat-production', 'model', ${b1.id}::uuid, 2, true)`
 
 	fixture = {
 		principal,
 		releaseId: compiled.indexReleaseId,
 		domainAProviderKey: keyA,
 		domainBProviderKey: keyB,
+		a1Id: a1.id,
+		a2Id: a2.id,
+		b1Id: b1.id,
 	}
 	return fixture
 }
 
-describe('CAL-010 residual: full failover — first 429 on A skips A2, B generates a validated answer', () => {
+function genCalls(map: Record<string, number>, model: string): number {
+	return map[model] ?? 0
+}
+
+async function askTurn(
+	f: Fixture,
+	opts: { maxAttempts?: string } = {},
+): Promise<ReturnType<typeof postUserTurn>> {
+	if (opts.maxAttempts)
+		process.env.AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS = opts.maxAttempts
+	const conv = await startConversation(sql, f.principal, 'failover')
+	return postUserTurn(sql, f.principal, {
+		conversationId: conv.conversationId,
+		content: 'Apakah hukum air mutlak yang suci dan menyucikan untuk bersuci?',
+		indexReleaseId: f.releaseId,
+	})
+}
+
+describe('CAL-010 residual: full failover from first 429 to a validated answer', () => {
 	beforeAll(async () => {
-		await setup()
+		const f = await setup()
+		await configureChain(f)
 		process.env.FO_SECRET_A = 'k-a'
 		process.env.FO_SECRET_B = 'k-b'
 	})
 
-	test('scenario 1: A1 429 → A2 never called → B1 answers with schema+quote-valid JSON', async () => {
+	test('scenario 1: A1 429 → A2 never called → B1 answers; per-model generation calls A1=1, A2=0, B1=1', async () => {
 		const f = await setup()
 		const savedSwitch = process.env.AIFIQH_CHAT_MODEL
 		process.env.AIFIQH_CHAT_MODEL = ''
+		aMode = 'quota_429'
+		// budget note: whatever AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS residue other
+		// suites left is '3' (the default) — the turn makes only 2 attempts
 		try {
-			const conv = await startConversation(sql, f.principal, 'failover')
+			const a1Before = genCalls(aGenCalls, 'a1-model')
+			const a2Before = genCalls(aGenCalls, 'a2-model')
+			const b1Before = genCalls(bGenCalls, 'b-model')
 			const aCallsBefore = aCalls
-			const bGenBefore = bGenerationCalls
-			const turn = await postUserTurn(sql, f.principal, {
-				conversationId: conv.conversationId,
-				content:
-					'Apakah hukum air mutlak yang suci dan menyucikan untuk bersuci?',
-				indexReleaseId: f.releaseId,
-			})
+			const turn = await askTurn(f)
 
 			// the answer came from a MODEL (not the composer) and passed the
 			// full validation stack
@@ -327,14 +395,21 @@ describe('CAL-010 residual: full failover — first 429 on A skips A2, B generat
 			expect(turn.verification.citationIntegrity).toBe('passed')
 			expect(turn.citations.length).toBeGreaterThan(0)
 
-			// domain A WAS attempted (its first 429 trips the domain)…
+			// domain A WAS attempted over HTTP (planner/rewriter + generation)…
 			expect(aCalls).toBeGreaterThan(aCallsBefore)
-			// …but exactly ONE generation attempt reached A: after the trip,
-			// A2 in the same domain is skipped for the rest of the turn.
-			// helper calls (planner/rewriter) may also hit A before generation;
-			// assert the GENERATION-call discipline via B: exactly one B
-			// generation call produced the answer
-			expect(bGenerationCalls).toBe(bGenBefore + 1)
+			// …but the GENERATION-call discipline is per model: exactly one A1
+			// generation call, ZERO A2 generation calls after the mid-turn
+			// trip, exactly one B1 generation call that produced the answer
+			expect(genCalls(aGenCalls, 'a1-model')).toBe(a1Before + 1)
+			expect(genCalls(aGenCalls, 'a2-model')).toBe(a2Before)
+			expect(genCalls(bGenCalls, 'b-model')).toBe(b1Before + 1)
+
+			// the per-attempt audit agrees: two attempts only (A1 error, B1 ok)
+			const attempts = turn.generation.attempts ?? []
+			expect(attempts.map((x) => [x.model, x.outcome])).toEqual([
+				['a1-model', 'provider_error'],
+				['b-model', 'success'],
+			])
 
 			// breaker state: quota-a open with the provider-stated reset
 			const [breaker] = await sql<
@@ -352,9 +427,77 @@ describe('CAL-010 residual: full failover — first 429 on A skips A2, B generat
 			expect(b?.state ?? 'closed').toBe('closed')
 		} finally {
 			process.env.AIFIQH_CHAT_MODEL = savedSwitch ?? 'off'
+			await clearChain()
+			await configureChain(f)
+		}
+	})
+
+	test('scenario 2: mid-turn trip — A2 skip is FREE, B1 still gets the second budget slot (maxAttempts=2)', async () => {
+		const f = await setup()
+		const savedSwitch = process.env.AIFIQH_CHAT_MODEL
+		const savedMax = process.env.AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS
+		process.env.AIFIQH_CHAT_MODEL = ''
+		aMode = 'quota_429'
+		try {
 			await sql`delete from generation_quota_domains`
-			await sql`delete from configuration_fallbacks where alias = 'chat-production'`
-			await sql`delete from configuration_aliases where alias = 'chat-production'`
+			const a1Before = genCalls(aGenCalls, 'a1-model')
+			const a2Before = genCalls(aGenCalls, 'a2-model')
+			const b1Before = genCalls(bGenCalls, 'b-model')
+			const turn = await askTurn(f, { maxAttempts: '2' })
+
+			// budget=2 counted ACTUAL attempts: A1 (1) tripped quota-a mid-turn,
+			// A2 was skipped for FREE, B1 spent the second slot and answered
+			expect(turn.status).toBe('answered')
+			expect(turn.generation.mode).toBe('llm_rag')
+			expect(genCalls(aGenCalls, 'a1-model')).toBe(a1Before + 1)
+			expect(genCalls(aGenCalls, 'a2-model')).toBe(a2Before)
+			expect(genCalls(bGenCalls, 'b-model')).toBe(b1Before + 1)
+			const attempts = turn.generation.attempts ?? []
+			expect(attempts).toHaveLength(2)
+			expect(attempts[1].model).toBe('b-model')
+			expect(attempts[1].outcome).toBe('success')
+		} finally {
+			process.env.AIFIQH_CHAT_MODEL = savedSwitch ?? 'off'
+			process.env.AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS = savedMax ?? ''
+			await clearChain()
+			await configureChain(f)
+		}
+	})
+
+	test('scenario 2b: ALL breakers closed + non-quota failures — budget caps attempts, B1 never called', async () => {
+		const f = await setup()
+		const savedSwitch = process.env.AIFIQH_CHAT_MODEL
+		const savedMax = process.env.AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS
+		process.env.AIFIQH_CHAT_MODEL = ''
+		aMode = 'server_error'
+		try {
+			await sql`delete from generation_quota_domains`
+			const a1Before = genCalls(aGenCalls, 'a1-model')
+			const a2Before = genCalls(aGenCalls, 'a2-model')
+			const b1Before = genCalls(bGenCalls, 'b-model')
+			const turn = await askTurn(f, { maxAttempts: '2' })
+
+			// A1 and A2 each burned one REAL attempt (500 ≠ quota, no trip);
+			// the budget (2) is exhausted, so B1 is never attempted and the
+			// deterministic composer answers
+			expect(genCalls(aGenCalls, 'a1-model')).toBe(a1Before + 1)
+			expect(genCalls(aGenCalls, 'a2-model')).toBe(a2Before + 1)
+			expect(genCalls(bGenCalls, 'b-model')).toBe(b1Before)
+			const attempts = turn.generation.attempts ?? []
+			expect(attempts).toHaveLength(2)
+			expect(attempts.every((x) => x.outcome === 'provider_error')).toBeTrue()
+			expect(turn.generation.mode).toBe('deterministic_rag')
+			expect(turn.generation.fallbackReason).toBe('provider_error')
+			// non-quota failures never arm the breaker
+			const [breaker] = await sql<{ state: string }[]>`
+				select state from generation_quota_domains where key = 'quota-a'`
+			expect(breaker?.state ?? 'closed').toBe('closed')
+		} finally {
+			aMode = 'quota_429'
+			process.env.AIFIQH_CHAT_MODEL = savedSwitch ?? 'off'
+			process.env.AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS = savedMax ?? ''
+			await clearChain()
+			await configureChain(f)
 		}
 	})
 
@@ -362,15 +505,12 @@ describe('CAL-010 residual: full failover — first 429 on A skips A2, B generat
 		const f = await setup()
 		const savedSwitch = process.env.AIFIQH_CHAT_MODEL
 		process.env.AIFIQH_CHAT_MODEL = ''
-		// repoint the chain at A only, and make A return a transient throttle
-		// with a retry hint
-		const [a1] = await sql<{ id: string }[]>`
-			select mc.id from model_configs mc join provider_configs pc on pc.id = mc.provider_config_id
-			where pc.key = ${f.domainAProviderKey} and mc.model_id = 'a1-model'`
+		// chain = A1 only
 		await sql`
 			insert into configuration_aliases (alias, target_type, target_id, change_reason)
-			values ('chat-production', 'model', ${a1.id}::uuid, 'throttle test')
+			values ('chat-production', 'model', ${f.a1Id}::uuid, 'throttle test')
 			on conflict (alias) do update set target_type = excluded.target_type, target_id = excluded.target_id`
+		await sql`delete from configuration_fallbacks where alias = 'chat-production'`
 		try {
 			// direct unit-level proof of the policy: the classifier + default
 			const { classifyRateLimit, parseRetryAfterMs } = await import(
@@ -385,16 +525,56 @@ describe('CAL-010 residual: full failover — first 429 on A skips A2, B generat
 			)
 		} finally {
 			process.env.AIFIQH_CHAT_MODEL = savedSwitch ?? 'off'
-			await sql`delete from configuration_aliases where alias = 'chat-production'`
+			await clearChain()
 		}
 	})
-})
 
-afterAll(() => {
-	process.env.AIFIQH_CHAT_MODEL = 'off'
-	process.env.FO_SECRET_A = ''
-	process.env.FO_SECRET_B = ''
-	serverA.stop(true)
-	serverB.stop(true)
-	sql.end({ timeout: 1 })
+	test('scenario 4: header-only Retry-After reaches the cooldown decision (30s header ≠ 60s default)', async () => {
+		const f = await setup()
+		const savedSwitch = process.env.AIFIQH_CHAT_MODEL
+		process.env.AIFIQH_CHAT_MODEL = ''
+		aMode = 'throttle_header'
+		// chain = A1 only, so the 429 must land in the breaker table
+		await sql`
+			insert into configuration_aliases (alias, target_type, target_id, change_reason)
+			values ('chat-production', 'model', ${f.a1Id}::uuid, 'retry-after header test')
+			on conflict (alias) do update set target_type = excluded.target_type, target_id = excluded.target_id`
+		await sql`delete from configuration_fallbacks where alias = 'chat-production'`
+		try {
+			await sql`delete from generation_quota_domains`
+			const turn = await askTurn(f)
+
+			// the turn itself degrades to the composer (A1 throttled, no
+			// fallback configured) — the assertion target is the BREAKER
+			expect(turn.generation.mode).toBe('deterministic_rag')
+
+			const [breaker] = await sql<
+				{ state: string; last_error: string; reset_at: string }[]
+			>`select state, last_error, reset_at::text from generation_quota_domains
+				where key = 'quota-a'`
+			expect(breaker?.state).toBe('open')
+			expect(breaker.last_error).toContain('transient_throttle')
+			// the body carried NO retry hint — only the HTTP header did, so a
+			// ~30s cooldown proves the header reached the decision; the 60s
+			// default (or the 30-min quota breaker) would fail this window
+			const deltaMs = new Date(breaker.reset_at).getTime() - Date.now()
+			expect(deltaMs).toBeGreaterThan(20_000)
+			expect(deltaMs).toBeLessThan(40_000)
+			expect(breaker.last_error).not.toContain('Usage limit reached')
+		} finally {
+			aMode = 'quota_429'
+			process.env.AIFIQH_CHAT_MODEL = savedSwitch ?? 'off'
+			await clearChain()
+		}
+	})
+
+	afterAll(async () => {
+		await clearChain()
+		process.env.AIFIQH_CHAT_MODEL = 'off'
+		process.env.FO_SECRET_A = ''
+		process.env.FO_SECRET_B = ''
+		serverA.stop(true)
+		serverB.stop(true)
+		sql.end({ timeout: 1 })
+	})
 })

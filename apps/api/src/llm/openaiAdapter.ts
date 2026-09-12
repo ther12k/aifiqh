@@ -23,6 +23,28 @@ export interface OpenAIAdapterConfig {
 }
 
 /**
+ * CAL-010: surface an HTTP `Retry-After` response header inside the error
+ * message. The quota breaker's cooldown decision parses that message, so a
+ * header-only retry hint (body carries none) must still reach it. Accepts
+ * delay-seconds or an HTTP-date; empty when the header is absent. Placed
+ * BEFORE the body text so downstream message slicing cannot cut it off.
+ */
+function retryAfterHint(res: Response): string {
+	const raw = res.headers.get('retry-after')
+	if (!raw) return ''
+	const seconds = Number(raw)
+	if (Number.isFinite(seconds) && seconds > 0) {
+		return ` (retry-after: ${Math.floor(seconds)}s)`
+	}
+	const date = new Date(raw)
+	if (!Number.isNaN(date.getTime())) {
+		const delta = Math.max(1, Math.round((date.getTime() - Date.now()) / 1000))
+		return ` (retry-after: ${delta}s)`
+	}
+	return ''
+}
+
+/**
  * OpenAI-compatible Adapter for local endpoints (vLLM, Ollama, TGI, LocalAI) and standard OpenAI API.
  */
 export class OpenAICompatibleAdapter implements ModelProviderAdapter {
@@ -153,7 +175,7 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 
 			throw new ModelGatewayError(
 				code,
-				`Provider returned ${status}: ${errText}`,
+				`Provider returned ${status}:${retryAfterHint(res)} ${errText}`,
 				{
 					providerId: this.providerKey,
 					modelId: request.modelId,
@@ -262,7 +284,7 @@ export class OpenAICompatibleAdapter implements ModelProviderAdapter {
 				res.status === 401 || res.status === 403
 					? 'AUTHENTICATION_FAILED'
 					: 'PROVIDER_UNAVAILABLE',
-				`Provider returned ${res.status}: ${errText.slice(0, 240)}`,
+				`Provider returned ${res.status}:${retryAfterHint(res)} ${errText.slice(0, 240)}`,
 				{
 					providerId: this.providerKey,
 					modelId: request.modelId,

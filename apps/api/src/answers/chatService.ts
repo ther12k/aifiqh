@@ -6,6 +6,7 @@ import { resolveEmbeddingProvider } from '../index/embeddingService'
 import { DefaultModelGateway } from '../llm/gateway'
 import {
 	type ChatModelResolution,
+	maxChatAttempts,
 	resolveChatModelCandidates,
 } from '../llm/modelRouter'
 import { resolveChatModelConfig } from '../llm/modelRouter'
@@ -843,6 +844,11 @@ async function runTurn(
 	// remaining candidates of THIS turn, not only the next ones — the chain
 	// is resolved once, so track freshly-tripped domains locally
 	const trippedThisTurn = new Set<string>()
+	// CAL-010 residual: the attempt budget caps ACTUAL attempts. Skipped
+	// candidates (mid-turn trip) consume nothing, so an independent domain
+	// further down the chain still gets its chance within the budget
+	const attemptBudget = maxChatAttempts()
+	let attemptsUsed = 0
 	for (const candidate of chain.candidates) {
 		const model = candidate.config
 		const domain = model.failureDomain ?? model.providerKey
@@ -850,6 +856,11 @@ async function runTurn(
 			// not an attempt: skipped candidates never touch the attempt metrics
 			continue
 		}
+		if (attemptsUsed >= attemptBudget) {
+			// budget exhausted by real attempts — stop, the composer is next
+			break
+		}
+		attemptsUsed += 1
 		const gateway = new DefaultModelGateway()
 		gateway.registerProvider(model.adapter)
 		const result = await generateGroundedAnswer({

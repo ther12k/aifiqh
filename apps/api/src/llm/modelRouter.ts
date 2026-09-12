@@ -185,9 +185,11 @@ export async function resolveChatModelConfig(
 /* -------------------------------------------------------------------------
  * Fallback chain (AI-004): the chat-production alias is the PRIMARY;
  * configuration_fallbacks rows (0044) are ordered backups tried when the
- * primary fails. The chain is capped by AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS
- * (total attempts, default 3) and the explicit kill-switch (AIFIQH_CHAT_
- * MODEL=off) disables the WHOLE chain, not just the primary.
+ * primary fails. Resolution returns the FULL attemptable chain; the
+ * AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS budget (total attempts, default 3) is
+ * enforced per ACTUAL attempt by the chat pipeline, so candidates skipped
+ * by the quota breaker never consume it. The explicit kill-switch
+ * (AIFIQH_CHAT_MODEL=off) disables the WHOLE chain, not just the primary.
  * ---------------------------------------------------------------------- */
 
 /** total model attempts per turn (primary + fallbacks) */
@@ -326,7 +328,6 @@ export async function resolveChatModelCandidates(
 	// an explicit kill-switch disables the entire chain, not just the primary
 	if (primary.reason === 'kill_switch') return chain
 
-	const cap = maxChatAttempts()
 	const rows = await sql<
 		{
 			target_type: string
@@ -339,9 +340,11 @@ export async function resolveChatModelCandidates(
 		order by position asc`
 	chain.hasFallbackConfigured = rows.length > 0
 
-	// CAL-010 residual: load the FULL chain first — the attempt budget is
-	// applied AFTER quota-domain filtering, so skipped candidates never
-	// consume slots an independent domain could have used
+	// CAL-010 residual: load the FULL chain — quota-domain filtering below
+	// decides who is ATTEMPTABLE, and the attempt budget itself is enforced
+	// per ACTUAL attempt by the chat pipeline (a candidate skipped by a
+	// mid-turn trip must never consume a slot an independent domain below
+	// it could have used)
 	for (const row of rows) {
 		const targetId = row.target_id
 
@@ -417,7 +420,8 @@ export async function resolveChatModelCandidates(
 	}
 
 	// CAL-010: quota breaker — drop candidates whose failure domain is
-	// currently OPEN (429-exhausted). Fail-open: a broken breaker never skips.
+	// currently OPEN (429-exhausted). Fail-open: a broken breaker never
+	// skips. No cap here: the budget counts actual attempts downstream.
 	try {
 		const open = await openQuotaDomains(sql, new Date())
 		if (open.size > 0) {
@@ -436,7 +440,7 @@ export async function resolveChatModelCandidates(
 				}
 				kept.push(candidate)
 			}
-			chain.candidates = kept.slice(0, cap)
+			chain.candidates = kept
 		}
 	} catch {
 		// breaker unavailable → attempt everything as before

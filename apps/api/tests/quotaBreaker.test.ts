@@ -209,13 +209,16 @@ describe('CAL-010/#145: chain simulation — domain A exhausted skips the whole 
 		expect(rows[0].state).toBe('open')
 	}
 
-	test('scenario 2: skipped domain-A candidates do NOT consume the attempt budget (B loads even at maxAttempts=2)', async () => {
-		// chain is A1(primary), A2(fb1), B1(fb2) with A open; budget 2 must
-		// apply to ATTEMPTABLE candidates — B1 survives the slice
+	test('scenario 2: resolution is UNSLICED — the budget counts actual attempts downstream, not candidates', async () => {
+		// chain is A1(primary), A2(fb1), B1(fb2) with A open. Resolution must
+		// return every ATTEMPTABLE candidate (here: only quota-b) WITHOUT a
+		// length cap — AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS is enforced per
+		// actual attempt by the chat pipeline, where a mid-turn trip makes a
+		// skip free (see generationFailover.test.ts scenarios 2/2b)
 		const savedSwitch = process.env.AIFIQH_CHAT_MODEL
 		const savedMax = process.env.AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS
 		process.env.AIFIQH_CHAT_MODEL = ''
-		process.env.AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS = '2'
+		process.env.AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS = '1'
 		try {
 			// re-trip A (the earlier test may have left it closed)
 			await tripQuotaDomain(sql, 'quota-a', {
@@ -227,9 +230,20 @@ describe('CAL-010/#145: chain simulation — domain A exhausted skips the whole 
 			const domains = chain.candidates.map(
 				(c) => c.config.failureDomain ?? c.config.providerKey,
 			)
-			// only the independent domain remains, and it fits the budget
+			// the open domain is filtered whole; the independent domain loads
+			// even though the budget is 1 — the budget does not slice here
 			expect(domains).toEqual(['quota-b'])
-			expect(chain.candidates.length).toBeLessThanOrEqual(2)
+
+			// with every breaker CLOSED the full chain loads unsliced: the
+			// budget applies to attempts, never to resolution
+			await closeQuotaDomain(sql, 'quota-a')
+			await sql`delete from generation_quota_domains where key = 'quota-a'`
+			const fullChain = await resolveChatModelCandidates(sql)
+			expect(fullChain.candidates.map((c) => c.config.modelId)).toEqual([
+				'glm-a-1',
+				'glm-a-2',
+				'other-model-1',
+			])
 		} finally {
 			process.env.AIFIQH_CHAT_MODEL = savedSwitch ?? 'off'
 			process.env.AIFIQH_CHAT_FALLBACK_MAX_ATTEMPTS = savedMax ?? ''
