@@ -107,9 +107,12 @@ test('unauthenticated visitor is pointed to sign in', async ({ page }) => {
 	await expect(page.getByRole('main')).toContainText('Masuk')
 })
 
-test('chat interface submits query and receives grounded answer', async ({
+test('chat interface submits query and reports honestly when no model is available', async ({
 	browser,
 }) => {
+	// e2e runs with AIFIQH_CHAT_MODEL=off — the ANS-DUMP-001 contract says
+	// the turn must fail honestly, never dress retrieved passages up as an
+	// AI-concluded answer
 	const context = await browser.newContext()
 	const page = await newSessionedPage(context)
 	await page.goto('/#/chat')
@@ -122,8 +125,9 @@ test('chat interface submits query and receives grounded answer', async ({
 		'.chat-messages li[data-role="assistant"]:not([data-streaming])',
 	)
 	await expect(assistantMsg).toBeVisible({ timeout: 30_000 })
+	await expect(assistantMsg.last()).toHaveAttribute('data-status', 'failed')
 	await expect(assistantMsg.last()).toContainText(
-		/Keputusan|abstain|Hadits|amalan|jawaban/i,
+		'Jawaban belum berhasil disusun',
 	)
 	await context.close()
 })

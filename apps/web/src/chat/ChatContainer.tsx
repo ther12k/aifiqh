@@ -1113,7 +1113,12 @@ export function ChatContainer({
 			// structure is visible — content itself is never reworded
 			let assistantText = ''
 			let storedAnswer: StoredAnswer | null = null
-			if (result.status === 'answered' && result.answer) {
+			if (result.status === 'failed') {
+				// ANS-DUMP-001: mirror the persisted honest failure copy (no
+				// decision card — a service failure is not an abstain decision)
+				assistantText =
+					'Jawaban belum berhasil disusun.\n\nSistem belum berhasil menyusun jawaban yang tervalidasi untuk pertanyaan ini. Silakan coba lagi.'
+			} else if (result.status === 'answered' && result.answer) {
 				const sections: AnswerSection[] = []
 				const parts: string[] = []
 				for (const s of result.answer.sections) {
