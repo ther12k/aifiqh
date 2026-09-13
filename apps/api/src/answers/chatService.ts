@@ -1667,6 +1667,25 @@ export async function getConversation(
 				}
 			}
 
+			// M6-016: non-answer turns (failed/abstained without sections)
+			// still carry their presentation, derived from the SAME stored
+			// truth the live turn used — reload can never disagree about
+			// the result kind the user saw
+			let messagePresentation = answerData?.presentation ?? null
+			if (!messagePresentation && ans) {
+				messagePresentation = deriveAnswerPresentation({
+					answerStatus: ans.status as
+						| 'answered'
+						| 'abstained'
+						| 'escalated'
+						| 'failed',
+					userOutcome: decisionData?.userOutcome,
+					generationSource: null,
+					provider: ans.provider,
+					citations: [],
+				})
+			}
+
 			return {
 				id: m.id,
 				ordinal: m.ordinal,
@@ -1676,6 +1695,7 @@ export async function getConversation(
 				answerId: m.answer_id,
 				traceId: m.trace_id,
 				answerStatus: m.answer_status,
+				presentation: messagePresentation,
 				answer: answerData,
 				decision: decisionData,
 			}

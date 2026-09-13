@@ -5146,6 +5146,55 @@ h2 {
 }
 
 /* ==========================================================================
+   M6-016: answer result states — service failure card + visible caveats
+   ========================================================================== */
+.service-failure-card {
+	display: flex;
+	gap: 12px;
+	align-items: flex-start;
+	padding: 14px 16px;
+	border-radius: 12px;
+	border: 1px solid #f2c4c4;
+	background: #fdf3f3;
+}
+
+.service-failure-icon {
+	color: #a03030;
+	flex-shrink: 0;
+	margin-top: 2px;
+}
+
+.service-failure-body b {
+	display: block;
+	color: #8f2626;
+	margin-bottom: 4px;
+}
+
+.service-failure-body p {
+	margin: 0 0 10px;
+	font-size: 13.5px;
+	color: var(--text-muted);
+}
+
+.answer-caveats {
+	border-left: 3px solid var(--primary-border);
+	background: var(--surface-subtle, #eef4f0);
+	padding: 8px 12px;
+	border-radius: 0 8px 8px 0;
+	margin: 8px 0;
+	font-size: 13px;
+	color: var(--text-muted);
+}
+
+.answer-caveats p {
+	margin: 0 0 4px;
+}
+
+.answer-caveats p:last-child {
+	margin-bottom: 0;
+}
+
+/* ==========================================================================
    Generation-mode badge (AI-003): AI + Sumber vs Sumber saja
    ========================================================================== */
 .gen-badge-row {
@@ -5174,10 +5223,23 @@ h2 {
 	color: var(--primary-strong);
 }
 
-.gen-badge-sources {
+.gen-badge-sources,
+.gen-badge-quote {
 	background: var(--surface-subtle, #eef4f0);
 	border-color: var(--border);
 	color: var(--text-muted);
+}
+
+.gen-badge-warn {
+	background: #fef7ec;
+	border-color: #f0d9b5;
+	color: #92600a;
+}
+
+.gen-badge-danger {
+	background: #fdecec;
+	border-color: #f2c4c4;
+	color: #a03030;
 }
 
 .gen-badge-detail {

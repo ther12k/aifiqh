@@ -9,6 +9,7 @@ import {
 import { SidebarNav } from '../components/SidebarNav'
 import { BrandMark, ICON_PATHS, NavIcon, SearchIcon } from '../components/icons'
 import { BRAND } from '../config/brand'
+import { type PresentationLike, answerResultView } from '../lib/answerResult'
 import { stripUnsafeHtml } from '../lib/answerView'
 import {
 	type ChatShellState,
@@ -85,6 +86,9 @@ interface StoredAnswer {
 	verification: TurnVerification
 	/** AI-003: how this answer was generated (absent on pre-AI-002 rows) */
 	generation?: GenerationMetadata | null
+	/** M6-016: result-kind presentation from the API (absent on legacy
+	 * rows — the renderer falls back to the generation badge) */
+	presentation?: PresentationLike | null
 }
 
 /** citation row from the turn API (span-scoped, quote verified) */
@@ -402,8 +406,22 @@ function AnswerCard({
 	const extra = answer.sections.filter(
 		(s) => s.kind !== 'direct_answer' && s.kind !== 'evidence',
 	)
-	// AI-003: never hide whether the LLM path actually ran
-	const genBadge = generationBadge(answer.generation, isOperator)
+	// M6-016: the presentation DTO decides the result banner when present
+	// (single source, live == reload); legacy rows fall back to the
+	// AI-003 generation badge derived from stored metadata
+	const resultView = answerResultView(answer.presentation)
+	const genBadge = resultView
+		? {
+				label: resultView.banner.label,
+				tone: resultView.banner.tone,
+				title: resultView.banner.title,
+				detail: isOperator
+					? [answer.generation?.provider, answer.generation?.model]
+							.filter(Boolean)
+							.join(' / ') || null
+					: null,
+			}
+		: generationBadge(answer.generation, isOperator)
 
 	async function copyPlain() {
 		try {
@@ -537,7 +555,26 @@ function AnswerCard({
 					)}
 				</div>
 			)}
-			{extra.length > 0 && (
+			{/* M6-016: important conditions stay visible — the collapse only
+			    groups method/sources, never qualifications */}
+			{extra.filter(
+				(s) => s.kind === 'caveats' && s.text.trim() && s.text.trim() !== '—',
+			).length > 0 && (
+				<div className="answer-caveats" data-testid="answer-caveats">
+					{extra
+						.filter(
+							(s) =>
+								s.kind === 'caveats' && s.text.trim() && s.text.trim() !== '—',
+						)
+						.map((s) => (
+							<MessageParagraphs
+								key={`c-${s.kind}-${s.text.slice(0, 24)}`}
+								text={s.text}
+							/>
+						))}
+				</div>
+			)}
+			{extra.filter((s) => s.kind !== 'caveats').length > 0 && (
 				<div className="answer-extra">
 					<button
 						type="button"
@@ -677,6 +714,55 @@ function AnswerCard({
 	)
 }
 
+/**
+ * M6-016: service-failure result card (system_error). Visually and
+ * verbally DISTINCT from the abstain card: this says the SERVICE failed
+ * to compose an answer — it never claims the corpus lacks evidence (that
+ * is the abstain card's statement, and it did not run). ANS-DUMP-001
+ * holds: no passages, no citations, no "answered" dressing.
+ */
+function ServiceFailureCard({
+	failureCopy,
+}: {
+	failureCopy: { title: string; body: string; action: string }
+}) {
+	function retry() {
+		const el = document.getElementById('chat-draft')
+		if (el) {
+			el.focus()
+			el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+		}
+	}
+	return (
+		<div className="service-failure-card" data-testid="service-failure-card">
+			<span className="service-failure-icon" aria-hidden="true">
+				<svg
+					width="20"
+					height="20"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					strokeWidth="1.8"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+					role="presentation"
+				>
+					<path d="M12 9v4M12 17h.01M10.3 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.7 3.86a2 2 0 0 0-3.4 0z" />
+				</svg>
+			</span>
+			<div className="service-failure-body">
+				<b>{failureCopy.title}</b>
+				<p>{failureCopy.body}</p>
+				<div className="abstain-actions">
+					<button type="button" className="chip" onClick={retry}>
+						{failureCopy.action}
+					</button>
+				</div>
+			</div>
+		</div>
+	)
+}
+
 /** assistant avatar: the Tafaqquh dome mark, on every assistant row */
 function AssistantAvatar() {
 	return (
@@ -769,6 +855,11 @@ export function ChatContainer({
 	const [decisionsByMsg, setDecisionsByMsg] = useState<
 		Record<string, TurnDecisionInfo>
 	>({})
+	// M6-016: every turn's presentation (answer AND non-answer) — the
+	// single DTO driving which result card renders, live and on reload
+	const [presentationByMsg, setPresentationByMsg] = useState<
+		Record<string, PresentationLike>
+	>({})
 
 	useEffect(() => {
 		saveConversationOrganization(organization)
@@ -846,12 +937,15 @@ export function ChatContainer({
 						rationale?: string
 						userOutcome?: string
 					} | null
+					/** M6-016: presentation at message level (all turn kinds) */
+					presentation?: PresentationLike | null
 				}>
 			}
 
 			setConversationId(data.conversationId)
 			const loadedAnswers: Record<string, StoredAnswer> = {}
 			const loadedDecisions: Record<string, TurnDecisionInfo> = {}
+			const loadedPresentations: Record<string, PresentationLike> = {}
 			const msgs: Array<{
 				id: string
 				role: 'user' | 'assistant' | 'system'
@@ -873,6 +967,10 @@ export function ChatContainer({
 					createdAt: m.createdAt,
 				})
 
+				if (m.role === 'assistant' && m.presentation) {
+					loadedPresentations[m.id] = m.presentation as PresentationLike
+				}
+
 				if (m.role === 'assistant') {
 					if (m.answer?.sections && m.answer.sections.length > 0) {
 						const sections: AnswerSection[] = []
@@ -893,6 +991,9 @@ export function ChatContainer({
 								userOutcome: 'answered',
 							},
 							generation: m.answer.generation ?? null,
+							presentation:
+								(m.answer as { presentation?: PresentationLike | null })
+									.presentation ?? null,
 						}
 					} else if (m.decision) {
 						loadedDecisions[m.id] = {
@@ -906,6 +1007,7 @@ export function ChatContainer({
 
 			setAnswersByMsg(loadedAnswers)
 			setDecisionsByMsg(loadedDecisions)
+			setPresentationByMsg(loadedPresentations)
 			setChatState({
 				messages: msgs,
 				streaming: null,
@@ -935,6 +1037,7 @@ export function ChatContainer({
 		setChatState(EMPTY_CHAT_STATE)
 		setAnswersByMsg({})
 		setDecisionsByMsg({})
+		setPresentationByMsg({})
 		setDraft('')
 		setLoading(false)
 		setSidebarOpen(false)
@@ -1108,6 +1211,8 @@ export function ChatContainer({
 				citations?: TurnCitation[]
 				verification?: TurnVerification
 				generation?: GenerationMetadata
+				/** M6-016: result-kind presentation (every turn kind) */
+				presentation?: PresentationLike
 				decision: { decision: string; rationale?: string }
 				answer: {
 					sections: Array<{ kind: string; markdown: string }>
@@ -1157,6 +1262,7 @@ export function ChatContainer({
 							userOutcome: 'answered',
 						},
 						generation: result.generation ?? null,
+						presentation: result.presentation ?? null,
 					}
 				}
 			} else {
@@ -1176,6 +1282,14 @@ export function ChatContainer({
 			if (storedAnswer) {
 				const answer = storedAnswer
 				setAnswersByMsg((prev) => ({ ...prev, [assistantMsgId]: answer }))
+			}
+			// M6-016: presentation for EVERY outcome — failed/abstained
+			// turns render their distinct result card from this DTO
+			if (result.presentation) {
+				setPresentationByMsg((prev) => ({
+					...prev,
+					[assistantMsgId]: result.presentation as PresentationLike,
+				}))
 			}
 
 			setChatState((prev) => ({
@@ -1703,6 +1817,28 @@ export function ChatContainer({
 													answer={answer}
 													messageId={m.id}
 													isOperator={permissions.includes('ops:read')}
+												/>
+											</div>
+										</>
+									)
+								}
+								// M6-016: a service failure renders its OWN card — never the
+								// abstain card's "sumber tidak cukup" wording
+								const failureView = answerResultView(presentationByMsg[m.id])
+								if (failureView?.kind === 'system_error') {
+									return (
+										<>
+											<AssistantAvatar />
+											<div className="msg-body">
+												{head}
+												<ServiceFailureCard
+													failureCopy={
+														failureView.failureCopy as {
+															title: string
+															body: string
+															action: string
+														}
+													}
 												/>
 											</div>
 										</>

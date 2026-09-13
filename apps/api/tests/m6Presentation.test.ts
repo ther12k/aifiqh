@@ -388,6 +388,55 @@ describe('M6-010: live/reload presentation consistency', () => {
 		expect(assistant?.answer?.presentation?.kind).toBe('quotation')
 	})
 
+	test('reload carries message-level presentation for failed turns (system_error)', async () => {
+		const conv = await startConversation(
+			sql,
+			adminPrincipal,
+			'pres-failed-reload',
+		)
+		const post = await testApp.handle(
+			new Request(
+				`http://localhost/conversations/${conv.conversationId}/messages`,
+				{
+					method: 'POST',
+					headers: await authHeaders(adminId, true),
+					body: JSON.stringify({
+						content: 'Apa perbedaan zakat dan sedekah?',
+						indexReleaseId,
+					}),
+				},
+			),
+		)
+		expect(post.status).toBe(200)
+		const live = (await post.json()) as {
+			status: string
+			presentation: { kind: string; generationSource: string }
+		}
+		expect(live.status).toBe('failed')
+
+		const view = await testApp.handle(
+			new Request(`http://localhost/conversations/${conv.conversationId}`, {
+				headers: await authHeaders(adminId),
+			}),
+		)
+		const viewBody = (await view.json()) as {
+			messages: Array<{
+				role: string
+				answerStatus: string | null
+				presentation?: { kind: string; generationSource: string } | null
+				answer?: unknown | null
+			}>
+		}
+		const assistant = viewBody.messages.find((m) => m.role === 'assistant')
+		// reload carries the SAME result kind at message level — the web
+		// renders the service-failure card from this DTO, identical to live
+		expect(assistant?.answerStatus).toBe('failed')
+		expect(assistant?.answer).toBeNull()
+		expect(assistant?.presentation?.kind).toBe('system_error')
+		expect(assistant?.presentation?.generationSource).toBe('none')
+		expect(assistant?.presentation?.kind).toBe(live.presentation.kind)
+	})
+
 	test('no model + default profile: honest system_error presentation on the live surface', async () => {
 		const conv = await startConversation(sql, adminPrincipal, 'pres-failed')
 		const post = await testApp.handle(
