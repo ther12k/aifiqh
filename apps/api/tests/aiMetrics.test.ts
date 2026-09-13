@@ -186,14 +186,64 @@ async function setupSeed(): Promise<SeedContext> {
 		values (${evalVer.id}::uuid, 'c1', 'retrieval', 'test query', ${user.id}::uuid) returning id`
 	await sql`update evaluation_set_versions set status = 'published' where id = ${evalVer.id}::uuid`
 	await sql`
-		insert into evaluation_case_results (run_id, case_id, metrics)
-		values (${evalRun.id}::uuid, ${caseRow.id}::uuid,
-			${sql.json({
-				recallAtK: 0.85,
-				hit: true,
-				firstHitRank: 1,
-				latencyMs: 95,
-			} as never)}::jsonb)`
+			insert into evaluation_case_results (run_id, case_id, metrics)
+			values (${evalRun.id}::uuid, ${caseRow.id}::uuid,
+				${sql.json({
+					recallAtK: 0.85,
+					hit: true,
+					firstHitRank: 1,
+					latencyMs: 95,
+				} as never)}::jsonb)`
+
+	// M6-019: seed topical coverage shadow observations on turns 1–2.
+	// Turn 1: completed shadow observation, sufficient, no disagreement.
+	await sql`
+			update answers set metadata = jsonb_set(metadata, '{topicalCoverageShadow}',
+				${sql.json({
+					version: 'topical-assessor-shadow-v1',
+					coverage: {
+						version: 'topic-coverage-v1',
+						status: 'sufficient',
+						reasonCode: null,
+						needs: [{ id: 'need:topic-explanation', verdict: 'supported' }],
+					},
+					model: 'chat-model-1',
+					providerKey: `aim-prov-${suffix}`,
+					latencyMs: 120,
+					disagreesWithAnswer: false,
+				} as never)}::jsonb)
+			where id = ${a1.id}::uuid`
+	// Turn 2: completed shadow observation, insufficient (disagrees with
+	// the answer the user received — calibration signal), latency higher.
+	await sql`
+			update answers set metadata = jsonb_set(metadata, '{topicalCoverageShadow}',
+				${sql.json({
+					version: 'topical-assessor-shadow-v1',
+					coverage: {
+						version: 'topic-coverage-v1',
+						status: 'insufficient',
+						reasonCode: 'essential_need_uncovered',
+						needs: [
+							{ id: 'need:topic-explanation', verdict: 'supported' },
+							{ id: 'need:topic-conditions', verdict: 'unsupported' },
+						],
+					},
+					model: 'chat-model-1',
+					providerKey: `aim-prov-${suffix}`,
+					latencyMs: 480,
+					disagreesWithAnswer: true,
+				} as never)}::jsonb)
+			where id = ${a2.id}::uuid`
+	// A failed shadow observation (assessor unavailable) on turn 3 — an
+	// assessor failure must NEVER be counted as insufficient evidence.
+	await sql`
+			update answers set metadata = jsonb_set(
+				coalesce(metadata, '{}'::jsonb), '{topicalCoverageShadow}',
+				${sql.json({
+					state: 'failed',
+					reason: 'coverage_assessor_unavailable',
+				} as never)}::jsonb)
+			where id = ${a3.id}::uuid`
 
 	ctx = { principal, tenantId: tenant.id, userId: user.id }
 	return ctx
@@ -312,6 +362,33 @@ describe('getAiMetrics (OPS-AI-001)', () => {
 		// claim support
 		expect(report.claimSupport.evaluated).toBeGreaterThanOrEqual(2)
 		expect(report.claimSupport.failedAnswers).toBeGreaterThanOrEqual(1)
+
+		// M6-019: topical shadow telemetry — the four distinctions
+		// (1) cohort: production user traffic only
+		expect(report.topicalShadow.cohort).toBe('production_user')
+		// (2) evaluated count and status breakdown from seeded turns 1–2
+		expect(report.topicalShadow.evaluated).toBeGreaterThanOrEqual(2)
+		expect(report.topicalShadow.byStatus.sufficient).toBeGreaterThanOrEqual(1)
+		expect(report.topicalShadow.byStatus.insufficient).toBeGreaterThanOrEqual(1)
+		expect(report.topicalShadow.byStatus.partial).toBeGreaterThanOrEqual(0)
+		// (3) assessor failures counted SEPARATELY — never folded into
+		// insufficient evidence
+		expect(report.topicalShadow.failedAssessments).toBeGreaterThanOrEqual(1)
+		// the separation is structural: a failed observation row (turn 3,
+		// state=failed) never carries a coverage status, so it can only ever
+		// land in failedAssessments — verified by direct row inspection
+		const [failedRowHasStatus] = await sql<{ n: string }[]>`
+			select count(*) as n from answers a
+			where a.metadata->'topicalCoverageShadow'->>'state' = 'failed'
+				and a.metadata->'topicalCoverageShadow'->'coverage'->>'status' is not null`
+		expect(Number(failedRowHasStatus.n)).toBe(0)
+		// disagreements recorded as calibration signal
+		expect(report.topicalShadow.disagreements).toBeGreaterThanOrEqual(1)
+		// (4) latency p95 from the two seeded observations
+		expect(report.topicalShadow.p95LatencyMs).not.toBeNull()
+		expect(report.topicalShadow.p95LatencyMs as number).toBeGreaterThanOrEqual(
+			120,
+		)
 
 		// offline retrieval recall
 		expect(report.retrievalOffline).not.toBeNull()
