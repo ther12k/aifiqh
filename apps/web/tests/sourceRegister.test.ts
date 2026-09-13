@@ -23,7 +23,7 @@ describe('hashQuery — catalog state in the route hash', () => {
 	test('round-trips q and open params; path stays clean', () => {
 		const loc = parseHashQuery('#/sources?q=zakat&open=abc')
 		expect(loc.path).toBe('/sources')
-		expect(loc.params.get('q')).toBe('zabat' === 'zabat' ? 'zakat' : '')
+		expect(loc.params.get('q')).toBe('zakat')
 		expect(loc.params.get('open')).toBe('abc')
 		expect(serializeHashQuery(loc.path, loc.params)).toBe(
 			'#/sources?q=zakat&open=abc',
@@ -53,7 +53,7 @@ describe('catalog honesty (verified against the actual filter)', () => {
 	// ONLY — the old placeholder promised "kata kunci" the code never
 	// searched. These assertions pin the honest copy in place.
 	test('placeholder no longer promises keyword/content search', async () => {
-		const fs = await import('fs')
+		const fs = await import('node:fs')
 		const path = new URL('../src/sources/SourceRegistry.tsx', import.meta.url)
 			.pathname
 		const src = fs.readFileSync(path, 'utf8')
@@ -64,7 +64,7 @@ describe('catalog honesty (verified against the actual filter)', () => {
 	})
 
 	test('Tambah Sumber leads to the registration journey, not the concept editor', async () => {
-		const fs = await import('fs')
+		const fs = await import('node:fs')
 		const path = new URL('../src/sources/SourceRegistry.tsx', import.meta.url)
 			.pathname
 		const src = fs.readFileSync(path, 'utf8')
