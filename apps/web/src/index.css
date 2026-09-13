@@ -812,6 +812,19 @@ body {
 	font: inherit;
 	font-size: 12px;
 }
+.history-search-clear {
+	background: transparent;
+	border: none;
+	cursor: pointer;
+	color: var(--text-faint);
+	font-size: 11px;
+	padding: 2px 4px;
+	border-radius: 4px;
+	line-height: 1;
+}
+.history-search-clear:hover {
+	color: var(--text);
+}
 .history-filters {
 	display: flex;
 	gap: 5px;
@@ -938,6 +951,25 @@ body {
 	text-align: center;
 	font-size: 13px;
 	color: var(--text-muted);
+}
+.history-error {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	color: var(--danger, #b91c1c);
+}
+.btn-retry-history {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 4px 10px;
+	font-size: 11px;
+	color: var(--text);
+	cursor: pointer;
+}
+.btn-retry-history:hover {
+	background: var(--surface-hover, #f3f4f6);
 }
 
 .history-list {

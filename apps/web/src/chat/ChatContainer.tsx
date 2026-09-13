@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type Health, HealthPill } from '../components/HealthPill'
 import {
 	SessionChip,
@@ -746,6 +746,10 @@ export function ChatContainer({
 	const [conversationId, setConversationId] = useState<string | null>(null)
 	const [conversations, setConversations] = useState<ConversationListItem[]>([])
 	const [conversationsLoading, setConversationsLoading] = useState(false)
+	// M6-015: load failure is its OWN state — error is not an empty list
+	const [historyError, setHistoryError] = useState(false)
+	const sidebarToggleRef = useRef<HTMLButtonElement | null>(null)
+	const sidebarSearchRef = useRef<HTMLInputElement | null>(null)
 	// single workspace sidebar: on desktop it is always visible, the flag
 	// only drives the mobile drawer
 	const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -993,32 +997,36 @@ export function ChatContainer({
 
 	// Initialize: fill the history list; the thread itself opens fresh —
 	// opening Chat is "start a new conversation", old ones stay one click away
-	useEffect(() => {
-		let cancelled = false
-		async function initConv() {
-			try {
-				const resList = await fetch('/conversations', {
-					headers: { 'x-csrf-token': getCsrfToken() },
-				})
-				if (resList.ok && !cancelled) {
-					const list = (await resList.json()) as ConversationListItem[]
-					setConversations(list)
-					setOrganization((prev) =>
-						cleanupStaleConversationIds(
-							prev,
-							list.map((conversation) => conversation.id),
-						),
-					)
-				}
-			} catch {
-				// the history list stays empty; the thread still opens fresh
+	const loadHistory = useCallback(async () => {
+		setConversationsLoading(true)
+		setHistoryError(false)
+		try {
+			const resList = await fetch('/conversations', {
+				headers: { 'x-csrf-token': getCsrfToken() },
+			})
+			if (!resList.ok) {
+				setHistoryError(true)
+				return
 			}
-		}
-		initConv()
-		return () => {
-			cancelled = true
+			const list = (await resList.json()) as ConversationListItem[]
+			setConversations(list)
+			setOrganization((prev) =>
+				cleanupStaleConversationIds(
+					prev,
+					list.map((conversation) => conversation.id),
+				),
+			)
+		} catch {
+			// network failure: the thread still opens fresh, the list says why
+			setHistoryError(true)
+		} finally {
+			setConversationsLoading(false)
 		}
 	}, [])
+
+	useEffect(() => {
+		void loadHistory()
+	}, [loadHistory])
 
 	async function handleSubmit() {
 		if (!canSubmit(chatState, draft)) return
@@ -1264,6 +1272,12 @@ export function ChatContainer({
 			    the bottom so the history list can grow and scroll between them */}
 			<aside
 				className={`sidebar chat-ws-sidebar ${sidebarOpen ? 'is-open' : ''}`}
+				onKeyDown={(e) => {
+					if (e.key === 'Escape' && sidebarOpen) {
+						setSidebarOpen(false)
+						sidebarToggleRef.current?.focus()
+					}
+				}}
 			>
 				<div className="sidebar-brand">
 					<BrandMark small />
@@ -1298,13 +1312,34 @@ export function ChatContainer({
 				<div className="ws-history" aria-label="Riwayat percakapan">
 					<label className="history-search">
 						<SearchIcon />
-						<span className="sr-only">Cari percakapan</span>
+						<span className="sr-only">Cari judul percakapan</span>
 						<input
 							id="conversation-search"
+							ref={sidebarSearchRef}
 							value={searchQuery}
 							onChange={(e) => setSearchQuery(e.target.value)}
-							placeholder="Cari percakapan…"
+							onKeyDown={(e) => {
+								if (e.key === 'Escape') {
+									setSearchQuery('')
+								}
+							}}
+							placeholder="Cari judul percakapan…"
+							title="Pencarian riwayat: mencocokkan judul percakapan yang dimuat"
 						/>
+						{searchQuery && (
+							<button
+								type="button"
+								className="history-search-clear"
+								aria-label="Bersihkan pencarian riwayat"
+								data-testid="history-search-clear"
+								onClick={() => {
+									setSearchQuery('')
+									sidebarSearchRef.current?.focus()
+								}}
+							>
+								✕
+							</button>
+						)}
 					</label>
 					{groups.length > 0 && (
 						<div className="history-filters" aria-label="Filter grup">
@@ -1330,12 +1365,24 @@ export function ChatContainer({
 					<div className="history-section-title">Riwayat Percakapan</div>
 					<div className="history-scroll">
 						{conversationsLoading && conversations.length === 0 ? (
-							<div className="history-empty">Memuat riwayat…</div>
+							<div className="history-empty" data-testid="history-loading">Memuat riwayat…</div>
+						) : historyError ? (
+							<div className="history-empty history-error" data-testid="history-error">
+								<span>Gagal memuat riwayat percakapan.</span>
+								<button
+									type="button"
+									className="btn-retry-history"
+									data-testid="history-retry"
+									onClick={() => void loadHistory()}
+								>
+									Coba lagi
+								</button>
+							</div>
 						) : conversations.length === 0 ? (
-							<div className="history-empty">Belum ada riwayat percakapan.</div>
+							<div className="history-empty" data-testid="history-empty">Belum ada riwayat percakapan.</div>
 						) : visibleConversations.length === 0 ? (
-							<div className="history-empty">
-								Tidak ada percakapan yang cocok dengan filter ini.
+							<div className="history-empty" data-testid="history-empty-search">
+								Tidak ada percakapan dengan judul &quot;{searchQuery}&quot;.
 							</div>
 						) : (
 							<>
@@ -1361,6 +1408,7 @@ export function ChatContainer({
 															void loadConversation(c.id)
 														}
 														setSidebarOpen(false)
+														sidebarToggleRef.current?.focus()
 													}}
 													title={label}
 												>
@@ -1462,7 +1510,10 @@ export function ChatContainer({
 				type="button"
 				className={`ws-backdrop ${sidebarOpen ? 'is-open' : ''}`}
 				aria-label="Tutup panel"
-				onClick={() => setSidebarOpen(false)}
+				onClick={() => {
+					setSidebarOpen(false)
+					sidebarToggleRef.current?.focus()
+				}}
 				tabIndex={-1}
 			/>
 
@@ -1484,8 +1535,9 @@ export function ChatContainer({
 						<SearchIcon />
 						<input
 							type="text"
-							placeholder="Cari topik, dalil, atau pertanyaan…"
-							aria-label="Cari topik, dalil, atau pertanyaan"
+							placeholder="Pintas navigasi (chat, sumber, dasbor, ops)…"
+							aria-label="Pintas navigasi"
+							title="Pintas navigasi ke halaman lain"
 							onKeyDown={(e) => {
 								if (e.key !== 'Enter') return
 								const target = searchRouteFor(
@@ -1520,9 +1572,10 @@ export function ChatContainer({
 				</header>
 				<div className="chat-mobile-bar">
 					<button
+						ref={sidebarToggleRef}
 						type="button"
 						className="btn-toggle-sidebar"
-						onClick={() => setSidebarOpen(true)}
+						onClick={() => setSidebarOpen((prev) => !prev)}
 						aria-expanded={sidebarOpen}
 						aria-label="Buka menu dan riwayat"
 					>

@@ -174,6 +174,12 @@ export function sortConversations<T extends ConversationListItem>(
 	)
 }
 
+/**
+ * M6-015: the history search matches TITLES ONLY, over the loaded page
+ * (the /conversations API returns the most recent 50). The UI copy says
+ * exactly that — no full-history search is advertised until an API for
+ * it exists.
+ */
 export function filterConversations<T extends ConversationListItem>(
 	items: readonly T[],
 	query: string,
@@ -181,7 +187,7 @@ export function filterConversations<T extends ConversationListItem>(
 	const needle = query.trim().toLocaleLowerCase()
 	return needle
 		? items.filter((item) =>
-				`${item.title ?? ''} ${item.id}`.toLocaleLowerCase().includes(needle),
+				(item.title ?? '').toLocaleLowerCase().includes(needle),
 			)
 		: [...items]
 }
