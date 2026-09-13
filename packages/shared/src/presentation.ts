@@ -101,8 +101,7 @@ export function deriveAnswerPresentation(
 					? 'clarification'
 					: 'insufficient_evidence'
 			break
-		case 'escalated':
-		case 'answered':
+		// escalated answers still carry generated content pending review
 		default:
 			kind =
 				generationSource === 'deterministic_composer'

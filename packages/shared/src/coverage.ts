@@ -214,7 +214,7 @@ export function deriveQuestionNeeds(
 				requiresClarification: false,
 			}
 		}
-		case 'fiqh_question':
+		// fiqh_question is the planner's catch-all classification
 		default: {
 			const term = boundedTerm(plan.topicTerm, 'pokok pertanyaan')
 			return {
