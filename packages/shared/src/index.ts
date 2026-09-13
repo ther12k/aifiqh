@@ -111,7 +111,9 @@ export interface AuthSession {
 export const SESSION_COOKIE = 'aifiqh_session'
 
 export * from './answers'
+export * from './coverage'
 export * from './ingestion'
 export * from './knowledge'
 export * from './llm'
+export * from './presentation'
 export * from './sha256'

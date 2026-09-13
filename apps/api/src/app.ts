@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { HealthReport, Permission, Principal } from '@aifiqh/shared'
+import { deriveAnswerPresentation } from '@aifiqh/shared'
 /**
  * API composition root: trace middleware, health contract, auth guard, and
  * the source registry routes (RBAC-guarded, audit-logged).
@@ -767,6 +768,118 @@ function sourceRoutes(deps: AppDeps) {
 					order by created_at desc limit 100
 				`,
 				)
+			})
+			// M6-010 (FR-10): source overview — TWO separate dimensions per
+			// revision: review state (source lifecycle) and publication
+			// membership (presence in the active production search release).
+			// Conflating them is what made "active" badges lie. Additive
+			// read-only endpoint; reviewer identity only with review permission.
+			.get('/sources/:id/overview', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('source:read')
+				const canSeeReviewer = principal.permissions.includes('review:approve')
+				const data = await scopedTransaction(
+					sql,
+					principal.tenantId,
+					async (tx) => {
+						const [src] = await tx<
+							{
+								id: string
+								title: string
+								author: string | null
+								language: string | null
+							}[]
+						>`select id, title, author, language from sources
+							where id = ${ctx.params.id}::uuid
+								and tenant_id = ${principal.tenantId}::uuid
+								and access_scope_id = any(${principal.scopes}::uuid[])
+							limit 1`
+						if (!src) return null
+
+						const revisions = await tx<
+							{
+								id: string
+								revision_number: number
+								status: string
+								created_at: string
+								reviewed_at: string | null
+								reviewer_display: string | null
+							}[]
+						>`select sr.id, sr.revision_number, sr.status,
+								sr.created_at::text as created_at,
+								la.reviewed_at,
+								${canSeeReviewer ? sql`la.reviewer_display` : sql`null::text`} as reviewer_display
+							from source_revisions sr
+							left join lateral (
+								select (array_agg(srr.created_at order by srr.created_at desc))[1]::text as reviewed_at,
+									(array_agg(u.display_name order by srr.created_at desc))[1] as reviewer_display
+								from source_revision_reviews srr
+								left join users u on u.id::text = srr.actor_id
+								where srr.source_revision_id = sr.id and srr.decision = 'approve'
+							) la on true
+							where sr.source_id = ${ctx.params.id}::uuid
+							order by sr.revision_number desc`
+
+						// publication membership: which SERVABLE index releases
+						// (promoted/ready) contain units compiled from each revision
+						const memberships = revisions.length
+							? await tx<
+									{
+										source_revision_id: string
+										index_release_id: string
+									}[]
+								>`select distinct ss.source_revision_id::text as source_revision_id,
+									ru.index_release_id::text as index_release_id
+								from retrieval_units ru
+								join source_spans ss on ss.id = ru.source_span_id
+								join index_releases ir on ir.id = ru.index_release_id
+								where ir.tenant_id = ${principal.tenantId}::uuid
+									and ir.state in ('promoted', 'ready')
+									and ss.source_revision_id = any(
+										${revisions.map((r) => r.id)}::uuid[])`
+							: []
+						const releasesByRevision = new Map<string, string[]>()
+						for (const m of memberships) {
+							const list = releasesByRevision.get(m.source_revision_id) ?? []
+							list.push(m.index_release_id)
+							releasesByRevision.set(m.source_revision_id, list)
+						}
+
+						// the release the production alias currently serves
+						const [prod] = await tx<{ release_id: string }[]>`
+							select release_id::text from index_aliases
+							where tenant_id = ${principal.tenantId}::uuid and alias = 'production'
+							limit 1`
+
+						return {
+							sourceId: src.id,
+							title: src.title,
+							author: src.author,
+							language: src.language,
+							activeProductionReleaseId: prod?.release_id ?? null,
+							revisions: revisions.map((r) => {
+								const releases = releasesByRevision.get(r.id) ?? []
+								return {
+									revisionId: r.id,
+									revisionNumber: r.revision_number,
+									// dimension 1: source lifecycle review state
+									reviewState: r.status,
+									reviewedAt: r.reviewed_at,
+									reviewerDisplay: r.reviewer_display,
+									// dimension 2: search-release membership
+									publishedReleaseIds: releases,
+									publishedInProduction:
+										prod != null && releases.includes(prod.release_id),
+								}
+							}),
+						}
+					},
+				)
+				if (!data) {
+					ctx.set.status = 404
+					return { error: 'not_found' }
+				}
+				return data
 			})
 			.patch('/sources/:id/metadata', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
@@ -2452,7 +2565,22 @@ function sourceRoutes(deps: AppDeps) {
 							}),
 					)
 					turnProgress.publish(ctx.params.id, 'done')
-					return result
+					// M6-010: presentation derived ONCE from stored truth — the
+					// same derivation the reload path uses, so live and history
+					// can never disagree about result kind or provenance
+					return {
+						...result,
+						presentation: deriveAnswerPresentation({
+							answerStatus: result.status,
+							userOutcome: result.verification?.userOutcome,
+							generationSource: null,
+							provider: result.provider || null,
+							citations: (result.citations ?? []).map((c) => ({
+								citationId: c.spanId,
+								displayNumber: c.ordinal,
+							})),
+						}),
+					}
 				} catch (err) {
 					turnProgress.publish(ctx.params.id, 'done')
 					if (err instanceof ChatError) {

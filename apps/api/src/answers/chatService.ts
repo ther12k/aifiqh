@@ -1,4 +1,9 @@
-import type { Principal, StructuredAnswer } from '@aifiqh/shared'
+import type {
+	AnswerPresentation,
+	Principal,
+	StructuredAnswer,
+} from '@aifiqh/shared'
+import { deriveAnswerPresentation } from '@aifiqh/shared'
 import { ModelGatewayError } from '@aifiqh/shared'
 import { recordAuditInTx } from '../audit/audit'
 import type { Sql } from '../db/client'
@@ -1316,6 +1321,9 @@ export interface ConversationView {
 			/** AI-003: how this answer was generated (mode derived from the
 			 * stored provider; exact fallback reasons live on the turn only) */
 			generation: GenerationMetadata
+			/** M6-010: result kind + provenance — same derivation as the live
+			 * turn, so reload cannot disagree with what the user saw */
+			presentation: AnswerPresentation
 		} | null
 		decision?: {
 			decision: string
@@ -1537,6 +1545,10 @@ export async function getConversation(
 
 			let answerData = null
 			if (ans && (ans.status === 'answered' || sections.length > 0)) {
+				const citationsForPresentation = citations.map((c) => ({
+					citationId: c.spanId,
+					displayNumber: c.ordinal,
+				}))
 				answerData = {
 					id: ans.id,
 					status: ans.status,
@@ -1569,6 +1581,15 @@ export async function getConversation(
 						// OPS-AI-001 persists them per answer
 						fallbackReason: null,
 					},
+					// M6-010: same derivation as the live turn — reload cannot
+					// disagree with what the user saw (legacy rows derive from
+					// the stored provider; coverage maps to not_assessed)
+					presentation: deriveAnswerPresentation({
+						answerStatus: 'answered',
+						generationSource: null,
+						provider: ans.provider,
+						citations: citationsForPresentation,
+					}),
 				}
 			}
 
