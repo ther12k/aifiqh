@@ -43,6 +43,11 @@ async function api<T>(
 	return { status: res.status, data }
 }
 import { parseHashQuery, withHashParam } from '../lib/hashQuery'
+import {
+	type RevisionPublicationState,
+	publicationLabel,
+	publicationTone,
+} from '../lib/sourceLifecycle'
 
 /** Pure permission+selection rule so the gating is unit-testable. */
 export function canUploadRevision(
@@ -75,6 +80,21 @@ export function pageSlice<T>(list: T[], page: number, perPage: number): T[] {
 
 export function pageCount(total: number, perPage: number): number {
 	return Math.max(1, Math.ceil(total / perPage))
+}
+
+/** M6-010 overview read model (publication dimension per revision) */
+interface OverviewResponse {
+	sourceId: string
+	activeProductionReleaseId: string | null
+	revisions: Array<{
+		revisionId: string
+		revisionNumber: number
+		reviewState: string
+		reviewedAt: string | null
+		reviewerDisplay: string | null
+		publishedReleaseIds: string[]
+		publishedInProduction: boolean
+	}>
 }
 
 /** Indonesian status labels for the revision lifecycle (#108). */
@@ -258,6 +278,9 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 	const [uploadError, setUploadError] = useState<string | undefined>()
 	const [reviewNotice, setReviewNotice] = useState<string | undefined>()
 	const [uploading, setUploading] = useState(false)
+	// M6-013: two-dimension publication state from the overview read model
+	const [overview, setOverview] = useState<OverviewResponse | null>(null)
+	const [accessDenied, setAccessDenied] = useState(false)
 
 	const loadSources = useCallback(async () => {
 		const res = await fetch('/sources')
@@ -276,6 +299,20 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 
 	const openDetail = useCallback(async (source: SourceRow) => {
 		setSelected(source)
+		setAccessDenied(false)
+		setOverview(null)
+		// M6-013: publication membership comes from the overview read model
+		// (single source of truth) — the frontend never recomputes it
+		const ores = await fetch(`/sources/${source.id}/overview`)
+		if (ores.status === 403 || ores.status === 404) {
+			// revoked access / gone: honest unavailable state, no content echo
+			setSelected(null)
+			setAccessDenied(true)
+			return
+		}
+		if (ores.ok) {
+			setOverview((await ores.json()) as OverviewResponse)
+		}
 		const res = await fetch(`/sources/${source.id}/revisions`)
 		if (res.ok) {
 			const body = await res.json()
@@ -691,15 +728,35 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 							lebih komprehensif dan akurat.
 						</p>
 					</div>
-					<a className="btn-primary" href="#/studio">
+					<a className="btn-primary" href="#/sources/register">
 						+ Tambah Sumber
 					</a>
+				</div>
+			)}
+
+			{accessDenied && (
+				<div
+					className="alert alert-danger"
+					data-testid="source-access-denied"
+					role="alert"
+				>
+					Sumber tidak tersedia atau akses Anda tidak mencakup sumber ini.
 				</div>
 			)}
 
 			{selected && (
 				<div data-testid="source-detail">
 					<h3>{selected.title}</h3>
+					{overview && (
+						<p
+							className="source-prod-release"
+							data-testid="source-prod-release"
+						>
+							{overview.activeProductionReleaseId
+								? 'Release pencarian produksi aktif untuk tenant ini sudah ditetapkan.'
+								: 'Belum ada release pencarian produksi aktif — revisi apa pun belum digunakan untuk menjawab.'}
+						</p>
+					)}
 					<dl>
 						<dt>Penulis</dt>
 						<dd>{selected.author}</dd>
@@ -726,8 +783,28 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 										data-testid={`revision-status-${r.revision_number}`}
 									>
 										{REVISION_STATUS_LABELS[r.status] ?? r.status}
-									</span>{' '}
-									· {new Date(r.created_at).toLocaleString()}
+									</span>
+									{(() => {
+										// dimension 2 from the overview model — approval
+										// status alone never determines this label
+										const ov = overview?.revisions.find(
+											(o) => o.revisionId === r.id,
+										)
+										if (!ov) return null
+										const pub: RevisionPublicationState = {
+											reviewState: ov.reviewState,
+											publishedReleaseIds: ov.publishedReleaseIds,
+											publishedInProduction: ov.publishedInProduction,
+										}
+										return (
+											<span
+												className={`badge badge-${publicationTone(pub)}`}
+												data-testid={`revision-publication-${r.revision_number}`}
+											>
+												{publicationLabel(pub)}
+											</span>
+										)
+									})()} · {new Date(r.created_at).toLocaleString()}
 								</span>
 								{r.status === 'pending_review' && canReview && (
 									<span className="review-actions">
