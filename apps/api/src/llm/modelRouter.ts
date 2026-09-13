@@ -104,6 +104,7 @@ export interface ChatModelDiagnostics {
  */
 export async function resolveChatModelDiagnostics(
 	sql: Sql,
+	alias: string = CHAT_MODEL_ALIAS,
 ): Promise<ChatModelDiagnostics> {
 	// explicit kill-switch: tests (and any environment that must stay
 	// hermetic/offline) force the deterministic built-in composer
@@ -114,7 +115,7 @@ export async function resolveChatModelDiagnostics(
 	const aliasTarget = await sql<
 		{ target_type: string; target_id: string }[]
 	>`select target_type, target_id::text as target_id
-		from configuration_aliases where alias = ${CHAT_MODEL_ALIAS} limit 1`
+		from configuration_aliases where alias = ${alias} limit 1`
 
 	let rows: ResolvedRow[]
 	if (aliasTarget.length > 0 && aliasTarget[0].target_type === 'model') {
@@ -314,9 +315,10 @@ function configFromRow(row: {
  */
 export async function resolveChatModelCandidates(
 	sql: Sql,
-	opts: { ignoreQuotaBreaker?: boolean } = {},
+	opts: { ignoreQuotaBreaker?: boolean; alias?: string } = {},
 ): Promise<ChatModelChain> {
-	const primary = await resolveChatModelDiagnostics(sql)
+	const alias = opts.alias ?? CHAT_MODEL_ALIAS
+	const primary = await resolveChatModelDiagnostics(sql, alias)
 	const chain: ChatModelChain = {
 		candidates: [],
 		primaryReason: primary.reason,
@@ -343,7 +345,7 @@ export async function resolveChatModelCandidates(
 		}[]
 	>`select target_type, target_id::text as target_id, position
 		from configuration_fallbacks
-		where alias = ${CHAT_MODEL_ALIAS} and enabled
+		where alias = ${alias} and enabled
 		order by position asc`
 	chain.hasFallbackConfigured = rows.length > 0
 

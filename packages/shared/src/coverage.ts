@@ -126,6 +126,16 @@ function boundedTerm(term: unknown, fallback: string): string {
 	return trimmed.length > 0 ? trimmed : fallback
 }
 
+/** ids must satisfy NEED_ID_PATTERN: 'need:' + ≤40 slug chars */
+function needId(prefix: string, raw: string): string {
+	const slug = `${prefix}${raw}`
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '')
+		.slice(0, 40)
+	return `need:${slug || 'x'}`
+}
+
 /**
  * Derive the question's needs deterministically from the bounded plan
  * shape. Coverage for meta/out_of_scope questions is not applicable
@@ -164,12 +174,7 @@ export function deriveQuestionNeeds(
 				.slice(0, MAX_COMPARED_CONCEPTS)
 				.map((raw, i) => boundedTerm(raw, `masukan ${i + 1}`))
 			const needs: QuestionNeed[] = inputs.map((input) => ({
-				id: `need:calc-input-${
-					input
-						.toLowerCase()
-						.replace(/[^a-z0-9]+/g, '-')
-						.slice(0, 30) || 'x'
-				}`,
+				id: needId('calc-input-', input),
 				description: `Nilai/dalil untuk ${input} tersedia dari sumber.`,
 				essential: true,
 			}))
@@ -194,12 +199,7 @@ export function deriveQuestionNeeds(
 				return { needs: [], requiresClarification: true }
 			}
 			const needs: QuestionNeed[] = concepts.map((concept) => ({
-				id: `need:concept-${
-					concept
-						.toLowerCase()
-						.replace(/[^a-z0-9]+/g, '-')
-						.slice(0, 30) || 'x'
-				}`,
+				id: needId('concept-', concept),
 				description: `Sumber menjelaskan konsep ${concept} (definisi/hukum pokok).`,
 				essential: true,
 			}))

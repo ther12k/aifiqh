@@ -49,6 +49,7 @@ import {
 } from '../retrieval/laneFusion'
 import { planAndPersistQuery } from '../retrieval/queryPlanner'
 import { resolveRerankerProvider } from '../retrieval/reranker'
+import { runTopicalAssessorShadow } from '../retrieval/topicalAssessor'
 import { evaluateAnswerClaimSupport } from '../validation/claimSupportScorer'
 import { mapIntentToRuleVocabulary, planTurn } from './aiQueryPlanner'
 import { type VerificationStatus, deriveVerification } from './answerStatus'
@@ -1232,6 +1233,65 @@ async function runTurn(
 		invocations: invocationRecords,
 		metadata: turnMetadata,
 	})
+
+	// M6-008: topical coverage SHADOW — observation only. Runs AFTER the
+	// answer is final; its verdict is persisted as an internal observation
+	// and NEVER feeds back into this turn's result (status, presentation,
+	// claims and citations below are decided before this block runs).
+	// Failures land as unknown/coverage_assessor_* observations, never as
+	// insufficient-evidence claims, and nothing here can throw the turn away.
+	let topicalShadow: Record<string, unknown> | undefined
+	if (usedProvider !== 'builtin-compose' && includedUnitIds.length > 0) {
+		try {
+			const shadow = await runTopicalAssessorShadow(
+				sql,
+				{
+					intent: aiPlan.plan.intent,
+					retrievalQueries: [
+						retrievalQueries[0] ?? rewrite.standaloneQuery ?? content,
+						...aiPlan.plan.retrievalQueries.slice(1),
+					].slice(0, 4),
+				},
+				includedUnitIds
+					.map((id) => {
+						const item = evidenceTexts[id]
+						return item ? { unitId: id, originalText: item } : null
+					})
+					.filter(
+						(e): e is { unitId: string; originalText: string } => e !== null,
+					),
+				{ answered: true },
+			)
+			if (shadow.outcome.state === 'completed') {
+				topicalShadow = shadow.outcome.assessment as unknown as Record<
+					string,
+					unknown
+				>
+			} else if (shadow.outcome.state === 'failed') {
+				topicalShadow = {
+					state: 'failed',
+					reason: shadow.outcome.reason,
+				}
+			} else if (
+				shadow.outcome.state === 'skipped' &&
+				shadow.outcome.reason !== 'flag_off'
+			) {
+				// skips that carry calibration signal are recorded; flag_off
+				// writes NOTHING — an off feature must leave zero trace
+				topicalShadow = { state: 'skipped', reason: shadow.outcome.reason }
+			}
+			if (topicalShadow) {
+				await sql`update answers set metadata = jsonb_set(
+						coalesce(metadata, '{}'::jsonb),
+						'{topicalCoverageShadow}',
+						${sql.json(topicalShadow as never)}::jsonb
+					) where id = ${finalized.answerId}::uuid`
+			}
+		} catch {
+			// the shadow must never break the turn — absence of an observation
+			// is itself honest (not_assessed)
+		}
+	}
 
 	return {
 		conversationId,

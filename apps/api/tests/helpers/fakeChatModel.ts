@@ -187,10 +187,11 @@ export interface InstalledChatModel {
 export async function installChatProductionModel(
 	sql: Sql,
 	baseUrl: string,
-	opts: { modelId?: string; failureDomain?: string } = {},
+	opts: { modelId?: string; failureDomain?: string; alias?: string } = {},
 ): Promise<InstalledChatModel> {
 	const suffix = crypto.randomUUID().slice(0, 8)
 	const modelId = opts.modelId ?? 'fake-grounded-model'
+	const alias = opts.alias ?? 'chat-production'
 	const providerKey = `fake-chat-${suffix}`
 	const secretEnv = `FAKE_CHAT_SECRET_${suffix.replace(/-/g, '').toUpperCase()}`
 	process.env[secretEnv] = 'test-key'
@@ -208,17 +209,17 @@ export async function installChatProductionModel(
 	const [mc] = await sql<{ id: string }[]>`
 		select mc.id from model_configs mc join provider_configs pc on pc.id = mc.provider_config_id
 		where pc.key = ${providerKey} and mc.model_id = ${modelId}`
-	await sql`delete from configuration_fallbacks where alias = 'chat-production'`
+	await sql`delete from configuration_fallbacks where alias = ${alias}`
 	await sql`
 		insert into configuration_aliases (alias, target_type, target_id, change_reason)
-		values ('chat-production', 'model', ${mc.id}::uuid, 'test fixture')
+		values (${alias}, 'model', ${mc.id}::uuid, 'test fixture')
 		on conflict (alias) do update set target_type = excluded.target_type, target_id = excluded.target_id`
 	return {
 		providerKey,
 		modelId,
 		restore: async () => {
-			await sql`delete from configuration_fallbacks where alias = 'chat-production'`
-			await sql`delete from configuration_aliases where alias = 'chat-production'`
+			await sql`delete from configuration_fallbacks where alias = ${alias}`
+			await sql`delete from configuration_aliases where alias = ${alias}`
 			await sql`delete from provider_secret_refs where provider_config_id = ${prov.id}::uuid`
 			await sql`delete from model_configs where provider_config_id = ${prov.id}::uuid`
 			await sql`delete from provider_configs where id = ${prov.id}::uuid`
