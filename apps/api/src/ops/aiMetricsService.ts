@@ -129,6 +129,21 @@ export interface AiMetricsReport {
 		failedAnswers: number
 		failureRate: number | null
 	}
+	/** M6-019: topical coverage shadow observation telemetry */
+	topicalShadow: {
+		cohort: 'production_user'
+		version: string
+		evaluated: number
+		byStatus: {
+			sufficient: number
+			partial: number
+			insufficient: number
+			unknown: number
+		}
+		failedAssessments: number
+		disagreements: number
+		p95LatencyMs: number | null
+	}
 	retrievalOffline: AiOfflineRetrieval | null
 	providers: AiProviderUsage[]
 	tokens: {
@@ -480,16 +495,62 @@ export async function getAiMetrics(
 
 		// ---- claim support (middle verification layer) --------------------
 		const [claimRow] = await tx<{ evaluated: string; failed: string }[]>`
-			select count(*) as evaluated,
-				count(*) filter (
-					where a.metadata->'claimSupport'->>'allSupported' = 'false'
-				) as failed
-			from answers a
-			join messages m on m.id = a.message_id
-			join conversations c on c.id = m.conversation_id
-			where c.tenant_id = app_tenant()
-				and a.created_at >= ${since.toISOString()}
-				and a.metadata ? 'claimSupport'`
+				select count(*) as evaluated,
+					count(*) filter (
+						where a.metadata->'claimSupport'->>'allSupported' = 'false'
+					) as failed
+				from answers a
+				join messages m on m.id = a.message_id
+				join conversations c on c.id = m.conversation_id
+				where c.tenant_id = app_tenant()
+					and a.created_at >= ${since.toISOString()}
+					and a.metadata ? 'claimSupport'`
+
+		// ---- M6-019: topical coverage shadow observation telemetry -------
+		const [shadowRow] = await tx<
+			{
+				evaluated: string
+				failed_assessments: string
+				disagreements: string
+				status_sufficient: string
+				status_partial: string
+				status_insufficient: string
+				status_unknown: string
+				p95_latency_ms: string | null
+			}[]
+		>`select
+					count(*) filter (
+						where a.metadata->'topicalCoverageShadow'->>'version' = 'topical-assessor-shadow-v1'
+					) as evaluated,
+					count(*) filter (
+						where a.metadata->'topicalCoverageShadow'->>'state' = 'failed'
+					) as failed_assessments,
+					count(*) filter (
+						where a.metadata->'topicalCoverageShadow'->>'disagreesWithAnswer' = 'true'
+					) as disagreements,
+					count(*) filter (
+						where a.metadata->'topicalCoverageShadow'->'coverage'->>'status' = 'sufficient'
+					) as status_sufficient,
+					count(*) filter (
+						where a.metadata->'topicalCoverageShadow'->'coverage'->>'status' = 'partial'
+					) as status_partial,
+					count(*) filter (
+						where a.metadata->'topicalCoverageShadow'->'coverage'->>'status' = 'insufficient'
+					) as status_insufficient,
+					count(*) filter (
+						where a.metadata->'topicalCoverageShadow'->'coverage'->>'status' = 'unknown'
+					) as status_unknown,
+					percentile_cont(0.95) within group (
+						order by (a.metadata->'topicalCoverageShadow'->>'latencyMs')::double precision
+					) filter (
+						where a.metadata->'topicalCoverageShadow'->>'latencyMs' is not null
+					) as p95_latency_ms
+				from answers a
+				join messages m on m.id = a.message_id
+				join conversations c on c.id = m.conversation_id
+				where c.tenant_id = app_tenant()
+					and a.created_at >= ${since.toISOString()}
+					and a.metadata ? 'topicalCoverageShadow'`
 
 		// ---- bounded repair outcomes --------------------------------------
 		const [repairRow] = await tx<{ attempted: string; succeeded: string }[]>`
@@ -847,6 +908,22 @@ export async function getAiMetrics(
 				evaluated: Number(claimRow.evaluated),
 				failedAnswers: Number(claimRow.failed),
 				failureRate: rate(Number(claimRow.failed), Number(claimRow.evaluated)),
+			},
+			topicalShadow: {
+				cohort: 'production_user',
+				version: 'topical-assessor-shadow-v1',
+				evaluated: Number(shadowRow.evaluated),
+				byStatus: {
+					sufficient: Number(shadowRow.status_sufficient),
+					partial: Number(shadowRow.status_partial),
+					insufficient: Number(shadowRow.status_insufficient),
+					unknown: Number(shadowRow.status_unknown),
+				},
+				failedAssessments: Number(shadowRow.failed_assessments),
+				disagreements: Number(shadowRow.disagreements),
+				p95LatencyMs: shadowRow.p95_latency_ms
+					? round(Number(shadowRow.p95_latency_ms), 1)
+					: null,
 			},
 			retrievalOffline,
 			providers,

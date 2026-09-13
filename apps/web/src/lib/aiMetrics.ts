@@ -104,6 +104,20 @@ export interface AiMetricsReportLike {
 		failedAnswers: number
 		failureRate: number | null
 	}
+	topicalShadow?: {
+		cohort: string
+		version?: string
+		evaluated: number
+		byStatus: {
+			sufficient: number
+			partial: number
+			insufficient: number
+			unknown: number
+		}
+		failedAssessments: number
+		disagreements: number
+		p95LatencyMs: number | null
+	}
 	retrievalOffline: {
 		runId: string
 		setKey: string

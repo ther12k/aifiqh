@@ -282,6 +282,75 @@ export function AiMetricsPanel(props: { report: AiMetricsReportLike }) {
 				</table>
 			</section>
 
+			{report.topicalShadow ? (
+				<section
+					className="ai-metrics-detail"
+					data-testid="ai-topical-shadow-section"
+				>
+					<div className="ai-metrics-col" style={{ flex: '1 1 100%' }}>
+						<h4>
+							Evaluasi Bayangan (Topikal) — observasi model, bukan persetujuan
+							ulama · kohor: {report.topicalShadow.cohort} · versi:{' '}
+							{report.topicalShadow.version || 'topical-assessor-shadow-v1'}
+						</h4>
+						{report.topicalShadow.evaluated === 0 &&
+						report.topicalShadow.failedAssessments === 0 ? (
+							<p className="ai-reasons-empty">
+								Belum ada evaluasi bayangan pada window ini (fitur nonaktif atau
+								belum ada sampel).
+							</p>
+						) : (
+							<ul className="ai-kpis" style={{ marginTop: 8 }}>
+								<li className="ai-metric" data-metric="shadow-evaluated">
+									<span className="ai-metric-label">Tereksekusi (sampel)</span>
+									<span className="ai-metric-value">
+										{report.topicalShadow.evaluated}
+									</span>
+									<span className="ai-metric-meta">
+										{report.topicalShadow.failedAssessments} asesmen gagal
+										(gangguan model/timeout)
+									</span>
+								</li>
+								<li className="ai-metric" data-metric="shadow-sufficient">
+									<span className="ai-metric-label">
+										Status Cukup (Sufficient)
+									</span>
+									<span className="ai-metric-value">
+										{report.topicalShadow.byStatus.sufficient}
+									</span>
+									<span className="ai-metric-meta">
+										dari {report.topicalShadow.evaluated} dievaluasi
+									</span>
+								</li>
+								<li className="ai-metric" data-metric="shadow-insufficient">
+									<span className="ai-metric-label">Sebagian / Kurang</span>
+									<span className="ai-metric-value">
+										{report.topicalShadow.byStatus.partial +
+											report.topicalShadow.byStatus.insufficient}
+									</span>
+									<span className="ai-metric-meta">
+										{report.topicalShadow.byStatus.partial} sebagian ·{' '}
+										{report.topicalShadow.byStatus.insufficient} kurang bukti
+									</span>
+								</li>
+								<li className="ai-metric" data-metric="shadow-disagreement">
+									<span className="ai-metric-label">Perbedaan dgn Jawaban</span>
+									<span className="ai-metric-value">
+										{report.topicalShadow.disagreements}
+									</span>
+									<span className="ai-metric-meta">
+										sinyal kalibrasi · p95{' '}
+										{report.topicalShadow.p95LatencyMs != null
+											? `${report.topicalShadow.p95LatencyMs} ms`
+											: '—'}
+									</span>
+								</li>
+							</ul>
+						)}
+					</div>
+				</section>
+			) : null}
+
 			<p className="ai-generated">
 				Diperbarui {formatTimestampId(report.generatedAt)}
 			</p>

@@ -291,4 +291,43 @@ describe('AiMetricsPanel', () => {
 		const html = render(h(AiMetricsPanel, { report: report() }))
 		expect(html).not.toContain('data-testid="ai-funnel"')
 	})
+
+	test('M6-019: topical shadow observations displayed with cohort, distinct statuses, and no-data honesty', () => {
+		// Case A: no shadow data in window
+		const emptyReport = report({
+			topicalShadow: {
+				cohort: 'production_user',
+				evaluated: 0,
+				byStatus: { sufficient: 0, partial: 0, insufficient: 0, unknown: 0 },
+				failedAssessments: 0,
+				disagreements: 0,
+				p95LatencyMs: null,
+			},
+		})
+		const emptyHtml = render(h(AiMetricsPanel, { report: emptyReport }))
+		expect(emptyHtml).toContain('data-testid="ai-topical-shadow-section"')
+		expect(emptyHtml).toContain('kohor: production_user')
+		expect(emptyHtml).toContain('versi: topical-assessor-shadow-v1')
+		expect(emptyHtml).toContain('Belum ada evaluasi bayangan pada window ini')
+		expect(emptyHtml).toContain('observasi model, bukan persetujuan ulama')
+
+		// Case B: populated shadow data
+		const populatedReport = report({
+			topicalShadow: {
+				cohort: 'production_user',
+				evaluated: 15,
+				byStatus: { sufficient: 10, partial: 3, insufficient: 2, unknown: 0 },
+				failedAssessments: 1,
+				disagreements: 2,
+				p95LatencyMs: 350.5,
+			},
+		})
+		const populatedHtml = render(h(AiMetricsPanel, { report: populatedReport }))
+		expect(populatedHtml).toContain('15')
+		expect(populatedHtml).toContain('1 asesmen gagal')
+		expect(populatedHtml).toContain('10')
+		expect(populatedHtml).toContain('5') // partial + insufficient = 3 + 2
+		expect(populatedHtml).toContain('2') // disagreements
+		expect(populatedHtml).toContain('p95 350.5 ms')
+	})
 })
