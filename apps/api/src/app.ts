@@ -769,6 +769,24 @@ function sourceRoutes(deps: AppDeps) {
 				`,
 				)
 			})
+			// M6-012: the registration form needs the caller's granted scopes
+			// (POST /sources requires accessScopeId ∈ principal.scopes). Ids +
+			// labels only — nothing else about scopes is public.
+			.get('/access-scopes', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('source:create')
+				return scopedTransaction(
+					sql,
+					principal.tenantId,
+					(tx) =>
+						tx<{ id: string; key: string; name: string }[]>`
+						select id::text, key, name from access_scopes
+						where tenant_id = ${principal.tenantId}::uuid
+							and id = any(${principal.scopes}::uuid[])
+						order by key asc limit 50
+					`,
+				)
+			})
 			// M6-010 (FR-10): source overview — TWO separate dimensions per
 			// revision: review state (source lifecycle) and publication
 			// membership (presence in the active production search release).

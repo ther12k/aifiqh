@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { BRAND } from '../config/brand'
 
 interface RevisionRow {
@@ -42,6 +42,7 @@ async function api<T>(
 	const data = (await res.json().catch(() => ({}))) as T
 	return { status: res.status, data }
 }
+import { parseHashQuery, withHashParam } from '../lib/hashQuery'
 
 /** Pure permission+selection rule so the gating is unit-testable. */
 export function canUploadRevision(
@@ -220,7 +221,30 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 	const canReview = canReviewRevision(permissions)
 
 	const [sources, setSources] = useState<SourceRow[]>([])
-	const [query, setQuery] = useState('')
+	// M6-011: catalog query restores from the route hash so back/forward
+	// and shared links reproduce the same filtered view
+	const [query, setQuery] = useState(() => {
+		// SSR-safe: no window during server rendering → no restored query
+		const { params } = parseHashQuery(
+			typeof window === 'undefined' ? '' : window.location.hash,
+		)
+		return params.get('q') ?? ''
+	})
+	useEffect(() => {
+		const onHash = () => {
+			const { path, params } = parseHashQuery(window.location.hash)
+			if (!path.startsWith('/sources')) return
+			const q = params.get('q') ?? ''
+			setQuery((prev) => (prev === q ? prev : q))
+			const open = params.get('open')
+			if (open) {
+				const target = sourcesRef.current.find((src) => src.id === open)
+				if (target) void openDetailRef.current?.(target)
+			}
+		}
+		window.addEventListener('hashchange', onHash)
+		return () => window.removeEventListener('hashchange', onHash)
+	}, [])
 	const [typeFilter, setTypeFilter] = useState('')
 	const [langFilter, setLangFilter] = useState('')
 	const [sortBy, setSortBy] = useState('newest')
@@ -239,6 +263,12 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 		const res = await fetch('/sources')
 		if (res.ok) setSources((await res.json()) as SourceRow[])
 	}, [])
+	// stable refs for the hashchange listener (registered once)
+	const sourcesRef = useRef<SourceRow[]>([])
+	sourcesRef.current = sources
+	const openDetailRef = useRef<((source: SourceRow) => Promise<void>) | null>(
+		null,
+	)
 
 	useEffect(() => {
 		void loadSources()
@@ -267,6 +297,8 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 			setReviewsByRevision(history)
 		}
 	}, [])
+
+	openDetailRef.current = openDetail
 
 	const uploadRevision = useCallback(
 		async (file: File) => {
@@ -450,10 +482,47 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 					<SearchIcon />
 					<input
 						data-testid="source-search"
-						placeholder="Cari judul sumber, penulis, atau kata kunci…"
+						placeholder="Cari judul atau penulis sumber…"
+						title="Katalog: pencocokan pada judul dan penulis sumber"
 						value={query}
-						onChange={(e) => updateFilters(() => setQuery(e.target.value))}
+						onChange={(e) => {
+							const value = e.target.value
+							setQuery(value)
+							history.replaceState(
+								null,
+								'',
+								withHashParam(window.location.hash, 'q', value),
+							)
+						}}
+						onKeyDown={(e) => {
+							if (e.key === 'Escape') {
+								setQuery('')
+								history.replaceState(
+									null,
+									'',
+									withHashParam(window.location.hash, 'q', ''),
+								)
+							}
+						}}
 					/>
+					{query && (
+						<button
+							type="button"
+							className="source-search-clear"
+							aria-label="Bersihkan pencarian"
+							data-testid="source-search-clear"
+							onClick={() => {
+								setQuery('')
+								history.replaceState(
+									null,
+									'',
+									withHashParam(window.location.hash, 'q', ''),
+								)
+							}}
+						>
+							✕
+						</button>
+					)}
 					<kbd>⌘ K</kbd>
 				</label>
 				<select
@@ -495,12 +564,16 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 				{canCreate && (
 					<a
 						className="btn-primary source-add"
-						href="#/studio"
-						title="Kelola sumber baru di Knowledge Studio"
+						href="#/sources/register"
+						title="Daftarkan sumber baru beserta berkas awalnya"
+						data-testid="source-add"
 					>
 						+ Tambah Sumber
 					</a>
 				)}
+				<a className="source-studio-link" href="#/studio">
+					Studio (penyusunan konsep)
+				</a>
 			</div>
 
 			<div className="source-table-card">

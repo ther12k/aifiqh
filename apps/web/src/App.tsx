@@ -15,6 +15,7 @@ import {
 	searchRouteFor,
 } from './lib/routes'
 import { OpsStatusContainer } from './ops/OpsStatusContainer'
+import { SourceRegisterView } from './sources/SourceRegisterView'
 import { SourceRegistry } from './sources/SourceRegistry'
 import { StudioDashboardContainer } from './studio/StudioDashboardContainer'
 
@@ -30,11 +31,15 @@ const NULL_UUID = '00000000-0000-0000-0000-000000000000'
 
 function useHashRoute(): string {
 	const [route, setRoute] = useState(
-		() => window.location.hash.replace(/^#/, '') || '/',
+		() => (window.location.hash.replace(/^#/, '') || '/').split('?')[0] || '/',
 	)
 	useEffect(() => {
-		const onChange = () =>
-			setRoute(window.location.hash.replace(/^#/, '') || '/')
+		const onChange = () => {
+			// query params ride the same hash (e.g. #/sources?q=…) but never
+			// change which page is mounted
+			const raw = window.location.hash.replace(/^#/, '') || '/'
+			setRoute(raw.split('?')[0] || '/')
+		}
 		window.addEventListener('hashchange', onChange)
 		return () => window.removeEventListener('hashchange', onChange)
 	}, [])
@@ -1063,6 +1068,10 @@ export default function App() {
 					)}
 
 					{route === '/sources' && <SourceRegistry permissions={permissions} />}
+
+					{route === '/sources/register' && (
+						<SourceRegisterView permissions={permissions} />
+					)}
 
 					{route === '/studio' &&
 						(me?.tenantId ? (
