@@ -42,8 +42,12 @@ jobs:
             sleep 1
           done
           curl -sf http://127.0.0.1:19000/minio/health/live
-          docker run --rm --network host --entrypoint /bin/sh minio/mc:RELEASE.2024-11-21T17-21-54Z \
-            -c "mc alias set ci http://127.0.0.1:19000 minioadmin minioadmin && mc mb --ignore-existing ci/aifiqh-originals"
+          # bucket setup via the preinstalled AWS CLI (S3-compatible) — no
+          # extra docker pull (minio/mc hits Docker Hub rate limits on CI)
+          AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin \
+            aws --endpoint-url http://127.0.0.1:19000 s3api create-bucket --bucket aifiqh-originals 2>/dev/null || true
+          AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin \
+            aws --endpoint-url http://127.0.0.1:19000 s3api head-bucket --bucket aifiqh-originals
 
       - uses: oven-sh/setup-bun@v2
         with:
