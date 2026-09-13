@@ -32,14 +32,30 @@ import {
 
 describe('M6-015: honest history search', () => {
 	const sample = [
-		{ id: 'conv-1', title: 'Hukum Wudhu dengan Air Laut', updatedAt: '2026-09-12T10:00:00Z' },
-		{ id: 'conv-2', title: 'Perbedaan Zakat dan Sedekah', updatedAt: '2026-09-12T09:00:00Z' },
-		{ id: 'conv-3', title: 'Niat Shalat Jamak Qashar', updatedAt: '2026-09-11T12:00:00Z' },
+		{
+			id: 'conv-1',
+			title: 'Hukum Wudhu dengan Air Laut',
+			updatedAt: '2026-09-12T10:00:00Z',
+		},
+		{
+			id: 'conv-2',
+			title: 'Perbedaan Zakat dan Sedekah',
+			updatedAt: '2026-09-12T09:00:00Z',
+		},
+		{
+			id: 'conv-3',
+			title: 'Niat Shalat Jamak Qashar',
+			updatedAt: '2026-09-11T12:00:00Z',
+		},
 	]
 
 	test('matches title only, ignoring ID and non-title content', () => {
-		expect(filterConversations(sample, 'zakat').map((c) => c.id)).toEqual(['conv-2'])
-		expect(filterConversations(sample, 'WUDHU').map((c) => c.id)).toEqual(['conv-1'])
+		expect(filterConversations(sample, 'zakat').map((c) => c.id)).toEqual([
+			'conv-2',
+		])
+		expect(filterConversations(sample, 'WUDHU').map((c) => c.id)).toEqual([
+			'conv-1',
+		])
 		// ID matching does not masquerade as title match
 		expect(filterConversations(sample, 'conv-1')).toHaveLength(0)
 		// Empty query returns all items unchanged
@@ -48,24 +64,33 @@ describe('M6-015: honest history search', () => {
 	})
 
 	test('search input placeholder and tooltip are truthful in source', () => {
-		const path = new URL('../src/chat/ChatContainer.tsx', import.meta.url).pathname
+		const path = new URL('../src/chat/ChatContainer.tsx', import.meta.url)
+			.pathname
 		const src = fs.readFileSync(path, 'utf8')
 		expect(src).toContain('placeholder="Cari judul percakapan…"')
-		expect(src).toContain('title="Pencarian riwayat: mencocokkan judul percakapan yang dimuat"')
+		expect(src).toContain(
+			'title="Pencarian riwayat: mencocokkan judul percakapan yang dimuat"',
+		)
 		expect(src).toContain('history-search-clear')
 	})
 
 	test('topbar search copy identifies as navigation shortcut, not topic search', () => {
-		const path = new URL('../src/chat/ChatContainer.tsx', import.meta.url).pathname
+		const path = new URL('../src/chat/ChatContainer.tsx', import.meta.url)
+			.pathname
 		const src = fs.readFileSync(path, 'utf8')
-		expect(src).toContain('placeholder="Pintas navigasi (chat, sumber, dasbor, ops)…"')
-		expect(src).not.toContain('placeholder="Cari topik, dalil, atau pertanyaan…"')
+		expect(src).toContain(
+			'placeholder="Pintas navigasi (chat, sumber, dasbor, ops)…"',
+		)
+		expect(src).not.toContain(
+			'placeholder="Cari topik, dalil, atau pertanyaan…"',
+		)
 	})
 })
 
 describe('M6-015: distinct history list states', () => {
 	test('source template defines loading, error with retry, empty, and no-results states', () => {
-		const path = new URL('../src/chat/ChatContainer.tsx', import.meta.url).pathname
+		const path = new URL('../src/chat/ChatContainer.tsx', import.meta.url)
+			.pathname
 		const src = fs.readFileSync(path, 'utf8')
 		// loading
 		expect(src).toContain('data-testid="history-loading"')
@@ -95,7 +120,8 @@ describe('M6-015: sidebar layout & independent scroll structure', () => {
 	})
 
 	test('sidebar orders brand/new-chat/search on top, scroll in middle, other nav pinned at bottom', () => {
-		const path = new URL('../src/chat/ChatContainer.tsx', import.meta.url).pathname
+		const path = new URL('../src/chat/ChatContainer.tsx', import.meta.url)
+			.pathname
 		const src = fs.readFileSync(path, 'utf8')
 		const brandIdx = src.indexOf('sidebar-brand')
 		const newChatIdx = src.indexOf('chat-new-btn')
@@ -115,13 +141,16 @@ describe('M6-015: sidebar layout & independent scroll structure', () => {
 
 describe('M6-015: mobile drawer interaction and focus restoration', () => {
 	test('drawer closes on Escape, backdrop click, or selection with focus restored to toggle button', () => {
-		const path = new URL('../src/chat/ChatContainer.tsx', import.meta.url).pathname
+		const path = new URL('../src/chat/ChatContainer.tsx', import.meta.url)
+			.pathname
 		const src = fs.readFileSync(path, 'utf8')
 		// Escape on sidebar
 		expect(src).toContain("e.key === 'Escape' && sidebarOpen")
 		expect(src).toContain('sidebarToggleRef.current?.focus()')
 		// Backdrop click
-		expect(src).toContain('className={`ws-backdrop ${sidebarOpen ? \'is-open\' : \'\'}`}')
+		expect(src).toContain(
+			"className={`ws-backdrop ${sidebarOpen ? 'is-open' : ''}`}",
+		)
 		// Selection in history
 		expect(src).toContain('setSidebarOpen(false)')
 		// Toggle button has ref for focus restoration

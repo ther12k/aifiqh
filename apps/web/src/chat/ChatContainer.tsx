@@ -1365,9 +1365,14 @@ export function ChatContainer({
 					<div className="history-section-title">Riwayat Percakapan</div>
 					<div className="history-scroll">
 						{conversationsLoading && conversations.length === 0 ? (
-							<div className="history-empty" data-testid="history-loading">Memuat riwayat…</div>
+							<div className="history-empty" data-testid="history-loading">
+								Memuat riwayat…
+							</div>
 						) : historyError ? (
-							<div className="history-empty history-error" data-testid="history-error">
+							<div
+								className="history-empty history-error"
+								data-testid="history-error"
+							>
 								<span>Gagal memuat riwayat percakapan.</span>
 								<button
 									type="button"
@@ -1379,7 +1384,9 @@ export function ChatContainer({
 								</button>
 							</div>
 						) : conversations.length === 0 ? (
-							<div className="history-empty" data-testid="history-empty">Belum ada riwayat percakapan.</div>
+							<div className="history-empty" data-testid="history-empty">
+								Belum ada riwayat percakapan.
+							</div>
 						) : visibleConversations.length === 0 ? (
 							<div className="history-empty" data-testid="history-empty-search">
 								Tidak ada percakapan dengan judul &quot;{searchQuery}&quot;.
