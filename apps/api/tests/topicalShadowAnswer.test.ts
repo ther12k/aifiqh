@@ -171,7 +171,7 @@ describe('M6-008: shadow observation without answer change', () => {
 				const conv = await startConversation(sql, f.principal, 'shadow')
 				return postUserTurn(sql, f.principal, {
 					conversationId: conv.conversationId,
-					content: `Zakat wajib dengan nisab dan haul; sedekah dianjurkan kapan saja tanpa nisab?`,
+					content: 'Zakat wajib dengan nisab dan haul; sedekah dianjurkan kapan saja tanpa nisab?',
 					indexReleaseId: f.releaseId,
 				})
 			})
@@ -231,7 +231,7 @@ describe('M6-008: shadow observation without answer change', () => {
 		} finally {
 			process.env.AIFIQH_TOPICAL_ASSESSOR = savedFlag ?? ''
 			process.env.AIFIQH_CHAT_MODEL = savedSwitch ?? 'off'
-			delete process.env.AIFIQH_TOPICAL_ASSESSOR_ALIAS
+			process.env.AIFIQH_TOPICAL_ASSESSOR_ALIAS = ''
 			await installed.restore()
 		}
 	})
@@ -252,7 +252,7 @@ describe('M6-008: shadow observation without answer change', () => {
 			const turn = await withChatModel(sql, groundedModel.url, async () =>
 				postUserTurn(sql, f.principal, {
 					conversationId: conv.conversationId,
-					content: `Zakat wajib dengan nisab dan haul; sedekah dianjurkan kapan saja tanpa nisab?`,
+					content: 'Zakat wajib dengan nisab dan haul; sedekah dianjurkan kapan saja tanpa nisab?',
 					indexReleaseId: f.releaseId,
 				}),
 			)
