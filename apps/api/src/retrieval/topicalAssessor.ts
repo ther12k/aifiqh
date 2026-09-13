@@ -131,15 +131,13 @@ export async function runTopicalAssessorShadow(
 			outcome: { state: 'skipped', reason: 'no_needs' },
 		}
 	}
-	const boundedEvidence = evidence
-		.slice(0, MAX_EVIDENCE_ITEMS)
-		.map((e) => ({
-			unitId: e.unitId,
-			originalText: e.originalText.slice(
-				0,
-				Math.ceil(MAX_EVIDENCE_CHARS / MAX_EVIDENCE_ITEMS),
-			),
-		}))
+	const boundedEvidence = evidence.slice(0, MAX_EVIDENCE_ITEMS).map((e) => ({
+		unitId: e.unitId,
+		originalText: e.originalText.slice(
+			0,
+			Math.ceil(MAX_EVIDENCE_CHARS / MAX_EVIDENCE_ITEMS),
+		),
+	}))
 	if (boundedEvidence.length === 0) {
 		return {
 			needs: derived.needs,

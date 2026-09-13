@@ -171,7 +171,8 @@ describe('M6-008: shadow observation without answer change', () => {
 				const conv = await startConversation(sql, f.principal, 'shadow')
 				return postUserTurn(sql, f.principal, {
 					conversationId: conv.conversationId,
-					content: 'Zakat wajib dengan nisab dan haul; sedekah dianjurkan kapan saja tanpa nisab?',
+					content:
+						'Zakat wajib dengan nisab dan haul; sedekah dianjurkan kapan saja tanpa nisab?',
 					indexReleaseId: f.releaseId,
 				})
 			})
@@ -252,7 +253,8 @@ describe('M6-008: shadow observation without answer change', () => {
 			const turn = await withChatModel(sql, groundedModel.url, async () =>
 				postUserTurn(sql, f.principal, {
 					conversationId: conv.conversationId,
-					content: 'Zakat wajib dengan nisab dan haul; sedekah dianjurkan kapan saja tanpa nisab?',
+					content:
+						'Zakat wajib dengan nisab dan haul; sedekah dianjurkan kapan saja tanpa nisab?',
 					indexReleaseId: f.releaseId,
 				}),
 			)
