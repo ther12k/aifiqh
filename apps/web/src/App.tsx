@@ -517,7 +517,7 @@ function AuthGate({ redirecting = false }: { redirecting?: boolean }) {
 				</div>
 				<span className="landing-eyebrow">Ruang ilmu yang terpercaya</span>
 				<h1>
-					{redirecting ? 'Mengarahkan ke halaman masuk' : 'Memeriksa sesi Anda'}
+					{redirecting ? 'Mengarahkan ke Halaman Masuk' : 'Memeriksa sesi Anda'}
 				</h1>
 				<p>
 					{redirecting
