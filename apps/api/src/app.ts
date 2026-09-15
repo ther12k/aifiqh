@@ -22,6 +22,10 @@ import {
 	startConversation,
 } from './answers/chatService'
 import {
+	CitationSnapshotError,
+	getCitationSnapshot,
+} from './answers/citationSnapshotService'
+import {
 	ClaimReviewError,
 	type ClaimVerdict,
 	aggregateScholarlyReview,
@@ -2928,6 +2932,56 @@ function sourceRoutes(deps: AppDeps) {
 					return { error: 'not_found' }
 				}
 				return data
+			})
+			// M6-017: Reader citation snapshot — pinned revision, readable context,
+			// no internal engine leakage, scope permission gated
+			.get('/answers/:id/citations/:ordinal', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				const ordinal = Number(ctx.params.ordinal)
+				if (!Number.isInteger(ordinal) || ordinal <= 0) {
+					ctx.set.status = 400
+					return {
+						error: 'INVALID_ORDINAL',
+						message: 'ordinal rujukan harus berupa bilangan bulat positif',
+					}
+				}
+				try {
+					const snapshot = await getCitationSnapshot(
+						sql,
+						principal,
+						ctx.params.id,
+						ordinal,
+					)
+					return snapshot
+				} catch (err) {
+					if (err instanceof CitationSnapshotError) {
+						if (
+							err.code === 'ANSWER_NOT_FOUND' ||
+							err.code === 'CITATION_NOT_FOUND' ||
+							err.code === 'SOURCE_NOT_FOUND' ||
+							err.code === 'REVISION_NOT_FOUND' ||
+							err.code === 'SPAN_NOT_FOUND'
+						) {
+							ctx.set.status = 404
+							return { error: err.code, message: err.message }
+						}
+						if (
+							err.code === 'SCOPE_DENIED' ||
+							err.code === 'CONVERSATION_FORBIDDEN'
+						) {
+							ctx.set.status = 403
+							return {
+								error: err.code,
+								message: err.message,
+								reasonCode: err.reasonCode,
+							}
+						}
+						ctx.set.status = 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
 			})
 			.post('/answers/:id/claims/:claimId/review', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx

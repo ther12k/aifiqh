@@ -42,6 +42,11 @@ import {
 	progressStageForTurn,
 } from '../lib/turnProgress'
 import { ChatShell, MessageParagraphs } from './ChatShell'
+import {
+	CitationDrawer,
+	fetchCitationSnapshot,
+	useCitationDrawer,
+} from './CitationDrawer'
 
 function getCsrfToken(): string {
 	const match = document.cookie.match(/(?:^|;\s*)aifiqh_csrf=([^;]+)/)
@@ -77,6 +82,9 @@ interface StoredAnswer {
 	/** the SERVER-assisted message id — feedback targets this, never the
 	 * client's optimistic placeholder id */
 	serverMessageId: string
+	/** M6-017: the answers.id behind this turn — citation snapshot reads
+	 * hang off it (null on legacy rows → citation drawer stays disabled) */
+	answerId?: string | null
 	sections: AnswerSection[]
 	/** plain text for copy/share — section texts joined, no decorations */
 	plain: string
@@ -366,11 +374,14 @@ function AnswerCard({
 	answer,
 	messageId,
 	isOperator = false,
+	onOpenCitation,
 }: {
 	answer: StoredAnswer
 	messageId: string
 	/** ops:read holders get the provider/model line (AI-003) */
 	isOperator?: boolean
+	/** M6-017: opens the citation drawer for this answer's citation ordinal */
+	onOpenCitation?: (ordinal: number) => void
 }) {
 	const [expanded, setExpanded] = useState(false)
 	const [citationsOpen, setCitationsOpen] = useState(false)
@@ -499,9 +510,18 @@ function AnswerCard({
 									</span>
 									<div className="citation-body">
 										<div className="citation-head">
-											<span className="citation-source-name">
+											{/* M6-017: the citation itself opens the snapshot drawer
+											    inline — the reader never leaves the chat */}
+											<button
+												type="button"
+												className="citation-source-name citation-open-trigger"
+												disabled={!onOpenCitation || !answer.answerId}
+												aria-disabled={!onOpenCitation || !answer.answerId}
+												aria-label={`Buka kutipan ${c.ordinal}: ${c.sourceTitle ?? 'Sumber'}`}
+												onClick={() => onOpenCitation?.(c.ordinal)}
+											>
 												{c.sourceTitle ?? `Sumber ${c.ordinal}`}
-											</span>
+											</button>
 											<span className="citation-head-actions">
 												<button
 													type="button"
@@ -860,6 +880,10 @@ export function ChatContainer({
 	const [presentationByMsg, setPresentationByMsg] = useState<
 		Record<string, PresentationLike>
 	>({})
+	// M6-017: citation drawer overlay — holds ONLY drawer state, so opening
+	// or closing a citation can never touch draft/conversation/scroll
+	const [citationDrawer, openCitationDrawer, closeCitationDrawer] =
+		useCitationDrawer(fetchCitationSnapshot)
 
 	useEffect(() => {
 		saveConversationOrganization(organization)
@@ -980,6 +1004,7 @@ export function ChatContainer({
 						}
 						loadedAnswers[m.id] = {
 							serverMessageId: m.answer.id,
+							answerId: m.answer.id ?? m.answerId ?? null,
 							sections,
 							plain: sections.map((s) => s.text).join('\n\n'),
 							citations: m.answer.citations ?? [],
@@ -1206,6 +1231,8 @@ export function ChatContainer({
 			const result = (await res.json()) as {
 				status: string
 				assistantMessageId?: string
+				/** M6-017: answers.id — the citation snapshot endpoint keys off it */
+				answerId?: string | null
 				provider?: string
 				model?: string
 				citations?: TurnCitation[]
@@ -1251,6 +1278,7 @@ export function ChatContainer({
 				if (sections.length > 0) {
 					storedAnswer = {
 						serverMessageId: result.assistantMessageId ?? assistantMsgId,
+						answerId: result.answerId ?? null,
 						sections,
 						plain: sections.map((s) => s.text).join('\n\n'),
 						citations: result.citations ?? [],
@@ -1817,6 +1845,15 @@ export function ChatContainer({
 													answer={answer}
 													messageId={m.id}
 													isOperator={permissions.includes('ops:read')}
+													onOpenCitation={
+														answer.answerId
+															? (ordinal) =>
+																	openCitationDrawer({
+																		answerId: answer.answerId as string,
+																		ordinal,
+																	})
+															: undefined
+													}
 												/>
 											</div>
 										</>
@@ -1874,6 +1911,14 @@ export function ChatContainer({
 					)}
 				</div>
 			</div>
+			{/* M6-017: citation snapshot overlay — pinned-revision provenance,
+			    rendered as a sibling so the chat DOM (and its scroll) never
+			    remounts while the drawer opens or closes */}
+			<CitationDrawer
+				state={citationDrawer}
+				onOpen={openCitationDrawer}
+				onClose={closeCitationDrawer}
+			/>
 		</div>
 	)
 }
