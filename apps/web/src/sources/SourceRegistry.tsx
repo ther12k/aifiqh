@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BRAND } from '../config/brand'
+import { SearchPreviewPanel } from './SearchPreviewPanel'
 
 interface RevisionRow {
 	id: string
@@ -886,6 +887,9 @@ export function SourceRegistry({ permissions }: SourceRegistryProps) {
 					{reviewNotice && !uploadError && (
 						<output data-testid="review-notice">{reviewNotice}</output>
 					)}
+
+					{/* M6-014: editor search preview — pipeline reuse, no persistence */}
+					<SearchPreviewPanel sourceId={selected.id} />
 				</div>
 			)}
 		</section>

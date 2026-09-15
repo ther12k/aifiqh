@@ -243,6 +243,11 @@ import { planAndPersistQuery } from './retrieval/queryPlanner'
 import { HashRerankerProvider } from './retrieval/reranker'
 import { LaneError, type LexicalFilters } from './retrieval/retrievalLanes'
 import {
+	type PreviewScope,
+	SearchPreviewError,
+	runSearchPreview,
+} from './retrieval/searchPreviewService'
+import {
 	type ImportBatchInput,
 	validateAndRecordImport,
 } from './sources/importValidation'
@@ -902,6 +907,70 @@ function sourceRoutes(deps: AppDeps) {
 					return { error: 'not_found' }
 				}
 				return data
+			})
+			// M6-014 (FR-08/FR-11): editor search preview — reuses the SAME
+			// lane pipeline as the chat turn against ONE pinned release,
+			// persists NOTHING (no trace/plan/manifest/answer/turn → no
+			// production_user telemetry), never mutates aliases, and shows
+			// lane provenance + debug scores with an explicit not-confidence
+			// disclaimer. Real semantic ordering lands with #138/#139.
+			.post('/sources/:id/search-preview', async (rawCtx) => {
+				const ctx = rawCtx as unknown as HandlerCtx
+				const principal = await ctx.requirePermission('knowledge:read')
+				ctx.requireCsrf()
+				const body = (ctx.body ?? {}) as Record<string, unknown>
+				const scope = body.scope as PreviewScope
+				if (
+					scope !== 'production' &&
+					scope !== 'candidate' &&
+					scope !== 'draft'
+				) {
+					ctx.set.status = 400
+					return {
+						error: 'INVALID_SCOPE',
+						message: 'scope harus production | candidate | draft',
+					}
+				}
+				try {
+					return await runSearchPreview(sql, principal, {
+						sourceId: ctx.params.id,
+						query: typeof body.query === 'string' ? body.query : '',
+						scope,
+						releaseId:
+							typeof body.releaseId === 'string' ? body.releaseId : null,
+						previewToken:
+							typeof body.previewToken === 'string' ? body.previewToken : null,
+						page:
+							typeof body.page === 'number' && Number.isFinite(body.page)
+								? body.page
+								: 1,
+						madhhab: bodyStrArray(body.madhhab) ?? [],
+					})
+				} catch (err) {
+					if (err instanceof SearchPreviewError) {
+						if (err.code === 'SOURCE_NOT_FOUND') {
+							ctx.set.status = 404
+							return { error: err.code, message: err.message }
+						}
+						if (
+							err.code === 'RELEASE_NOT_FOUND' ||
+							err.code === 'PREVIEW_SESSION_EXPIRED'
+						) {
+							ctx.set.status = 404
+							return { error: err.code, message: err.message }
+						}
+						if (
+							err.code === 'RELEASE_NOT_SERVABLE' ||
+							err.code === 'RELEASE_SNAPSHOT_MISMATCH'
+						) {
+							ctx.set.status = 409
+							return { error: err.code, message: err.message }
+						}
+						ctx.set.status = 400
+						return { error: err.code, message: err.message }
+					}
+					throw err
+				}
 			})
 			.patch('/sources/:id/metadata', async (rawCtx) => {
 				const ctx = rawCtx as unknown as HandlerCtx
