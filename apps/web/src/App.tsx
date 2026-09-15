@@ -508,6 +508,31 @@ function Landing({
 	)
 }
 
+function AuthGate({ redirecting = false }: { redirecting?: boolean }) {
+	return (
+		<main className="auth-gate" aria-live="polite">
+			<div className="auth-gate-card">
+				<div className="auth-gate-mark">
+					<BrandMark />
+				</div>
+				<span className="landing-eyebrow">Ruang ilmu yang terpercaya</span>
+				<h1>
+					{redirecting ? 'Mengarahkan ke halaman masuk' : 'Memeriksa sesi Anda'}
+				</h1>
+				<p>
+					{redirecting
+						? 'Anda perlu masuk untuk melanjutkan ke ruang kerja AlFiqh.'
+						: 'Sebentar. Kami menyiapkan ruang kerja dan memastikan akses Anda.'}
+				</p>
+				<span className="auth-gate-loader" aria-hidden="true" />
+				<small>
+					Autentikasi tetap ditangani oleh penyedia identitas resmi.
+				</small>
+			</div>
+		</main>
+	)
+}
+
 function PublicLanding({
 	devLoginEnabled,
 	authenticated,
@@ -824,22 +849,8 @@ export default function App() {
 	// Protected routes never render the guest app shell. While /auth/me is in
 	// flight we wait, then the effect above sends anonymous visitors to OIDC.
 	const authDecision = authGuardDecision(route, !meLoading, Boolean(me))
-	if (authDecision === 'loading') {
-		return (
-			<main className="app-content">
-				<output className="gate-note">Memeriksa sesi…</output>
-			</main>
-		)
-	}
-	if (authDecision === 'redirect') {
-		return (
-			<main className="app-content">
-				<output className="gate-note">
-					Masuk diperlukan. Mengalihkan ke halaman masuk…
-				</output>
-			</main>
-		)
-	}
+	if (authDecision === 'loading') return <AuthGate />
+	if (authDecision === 'redirect') return <AuthGate redirecting />
 
 	// chat gets its own workspace shell: one sidebar (chat history on top,
 	// remaining menus at the bottom) and a focused conversation column
