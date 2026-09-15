@@ -58,6 +58,7 @@ jobs:
           docker rm -f aifiqh-ci-pg 2>/dev/null || true
           docker run -d --name aifiqh-ci-pg \
             -e POSTGRES_USER=aifiqh -e POSTGRES_PASSWORD=aifiqh -e POSTGRES_DB=aifiqh \
+            -c max_connections=300 \
             -p 127.0.0.1:15432:5432 pgvector/pgvector:0.8.0-pg16
           # postgres entrypoint restarts once during first init; require
           # consecutive successes so the check cannot land in that window
@@ -121,6 +122,7 @@ jobs:
             -p 127.0.0.1:19000:9000 minio/minio:RELEASE.2024-06-13T22-53-53Z server /data
           docker run -d --name aifiqh-ci-pg \
             -e POSTGRES_USER=aifiqh -e POSTGRES_PASSWORD=aifiqh -e POSTGRES_DB=aifiqh \
+            -c max_connections=300 \
             -p 127.0.0.1:15432:5432 pgvector/pgvector:0.8.0-pg16
           ready=0
           for i in $(seq 1 60); do

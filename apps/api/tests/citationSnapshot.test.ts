@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { Principal } from '@aifiqh/shared'
 import postgres from 'postgres'
 import {
@@ -10,7 +10,14 @@ import { approveTestRevision } from './revisionSeed'
 
 const DB_URL =
 	process.env.DATABASE_URL ?? 'postgres://aifiqh:aifiqh@localhost:5434/aifiqh'
-const sql = postgres(DB_URL, { max: 5 })
+// max:1 + explicit end — the full suite holds dozens of pooled connections
+// in one bun process; this file must not push the disposable CI postgres
+// (max_connections) over its limit for the files that run after it
+const sql = postgres(DB_URL, { max: 1 })
+
+afterAll(async () => {
+	await sql.end({ timeout: 1 })
+})
 
 interface TestFixture {
 	tenantId: string
