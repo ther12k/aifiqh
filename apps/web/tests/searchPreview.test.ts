@@ -6,16 +6,24 @@
  *    release-not-servable vs snapshot mismatch read differently;
  *  - pagination: "load more" APPENDS and keeps the original snapshot
  *    header (token/release never change), dedupes by unit id;
- *  - stale failures never clobber a newer run / loaded rows;
+ *  - RACE GUARD (residual fix #162 P2): a response belongs to the active
+ *    request only — slow/late/aborted responses for superseded searches
+ *    are ignored, for BOTH success and failure;
+ *  - trust-breaking failures on load-more (revoked access, invalid
+ *    session, moved release) DROP the accumulated rows;
  *  - labels: lane provenance and scope copy are debug-framed, never
  *    confidence/kebenaran.
+ *
+ * Race assertions check FINAL STATE, not fetch counts.
  */
 import { describe, expect, test } from 'bun:test'
 import {
 	PREVIEW_ERROR_COPY,
 	type PreviewPanelState,
+	type PreviewPassageView,
 	type SearchPreviewResponse,
 	appendPreviewPage,
+	beginPreviewPage,
 	failPreview,
 	laneLabel,
 	previewErrorKind,
@@ -24,6 +32,32 @@ import {
 	startPreview,
 	warningCopy,
 } from '../src/lib/searchPreview'
+
+function passage(
+	id: string,
+	overrides: Partial<PreviewPassageView> = {},
+): PreviewPassageView {
+	return {
+		logicalUnitId: id,
+		unitKind: 'source_span',
+		sourceSpanId: `span-${id}`,
+		sourceId: 'src-1',
+		sourceTitle: 'Kitab Zakat',
+		sourceRevisionId: 'rev-1',
+		revisionNumber: 1,
+		pageNumber: 12,
+		sectionHeading: 'Bab Nisab',
+		text: `Pasal ${id}: zakat wajib jika mencapai nisab.`,
+		rrfRank: 1,
+		fusedScore: 0.032,
+		exactPriority: false,
+		laneRanks: { lexical: 1 },
+		laneScores: { lexical: 0.9 },
+		included: true,
+		fromAnchorSource: true,
+		...overrides,
+	}
+}
 
 function response(
 	overrides: Partial<SearchPreviewResponse> = {},
@@ -41,27 +75,7 @@ function response(
 		pageSize: 10,
 		totalResults: 3,
 		hasMore: false,
-		results: [
-			{
-				logicalUnitId: 'u1',
-				unitKind: 'source_span',
-				sourceSpanId: 'span-1',
-				sourceId: 'src-1',
-				sourceTitle: 'Kitab Zakat',
-				sourceRevisionId: 'rev-1',
-				revisionNumber: 1,
-				pageNumber: 12,
-				sectionHeading: 'Bab Nisab',
-				text: 'Zakat wajib jika mencapai nisab.',
-				rrfRank: 1,
-				fusedScore: 0.032,
-				exactPriority: false,
-				laneRanks: { lexical: 1, vector: 2 },
-				laneScores: { lexical: 0.9, vector: 0.5 },
-				included: true,
-				fromAnchorSource: true,
-			},
-		],
+		results: [passage('u1')],
 		warnings: [],
 		degradedLanes: [],
 		rrfOrder: ['u1'],
@@ -72,8 +86,12 @@ function response(
 	}
 }
 
+const IDLE: PreviewPanelState = { phase: 'idle', generation: 0, request: 0 }
+
 const READY: PreviewPanelState = {
 	phase: 'ready',
+	generation: 1,
+	request: 1,
 	query: 'zakat',
 	scope: 'production',
 	response: response(),
@@ -83,9 +101,13 @@ const READY: PreviewPanelState = {
 
 describe('search preview panel state', () => {
 	test('start → loading with query+scope; resolve → ready with rows', () => {
-		const s = startPreview({ phase: 'idle' }, 'zakat nisab', 'candidate')
+		const s = startPreview(IDLE, 'zakat nisab', 'candidate')
 		expect(s.phase).toBe('loading')
-		const r = resolvePreview(s, response({ scope: 'candidate' }))
+		if (s.phase === 'loading') {
+			expect(s.generation).toBe(1)
+			expect(s.request).toBe(1)
+		}
+		const r = resolvePreview(s, response({ scope: 'candidate' }), s.request)
 		expect(r.phase).toBe('ready')
 		if (r.phase === 'ready') {
 			expect(r.rows).toHaveLength(1)
@@ -100,14 +122,19 @@ describe('search preview panel state', () => {
 		expect(previewErrorKind(404, { error: 'RELEASE_NOT_FOUND' })).toBe(
 			'not_found',
 		)
-		expect(previewErrorKind(403, {})).toBe('permission')
+		expect(previewErrorKind(403, { error: 'PREVIEW_ACCESS_REVOKED' })).toBe(
+			'permission',
+		)
 		expect(previewErrorKind(409, { error: 'RELEASE_NOT_SERVABLE' })).toBe(
 			'release_unavailable',
 		)
 		expect(previewErrorKind(409, { error: 'RELEASE_SNAPSHOT_MISMATCH' })).toBe(
 			'snapshot_mismatch',
 		)
-		expect(previewErrorKind(404, { error: 'PREVIEW_SESSION_EXPIRED' })).toBe(
+		expect(previewErrorKind(409, { error: 'PREVIEW_REQUEST_MISMATCH' })).toBe(
+			'snapshot_mismatch',
+		)
+		expect(previewErrorKind(404, { error: 'PREVIEW_SESSION_INVALID' })).toBe(
 			'session_expired',
 		)
 		expect(previewErrorKind(400, { error: 'QUERY_REQUIRED' })).toBe(
@@ -124,17 +151,11 @@ describe('search preview panel state', () => {
 			page: 2,
 			hasMore: false,
 			previewToken: 'tok-1',
-			results: [
-				{
-					...response().results[0],
-					logicalUnitId: 'u2',
-					rrfRank: 2,
-				},
-			],
+			results: [passage('u2', { rrfRank: 2 })],
 			rrfOrder: ['u1', 'u2'],
 			finalOrder: ['u1', 'u2'],
 		})
-		const s = appendPreviewPage(READY, page2)
+		const s = appendPreviewPage(READY, page2, READY.request)
 		expect(s.phase).toBe('ready')
 		if (s.phase !== 'ready') return
 		// rows appended in order, snapshot untouched
@@ -149,28 +170,56 @@ describe('search preview panel state', () => {
 			page: 2,
 			results: response().results, // same unit u1 again
 		})
-		const s = appendPreviewPage(READY, page2)
+		const s = appendPreviewPage(READY, page2, READY.request)
 		if (s.phase !== 'ready') return
 		expect(s.rows).toHaveLength(1)
 	})
 
 	test('failed load-more keeps loaded rows; failed fresh run shows error', () => {
-		const keep = failPreview(READY, 'network')
+		const keep = failPreview(READY, 'network', READY.request)
 		expect(keep.phase).toBe('ready')
 		if (keep.phase === 'ready') expect(keep.rows).toHaveLength(1)
 
-		const loading = startPreview({ phase: 'idle' }, 'q', 'production')
-		const err = failPreview(loading, 'permission')
+		const loading = startPreview(IDLE, 'q', 'production')
+		const err = failPreview(loading, 'permission', loading.request)
 		expect(err).toEqual({
 			phase: 'error',
+			generation: loading.generation,
+			request: loading.request,
 			query: 'q',
 			scope: 'production',
 			kind: 'permission',
 		})
-		// a late failure AFTER a newer run resolved is ignored
-		const resolved = resolvePreview(loading, response())
-		const stale = failPreview(resolved, 'network')
+		// a late failure AFTER its own request resolved keeps the rows
+		const resolved = resolvePreview(loading, response(), loading.request)
+		const stale = failPreview(resolved, 'network', loading.request)
 		expect(stale.phase).toBe('ready')
+	})
+
+	test('trust-breaking load-more failures DROP the rows', () => {
+		// revoked access / invalid session / moved release → panel invalid,
+		// no stale passages left around the error note
+		for (const kind of [
+			'permission',
+			'session_expired',
+			'snapshot_mismatch',
+		] as const) {
+			const paging = beginPreviewPage(READY)
+			const dead = failPreview(paging, kind, paging.request)
+			expect(dead.phase).toBe('error')
+			if (dead.phase === 'error') expect(dead.kind).toBe(kind)
+			expect('rows' in dead).toBe(false)
+			expect('response' in dead).toBe(false)
+		}
+
+		// transient network failure keeps the rows and clears the pager
+		const paging = beginPreviewPage(READY)
+		const net = failPreview(paging, 'network', paging.request)
+		expect(net.phase).toBe('ready')
+		if (net.phase === 'ready') {
+			expect(net.rows).toHaveLength(1)
+			expect(net.loadingMore).toBe(false)
+		}
 	})
 
 	test('labels are debug-framed: lanes and scopes never say confidence', () => {
@@ -182,5 +231,180 @@ describe('search preview panel state', () => {
 		const allCopy = Object.values(PREVIEW_ERROR_COPY).join(' ')
 		expect(allCopy.toLowerCase()).not.toContain('confidence')
 		expect(allCopy.toLowerCase()).not.toContain('kebenaran')
+	})
+})
+
+describe('search preview race matrix — request identity, not loading (#162 P2)', () => {
+	test('R1: A mulai → B mulai → A success → B success ⇒ hanya B terlihat', () => {
+		const a = startPreview(IDLE, 'zakat', 'production') // gen 1, req 1
+		const b = startPreview(a, 'sedekah', 'production') // gen 2, req 2
+
+		const afterA = resolvePreview(
+			b,
+			response({
+				query: 'zakat',
+				previewToken: 'tok-a',
+				results: [passage('a1')],
+			}),
+			a.request,
+		)
+		expect(afterA.phase).toBe('loading') // A's rows must NOT land
+
+		const done = resolvePreview(
+			afterA,
+			response({
+				query: 'sedekah',
+				previewToken: 'tok-b',
+				results: [passage('b1')],
+			}),
+			b.request,
+		)
+		expect(done.phase).toBe('ready')
+		if (done.phase !== 'ready') return
+		expect(done.rows.map((r) => r.logicalUnitId)).toEqual(['b1'])
+		expect(done.query).toBe('sedekah')
+		expect(done.response.previewToken).toBe('tok-b')
+	})
+
+	test('R2: A mulai → B mulai → B success → A success (terlambat) ⇒ hanya B', () => {
+		const a = startPreview(IDLE, 'zakat', 'production')
+		const b = startPreview(a, 'sedekah', 'production')
+
+		const bDone = resolvePreview(
+			b,
+			response({
+				query: 'sedekah',
+				previewToken: 'tok-b',
+				results: [passage('b1')],
+			}),
+			b.request,
+		)
+		const aLate = resolvePreview(
+			bDone,
+			response({
+				query: 'zakat',
+				previewToken: 'tok-a',
+				results: [passage('a1')],
+			}),
+			a.request,
+		)
+		expect(aLate).toBe(bDone) // final state is untouched B
+		if (aLate.phase !== 'ready') return
+		expect(aLate.rows.map((r) => r.logicalUnitId)).toEqual(['b1'])
+	})
+
+	test('R3: A mulai → B mulai → A error ⇒ B tidak ikut error', () => {
+		const a = startPreview(IDLE, 'zakat', 'production')
+		const b = startPreview(a, 'sedekah', 'production')
+
+		const afterAError = failPreview(b, 'network', a.request)
+		expect(afterAError.phase).toBe('loading') // B unaffected
+		if (afterAError.phase === 'loading') {
+			expect(afterAError.query).toBe('sedekah')
+		}
+
+		const done = resolvePreview(
+			afterAError,
+			response({ query: 'sedekah', previewToken: 'tok-b' }),
+			b.request,
+		)
+		expect(done.phase).toBe('ready')
+	})
+
+	test('R4: page-2 A pending → search B dimulai → page-2 A selesai ⇒ diabaikan', () => {
+		const a = startPreview(IDLE, 'zakat', 'production')
+		const readyA = resolvePreview(
+			a,
+			response({
+				previewToken: 'tok-a',
+				results: [passage('a1')],
+				hasMore: true,
+			}),
+			a.request,
+		)
+		const pagingA = beginPreviewPage(readyA) // same generation, new request
+		const b = startPreview(pagingA, 'sedekah', 'production') // supersedes A
+
+		const latePage2 = appendPreviewPage(
+			b,
+			response({ previewToken: 'tok-a', page: 2, results: [passage('a2')] }),
+			pagingA.request,
+		)
+		expect(latePage2.phase).toBe('loading') // A's page-2 ignored
+
+		const done = resolvePreview(
+			latePage2,
+			response({
+				query: 'sedekah',
+				previewToken: 'tok-b',
+				results: [passage('b1')],
+			}),
+			b.request,
+		)
+		if (done.phase !== 'ready') throw new Error('B must be ready')
+		expect(done.rows.map((r) => r.logicalUnitId)).toEqual(['b1']) // no a1/a2
+	})
+
+	test('R5: dua pagination bertabrakan ⇒ hanya request aktif + token sesi yang diterapkan', () => {
+		const a = startPreview(IDLE, 'zakat', 'production')
+		const readyA = resolvePreview(
+			a,
+			response({
+				previewToken: 'tok-a',
+				results: [passage('a1')],
+				hasMore: true,
+			}),
+			a.request,
+		)
+
+		// a page-2 response carrying the PREVIOUS request id is ignored
+		const paging = beginPreviewPage(readyA)
+		const stale = appendPreviewPage(
+			paging,
+			response({ previewToken: 'tok-a', page: 2, results: [passage('a2')] }),
+			readyA.request,
+		)
+		expect(stale).toBe(paging)
+		if (stale.phase !== 'ready') return
+		expect(stale.loadingMore).toBe(true)
+
+		// the response for the ACTIVE request applies
+		const applied = appendPreviewPage(
+			stale,
+			response({ previewToken: 'tok-a', page: 2, results: [passage('a2')] }),
+			paging.request,
+		)
+		if (applied.phase !== 'ready') throw new Error('must stay ready')
+		expect(applied.rows.map((r) => r.logicalUnitId)).toEqual(['a1', 'a2'])
+		expect(applied.loadingMore).toBe(false)
+
+		// a response replying to a DIFFERENT preview session token is never
+		// applied, even with the right request id
+		const paging3 = beginPreviewPage(applied)
+		const foreign = appendPreviewPage(
+			paging3,
+			response({ previewToken: 'tok-z', page: 3, results: [passage('z1')] }),
+			paging3.request,
+		)
+		expect(foreign).toBe(paging3)
+	})
+
+	test('R6: request di-abort/superseded ⇒ tidak menjadi error user', () => {
+		const a = startPreview(IDLE, 'zakat', 'production')
+		const b = startPreview(a, 'sedekah', 'production')
+
+		// aborted A (its controller was aborted when B started) resolves as
+		// a failure carrying A's request id — must not surface
+		const afterAbort = failPreview(b, 'network', a.request)
+		expect(afterAbort).toBe(b)
+
+		// and a late success for A never lands either
+		const done = resolvePreview(
+			afterAbort,
+			response({ query: 'zakat', previewToken: 'tok-a' }),
+			a.request,
+		)
+		expect(done).toBe(b)
+		expect(done.phase).toBe('loading')
 	})
 })

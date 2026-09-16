@@ -954,16 +954,26 @@ function sourceRoutes(deps: AppDeps) {
 						}
 						if (
 							err.code === 'RELEASE_NOT_FOUND' ||
-							err.code === 'PREVIEW_SESSION_EXPIRED'
+							err.code === 'PREVIEW_SESSION_INVALID'
 						) {
+							// invalid/expired/legacy/not-owned sessions are 404 and
+							// indistinguishable — the endpoint must not be an
+							// existence oracle for other users' preview sessions
 							ctx.set.status = 404
 							return { error: err.code, message: err.message }
 						}
 						if (
 							err.code === 'RELEASE_NOT_SERVABLE' ||
-							err.code === 'RELEASE_SNAPSHOT_MISMATCH'
+							err.code === 'RELEASE_SNAPSHOT_MISMATCH' ||
+							err.code === 'PREVIEW_REQUEST_MISMATCH'
 						) {
 							ctx.set.status = 409
+							return { error: err.code, message: err.message }
+						}
+						if (err.code === 'PREVIEW_ACCESS_REVOKED') {
+							// the session owner's CURRENT grants no longer cover the
+							// page — session already invalidated by the service
+							ctx.set.status = 403
 							return { error: err.code, message: err.message }
 						}
 						ctx.set.status = 400

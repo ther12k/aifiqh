@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import {
 	PREVIEW_ERROR_COPY,
 	type PreviewErrorKind,
 	type PreviewPanelState,
 	type SearchPreviewResponse,
 	appendPreviewPage,
+	beginPreviewPage,
 	failPreview,
 	laneLabel,
 	previewErrorKind,
@@ -35,22 +36,45 @@ function csrfToken(): string {
  *  - lane provenance chips (Eksak/Leksikal/Semantik + rank) and debug
  *    scores carry the API's explicit not-confidence disclaimer;
  *  - "masuk konteks" marks what the model would actually see.
+ *
+ * RACE GUARD (residual fix #162 P2): every fetch is tagged with the
+ * monotonic request id it was issued under; resolve/append/fail apply only
+ * through that id, so a slow response for a superseded search can never
+ * overwrite the newest one — and an aborted/superseded failure never
+ * surfaces as a user-visible error. The AbortController only saves the
+ * wasted network work; correctness is the id guard in the state machine.
  */
 export function SearchPreviewPanel({ sourceId }: { sourceId: string }) {
-	const [state, setState] = useState<PreviewPanelState>({ phase: 'idle' })
+	const [state, setState] = useState<PreviewPanelState>({
+		phase: 'idle',
+		generation: 0,
+		request: 0,
+	})
 	const [query, setQuery] = useState('')
 	const [scope, setScope] = useState<'production' | 'candidate' | 'draft'>(
 		'production',
 	)
 	const [draftReleaseId, setDraftReleaseId] = useState('')
+	const abortRef = useRef<AbortController | null>(null)
 
 	async function run() {
 		const trimmed = query.trim()
 		if (!trimmed) {
-			setState({ phase: 'error', query: trimmed, scope, kind: 'invalid_input' })
+			setState((cur) => ({
+				phase: 'error',
+				generation: cur.generation,
+				request: cur.request,
+				query: trimmed,
+				scope,
+				kind: 'invalid_input' as PreviewErrorKind,
+			}))
 			return
 		}
-		setState(startPreview(state, trimmed, scope))
+		const next = startPreview(state, trimmed, scope)
+		setState(next)
+		abortRef.current?.abort()
+		const controller = new AbortController()
+		abortRef.current = controller
 		try {
 			const res = await fetch(`/sources/${sourceId}/search-preview`, {
 				method: 'POST',
@@ -63,18 +87,21 @@ export function SearchPreviewPanel({ sourceId }: { sourceId: string }) {
 					scope,
 					releaseId: scope === 'draft' ? draftReleaseId || null : null,
 				}),
+				signal: controller.signal,
 			})
 			if (!res.ok) {
 				const body = (await res.json().catch(() => ({}))) as {
 					error?: string
 				}
-				setState((cur) => failPreview(cur, previewErrorKind(res.status, body)))
+				setState((cur) =>
+					failPreview(cur, previewErrorKind(res.status, body), next.request),
+				)
 				return
 			}
 			const body = (await res.json()) as SearchPreviewResponse
-			setState((cur) => resolvePreview(cur, body))
+			setState((cur) => resolvePreview(cur, body, next.request))
 		} catch {
-			setState((cur) => failPreview(cur, 'network'))
+			setState((cur) => failPreview(cur, 'network', next.request))
 		}
 	}
 
@@ -82,7 +109,11 @@ export function SearchPreviewPanel({ sourceId }: { sourceId: string }) {
 		if (state.phase !== 'ready' || state.loadingMore) return
 		const token = state.response.previewToken
 		if (!token) return
-		setState({ ...state, loadingMore: true })
+		const next = beginPreviewPage(state)
+		if (next === state) return
+		setState(next)
+		const controller = new AbortController()
+		abortRef.current = controller
 		try {
 			const res = await fetch(`/sources/${sourceId}/search-preview`, {
 				method: 'POST',
@@ -97,25 +128,25 @@ export function SearchPreviewPanel({ sourceId }: { sourceId: string }) {
 					releaseId: state.response.snapshotReleaseId,
 					page: state.response.page + 1,
 				}),
+				signal: controller.signal,
 			})
 			if (!res.ok) {
 				const body = (await res.json().catch(() => ({}))) as {
 					error?: string
 				}
-				const kind = previewErrorKind(res.status, body)
+				// trust-breaking failures (revoked access, invalid session,
+				// moved release) invalidate the panel and drop the rows via
+				// failPreview — the reader re-runs instead of trusting stale
+				// passages
 				setState((cur) =>
-					// a mismatched snapshot on page N+1 invalidates the whole
-					// panel — the reader must re-run, not trust stale rows
-					kind === 'snapshot_mismatch' || kind === 'session_expired'
-						? { phase: 'error', query: state.query, scope: state.scope, kind }
-						: failPreview(cur, kind),
+					failPreview(cur, previewErrorKind(res.status, body), next.request),
 				)
 				return
 			}
 			const body = (await res.json()) as SearchPreviewResponse
-			setState((cur) => appendPreviewPage(cur, body))
+			setState((cur) => appendPreviewPage(cur, body, next.request))
 		} catch {
-			setState((cur) => failPreview(cur, 'network'))
+			setState((cur) => failPreview(cur, 'network', next.request))
 		}
 	}
 

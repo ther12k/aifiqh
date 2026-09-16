@@ -1,6 +1,5 @@
 import { type Principal, sha256Hex } from '@aifiqh/shared'
 import type { Sql } from '../db/client'
-import type { RetrievalCandidate } from './retrievalLanes'
 
 /**
  * Access-scope enforcement for retrieval evidence (RAG-008).
@@ -29,12 +28,16 @@ export class AccessPolicyError extends Error {
  * Batch-verify that every candidate's unit is inside the principal's tenant
  * and access scopes. Any unit that fails verification is dropped — it never
  * reaches the caller. A failing policy query fails the whole call.
+ *
+ * Generic in the candidate shape (only `unitId` is read) so non-retrieval
+ * callers — e.g. the preview pagination re-authorization — reuse the exact
+ * same verifier instead of a parallel ACL implementation.
  */
-export async function filterCandidatesByScope(
+export async function filterCandidatesByScope<T extends { unitId: string }>(
 	sql: Sql,
 	principal: Principal,
-	candidates: RetrievalCandidate[],
-): Promise<RetrievalCandidate[]> {
+	candidates: T[],
+): Promise<T[]> {
 	if (candidates.length === 0) return candidates
 	const unitIds = candidates.map((c) => c.unitId)
 	try {

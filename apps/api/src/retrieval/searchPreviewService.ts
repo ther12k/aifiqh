@@ -1,6 +1,7 @@
-import type { Principal } from '@aifiqh/shared'
+import { type Principal, sha256Hex } from '@aifiqh/shared'
 import type { Sql } from '../db/client'
 import { resolveEmbeddingProvider } from '../index/embeddingService'
+import { filterCandidatesByScope } from './accessPolicy'
 import { type LaneExecutionOutcome, executeLanePlan } from './laneFusion'
 import { HashRerankerProvider } from './reranker'
 
@@ -15,6 +16,20 @@ import { HashRerankerProvider } from './reranker'
  * preview shows what users would actually get.
  *
  * Hard rules enforced here:
+ *  - TOKEN IS NOT AUTHORIZATION: a previewToken is a pointer to an
+ *    immutable retrieval snapshot, nothing more. Every request — page 1
+ *    AND every continuation page — re-authorizes the CURRENT principal
+ *    against the live anchor-source and per-unit access-scope policy
+ *    (the same filterCandidatesByScope the retrieval lanes use). The
+ *    snapshot freezes RESULTS (revision/release/order/manifest), never
+ *    PERMISSIONS: a grant revoked mid-preview denies the next page and
+ *    invalidates the session. Sessions are owned by tenant+principal;
+ *    unknown, expired, legacy and not-owned tokens are rejected with one
+ *    uniform 404 so the endpoint is not an existence oracle.
+ *  - REQUEST IDENTITY: page 1 records a hash of the normalized request
+ *    (anchor source, scope, query, filters, resolved release); a
+ *    continuation that mutates any of them is a loud 409, never replayed
+ *    against a different request.
  *  - RELEASE SNAPSHOT: a preview session pins the release on page 1;
  *    pagination replays the recorded order against the SAME release.
  *    Passing an explicit releaseId that disagrees with the resolved alias
@@ -46,7 +61,9 @@ export class SearchPreviewError extends Error {
 		| 'RELEASE_NOT_FOUND'
 		| 'RELEASE_NOT_SERVABLE'
 		| 'RELEASE_SNAPSHOT_MISMATCH'
-		| 'PREVIEW_SESSION_EXPIRED'
+		| 'PREVIEW_SESSION_INVALID'
+		| 'PREVIEW_REQUEST_MISMATCH'
+		| 'PREVIEW_ACCESS_REVOKED'
 
 	constructor(code: SearchPreviewError['code'], message: string) {
 		super(message)
@@ -131,7 +148,36 @@ export const SCORE_DISCLAIMER =
 // stale token expires instead of pinning a release forever. The FULL detail
 // rows are captured at page 1, so every page renders from the same
 // immutable snapshot (no silent release or ordering drift mid-preview).
+//
+// Session schema v2: a session is OWNED by tenant + principal. The snapshot
+// freezes retrieval identity (release, manifest, order, revisions) — never
+// authorization state; permissions are re-evaluated on every page request.
+// The `version` field exists so a legacy/pre-ownership session (e.g. left
+// in a store that later moves to Redis) is rejected instead of forgiven.
 // ---------------------------------------------------------------------------
+
+const PREVIEW_SESSION_VERSION = 2
+
+interface PreviewSession {
+	version: typeof PREVIEW_SESSION_VERSION
+	tenantId: string
+	principalId: string
+	/** the anchor source the preview was opened from (path identity) */
+	anchorSourceId: string
+	releaseId: string
+	releaseState: string
+	manifestHash: string
+	/** pinned normalized request — pagination must echo it exactly */
+	normalizedRequestHash: string
+	query: string
+	scope: PreviewScope
+	order: PreviewSessionEntry[]
+	warnings: string[]
+	degradedLanes: Array<{ lane: string; error: string }>
+	rerankerModel: string | null
+	createdAt: number
+	expiresAt: number
+}
 
 interface PreviewSessionEntry {
 	unitId: string
@@ -142,20 +188,6 @@ interface PreviewSessionEntry {
 	included: boolean
 	rrfRank: number
 	detail: UnitDetailRow
-}
-
-interface PreviewSession {
-	releaseId: string
-	releaseState: string
-	manifestHash: string
-	query: string
-	scope: PreviewScope
-	sourceId: string
-	order: PreviewSessionEntry[]
-	warnings: string[]
-	degradedLanes: Array<{ lane: string; error: string }>
-	rerankerModel: string | null
-	createdAt: number
 }
 
 const SESSION_TTL_MS = 15 * 60 * 1000
@@ -184,6 +216,63 @@ function pruneSessions(now: number): void {
 /** test hook — clears all preview sessions */
 export function clearPreviewSessionsForTests(): void {
 	previewSessions.clear()
+}
+
+/** test hook — inject a v1-shaped (pre-ownership) session to prove the
+ * reader rejects legacy cache entries fail-closed instead of forgiving them */
+export function seedLegacyPreviewSessionForTests(token: string): void {
+	previewSessions.set(token, {
+		releaseId: '00000000-0000-0000-0000-000000000000',
+		manifestHash: 'legacy',
+		query: 'legacy',
+		scope: 'production',
+		anchorSourceId: 'legacy',
+		order: [],
+		warnings: [],
+		degradedLanes: [],
+		rerankerModel: null,
+		createdAt: Date.now(),
+		// v1 shape: deliberately NO version/tenantId/principalId/ownership
+	} as unknown as PreviewSession)
+}
+
+/**
+ * Hash of the normalized request identity. Not a security boundary — it
+ * guarantees a continuation page cannot silently mutate the request
+ * (anchor source, scope, query, madhhab filter) that produced the snapshot.
+ */
+function normalizedRequestHash(input: {
+	sourceId: string
+	scope: PreviewScope
+	query: string
+	madhhab: string[]
+	releaseId: string
+}): string {
+	return sha256Hex(
+		JSON.stringify([
+			input.sourceId,
+			input.scope,
+			input.query,
+			[...input.madhhab].sort(),
+			input.releaseId,
+		]),
+	)
+}
+
+/** anchor-source authorization: same live scope check on page 1 and on
+ * every continuation — a revoked or deleted anchor denies the preview */
+async function anchorSourceReadable(
+	sql: Sql,
+	principal: Principal,
+	sourceId: string,
+): Promise<boolean> {
+	const [src] = await sql<{ id: string }[]>`
+		select id from sources
+		where id = ${sourceId}::uuid
+			and tenant_id = ${principal.tenantId}::uuid
+			and access_scope_id = any(${principal.scopes}::uuid[])
+		limit 1`
+	return Boolean(src)
 }
 
 // ---------------------------------------------------------------------------
@@ -325,22 +414,78 @@ export async function runSearchPreview(
 	const page = Math.max(1, Math.floor(input.page ?? 1))
 
 	// ---- pagination continuation: replay the recorded snapshot --------
+	// The token is a POINTER to an immutable retrieval snapshot, never an
+	// authorization. Tenant, principal and — before every page leaves this
+	// function — the CURRENT grants are re-checked: the snapshot freezes
+	// results, not permissions.
 	if (input.previewToken) {
-		const session = previewSessions.get(input.previewToken)
-		if (!session || Date.now() - session.createdAt > SESSION_TTL_MS) {
-			previewSessions.delete(input.previewToken)
+		const token = input.previewToken
+		const session = previewSessions.get(token)
+		const now = Date.now()
+		if (
+			!session ||
+			session.version !== PREVIEW_SESSION_VERSION ||
+			now > session.expiresAt ||
+			session.tenantId !== principal.tenantId ||
+			session.principalId !== principal.userId
+		) {
+			// unknown, expired, legacy (pre-ownership) and not-owned sessions
+			// are indistinguishable by design — no existence oracle
+			previewSessions.delete(token)
 			throw new SearchPreviewError(
-				'PREVIEW_SESSION_EXPIRED',
-				'Sesi preview sudah kedaluwarsa. Jalankan pencarian ulang.',
+				'PREVIEW_SESSION_INVALID',
+				'Sesi preview tidak valid atau sudah berakhir. Jalankan pencarian ulang.',
 			)
 		}
+
 		if (input.releaseId && input.releaseId !== session.releaseId) {
 			throw new SearchPreviewError(
 				'RELEASE_SNAPSHOT_MISMATCH',
 				'Pagination harus memakai release snapshot yang sama dengan preview awal',
 			)
 		}
-		return sliceSession(session, input.previewToken, page)
+
+		const requestHash = normalizedRequestHash({
+			sourceId: input.sourceId,
+			scope: input.scope,
+			query: input.query?.trim() ?? '',
+			madhhab: input.madhhab ?? [],
+			releaseId: session.releaseId,
+		})
+		if (requestHash !== session.normalizedRequestHash) {
+			throw new SearchPreviewError(
+				'PREVIEW_REQUEST_MISMATCH',
+				'Request pagination berbeda dengan permintaan awal (sumber, scope, atau query berubah). Jalankan pencarian ulang.',
+			)
+		}
+
+		// re-authorize against CURRENT grants: the anchor source and every
+		// unit on the page about to be returned. One now-unauthorized result
+		// invalidates the whole session — fail closed, never silently
+		// re-ranked or filtered.
+		if (!(await anchorSourceReadable(sql, principal, session.anchorSourceId))) {
+			previewSessions.delete(token)
+			throw new SearchPreviewError(
+				'PREVIEW_ACCESS_REVOKED',
+				'Akses ke sumber pratinjau sudah tidak berlaku untuk akun Anda',
+			)
+		}
+		const start = (page - 1) * PAGE_SIZE
+		const slice = session.order.slice(start, start + PAGE_SIZE)
+		const verified = await filterCandidatesByScope(
+			sql,
+			principal,
+			slice.map((e) => ({ unitId: e.unitId })),
+		)
+		if (verified.length !== slice.length) {
+			previewSessions.delete(token)
+			throw new SearchPreviewError(
+				'PREVIEW_ACCESS_REVOKED',
+				'Akses ke salah satu hasil pratinjau sudah dicabut. Jalankan pencarian ulang.',
+			)
+		}
+
+		return sliceSession(session, token, page)
 	}
 
 	// ---- page 1: fresh preview ----------------------------------------
@@ -352,13 +497,7 @@ export async function runSearchPreview(
 	}
 
 	// ACL anchor: the source the preview is opened from must be readable
-	const [src] = await sql<{ id: string }[]>`
-		select id from sources
-		where id = ${input.sourceId}::uuid
-			and tenant_id = ${principal.tenantId}::uuid
-			and access_scope_id = any(${principal.scopes}::uuid[])
-		limit 1`
-	if (!src) {
+	if (!(await anchorSourceReadable(sql, principal, input.sourceId))) {
 		throw new SearchPreviewError(
 			'SOURCE_NOT_FOUND',
 			'Sumber tidak ditemukan atau tidak dapat dibaca',
@@ -431,13 +570,24 @@ export async function runSearchPreview(
 	)
 
 	const token = crypto.randomUUID()
+	const createdAt = Date.now()
 	const session: PreviewSession = {
+		version: PREVIEW_SESSION_VERSION,
+		tenantId: principal.tenantId,
+		principalId: principal.userId,
+		anchorSourceId: input.sourceId,
 		releaseId: release.id,
 		releaseState: release.state,
 		manifestHash: release.manifestHash,
+		normalizedRequestHash: normalizedRequestHash({
+			sourceId: input.sourceId,
+			scope: input.scope,
+			query,
+			madhhab: input.madhhab ?? [],
+			releaseId: release.id,
+		}),
 		query,
 		scope: input.scope,
-		sourceId: input.sourceId,
 		order: fused.map((c) => {
 			const detail = details.get(c.unitId) ?? {
 				unit_id: c.unitId,
@@ -466,7 +616,8 @@ export async function runSearchPreview(
 		warnings,
 		degradedLanes: outcome.fused.degradedLanes,
 		rerankerModel: outcome.rerank?.rerankerModel ?? null,
-		createdAt: Date.now(),
+		createdAt,
+		expiresAt: createdAt + SESSION_TTL_MS,
 	}
 	pruneSessions(Date.now())
 	previewSessions.set(token, session)
@@ -484,7 +635,7 @@ function sliceSession(
 
 	return {
 		version: SEARCH_PREVIEW_VERSION,
-		sourceId: session.sourceId,
+		sourceId: session.anchorSourceId,
 		query: session.query,
 		scope: session.scope,
 		snapshotReleaseId: session.releaseId,
@@ -512,7 +663,7 @@ function sliceSession(
 			laneRanks: o.laneRanks,
 			laneScores: o.laneScores,
 			included: o.included,
-			fromAnchorSource: o.detail.source_id === session.sourceId,
+			fromAnchorSource: o.detail.source_id === session.anchorSourceId,
 		})),
 		warnings: session.warnings,
 		degradedLanes: session.degradedLanes,

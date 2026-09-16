@@ -12,6 +12,14 @@
  *  8. metrics → preview never writes traces/plans/manifests/answers/turns
  *     (checked via counts), so production_user telemetry stays untouched
  *
+ * Residual security matrix (P1 — token is not authorization):
+ *  9. cross-USER token reuse (same tenant, same capability) → 404
+ * 10. cross-TENANT token reuse → 404, no snapshot metadata leaked
+ * 11. grant revoked mid-preview → next page 403, session invalidated
+ * 12. mutated continuation request (query/scope/source) → 409, no replay
+ * 13. legacy pre-ownership session → rejected fail-closed
+ * 14. revocation of a NON-anchor result source → next page 403
+ *
  * Two-layer status: these fixtures prove MECHANISM with hash embeddings +
  * deterministic reranker — NOT real semantic search quality (⏳ #138/#139).
  */
@@ -24,7 +32,10 @@ import { loadConfig } from '../src/config'
 import { promoteIndexRelease } from '../src/index/indexAliasService'
 import { compileIndexRelease } from '../src/index/indexCompiler'
 import { createLogger } from '../src/logger'
-import { clearPreviewSessionsForTests } from '../src/retrieval/searchPreviewService'
+import {
+	clearPreviewSessionsForTests,
+	seedLegacyPreviewSessionForTests,
+} from '../src/retrieval/searchPreviewService'
 import { ensureMigrations } from './dbBootstrap'
 
 const DB_URL =
@@ -58,12 +69,18 @@ interface Fx {
 	tenantId: string
 	scopeId: string
 	editorId: string
+	editorMembershipId: string
+	/** second editor with the SAME scope grant — for cross-USER token tests */
+	bobId: string
 	outsiderId: string
 	configId: string
 	// anchor source + its revision (compiled into the release)
 	anchorSourceId: string
 	anchorRevisionId: string
-	// foreign tenant
+	// foreign tenant (with an editor inside it, for cross-TENANT token tests)
+	foreignTenantId: string
+	foreignScopeId: string
+	foreignUserId: string
 	foreignSourceId: string
 }
 
@@ -102,6 +119,19 @@ async function setup(): Promise<Fx> {
 		values (${tenant.id}::uuid, ${outsider.id}::uuid) returning id`
 	await sql`insert into membership_roles (membership_id, role_id) values (${outMem.id}::uuid, ${edRole.id}::uuid)`
 
+	// bob: SAME tenant, SAME editor role, SAME scope grant — the only thing
+	// he must NOT inherit is Alice's preview session (token = pointer, not
+	// authorization)
+	const [bob] = await sql<{ id: string }[]>`
+		insert into users (primary_email, display_name)
+		values (${`bob-${suffix}@test.local`}, 'Bob Editor') returning id`
+	const [bobMem] = await sql<{ id: string }[]>`
+		insert into tenant_memberships (tenant_id, user_id)
+		values (${tenant.id}::uuid, ${bob.id}::uuid) returning id`
+	await sql`insert into membership_roles (membership_id, role_id) values (${bobMem.id}::uuid, ${edRole.id}::uuid)`
+	await sql`insert into scope_grants (scope_id, principal_type, principal_id)
+		values (${scope.id}::uuid, 'membership', ${bobMem.id}::uuid)`
+
 	// index configuration for release compilation
 	const [profile] = await sql<{ id: string }[]>`
 		insert into normalization_profiles (key, version, ruleset)
@@ -135,15 +165,30 @@ async function setup(): Promise<Fx> {
 	const [fsrc] = await sql<{ id: string }[]>`
 		insert into sources (tenant_id, title, author, source_type, language, rights_status, access_scope_id)
 		values (${ftenant.id}::uuid, 'Kitab Tetangga', 'x', 'book', 'id', 'public_domain', ${fscope.id}::uuid) returning id`
+	// an editor INSIDE the foreign tenant — same capability, wrong tenant
+	const [fuser] = await sql<{ id: string }[]>`
+		insert into users (primary_email, display_name)
+		values (${`fv-${suffix}@test.local`}, 'Foreign Editor') returning id`
+	const [fMem] = await sql<{ id: string }[]>`
+		insert into tenant_memberships (tenant_id, user_id)
+		values (${ftenant.id}::uuid, ${fuser.id}::uuid) returning id`
+	await sql`insert into membership_roles (membership_id, role_id) values (${fMem.id}::uuid, ${edRole.id}::uuid)`
+	await sql`insert into scope_grants (scope_id, principal_type, principal_id)
+		values (${fscope.id}::uuid, 'membership', ${fMem.id}::uuid)`
 
 	f = {
 		tenantId: tenant.id,
 		scopeId: scope.id,
 		editorId: editor.id,
+		editorMembershipId: edMem.id,
+		bobId: bob.id,
 		outsiderId: outsider.id,
 		configId: config.id,
 		anchorSourceId: src.id,
 		anchorRevisionId: rev.id,
+		foreignTenantId: ftenant.id,
+		foreignScopeId: fscope.id,
+		foreignUserId: fuser.id,
 		foreignSourceId: fsrc.id,
 	}
 	return f
@@ -187,13 +232,17 @@ async function makeRelease(label: string): Promise<string> {
 	return compiled.indexReleaseId
 }
 
-async function authHeaders(userId = f!.editorId, withCsrf = true) {
+async function authHeaders(
+	userId = f!.editorId,
+	withCsrf = true,
+	tenantId = f!.tenantId,
+) {
 	const sessionId = crypto.randomUUID()
 	const expiresAt = new Date(Date.now() + 600_000)
 	await issueSession(sql, {
 		sessionId,
 		userId,
-		tenantId: f!.tenantId,
+		tenantId,
 		issuer: 'http://localhost:4011',
 		subject: `sub-${userId}`,
 		expiresAt,
@@ -202,7 +251,7 @@ async function authHeaders(userId = f!.editorId, withCsrf = true) {
 		{
 			sessionId,
 			userId,
-			tenantId: f!.tenantId,
+			tenantId,
 			issuer: 'http://localhost:4011',
 			subject: `sub-${userId}`,
 			expiresAt: expiresAt.toISOString(),
@@ -218,13 +267,17 @@ async function authHeaders(userId = f!.editorId, withCsrf = true) {
 	return headers
 }
 
-async function preview(body: Record<string, unknown>, userId = f!.editorId) {
+async function preview(
+	body: Record<string, unknown>,
+	userId = f!.editorId,
+	tenantId?: string,
+) {
 	return testApp.handle(
 		new Request(
 			`http://localhost/sources/${(body.sourceId as string) ?? f!.anchorSourceId}/search-preview`,
 			{
 				method: 'POST',
-				headers: await authHeaders(userId),
+				headers: await authHeaders(userId, true, tenantId),
 				body: JSON.stringify(body),
 			},
 		),
@@ -263,14 +316,16 @@ async function artifactCounts() {
 	}
 }
 
+// file-scope afterAll: the pool must outlive BOTH describes (the security
+// matrix reuses the same fixture connection)
+afterAll(async () => {
+	await sql.end({ timeout: 1 })
+})
+
 describe('M6-014 search preview — technical acceptance (#162)', () => {
 	beforeAll(async () => {
 		await setup()
 		clearPreviewSessionsForTests()
-	})
-
-	afterAll(async () => {
-		await sql.end({ timeout: 1 })
 	})
 
 	test('1. production preview runs the existing pipeline and persists NOTHING', async () => {
@@ -464,7 +519,7 @@ describe('M6-014 search preview — technical acceptance (#162)', () => {
 		await promoteIndexRelease(sql, adminPrincipal, newer, 'production')
 
 		const res2 = await preview({
-			query: 'ignored',
+			query: 'zakat',
 			scope: 'production',
 			previewToken: token,
 			page: 1,
@@ -479,7 +534,7 @@ describe('M6-014 search preview — technical acceptance (#162)', () => {
 
 		// an explicit continuation pin that disagrees → 409, never silent
 		const res3 = await preview({
-			query: 'ignored',
+			query: 'zakat',
 			scope: 'production',
 			previewToken: token,
 			releaseId: newer,
@@ -499,7 +554,7 @@ describe('M6-014 search preview — technical acceptance (#162)', () => {
 		const body = (await res.json()) as Record<string, unknown>
 		const token = body.previewToken as string
 		await preview({
-			query: 'x',
+			query: 'zakat nisab wajib',
 			scope: 'production',
 			previewToken: token,
 			page: 1,
@@ -510,5 +565,218 @@ describe('M6-014 search preview — technical acceptance (#162)', () => {
 		expect(after.conversations).toBe(before.conversations)
 		expect(after.messages).toBe(before.messages)
 		expect(after.traces).toBe(before.traces)
+	})
+})
+
+describe('M6-014 residual security matrix — token is not authorization (#162 P1)', () => {
+	beforeAll(async () => {
+		await setup()
+	})
+
+	/** fresh editor-owned page-1 session on the CURRENT production release */
+	async function freshSession(query = 'zakat nisab wajib') {
+		const res = await preview({ query, scope: 'production' })
+		expect(res.status).toBe(200)
+		return (await res.json()) as Record<string, unknown>
+	}
+
+	test('9. cross-USER token reuse (same tenant, same capability) → 404', async () => {
+		const page1 = await freshSession()
+		const token = page1.previewToken as string
+		expect(token).toBeTruthy()
+
+		const res = await preview(
+			{
+				query: page1.query as string,
+				scope: 'production',
+				previewToken: token,
+				page: 1,
+			},
+			f!.bobId,
+		)
+		expect(res.status).toBe(404)
+		const body = (await res.json()) as Record<string, unknown>
+		expect(body.error).toBe('PREVIEW_SESSION_INVALID')
+		// nothing of the snapshot is handed to the wrong principal
+		expect(body.results).toBeUndefined()
+		expect(body.snapshotReleaseId).toBeUndefined()
+		expect(body.manifestHash).toBeUndefined()
+	})
+
+	test('10. cross-TENANT token reuse → 404, no snapshot metadata', async () => {
+		const page1 = await freshSession()
+		const token = page1.previewToken as string
+
+		const res = await preview(
+			{
+				query: page1.query as string,
+				scope: 'production',
+				previewToken: token,
+				page: 1,
+			},
+			f!.foreignUserId,
+			f!.foreignTenantId,
+		)
+		expect(res.status).toBe(404)
+		const body = (await res.json()) as Record<string, unknown>
+		expect(body.error).toBe('PREVIEW_SESSION_INVALID')
+		expect(body.results).toBeUndefined()
+		expect(body.snapshotReleaseId).toBeUndefined()
+	})
+
+	test('11. grant revoked mid-preview → next page 403, session invalidated', async () => {
+		const page1 = await freshSession()
+		const token = page1.previewToken as string
+
+		// revoke the editor's scope grant — CURRENT authorization must win
+		// over the snapshot captured while the grant still held
+		await sql`delete from scope_grants
+			where scope_id = ${f!.scopeId}::uuid and principal_id = ${f!.editorMembershipId}::uuid`
+		try {
+			const res = await preview({
+				query: page1.query as string,
+				scope: 'production',
+				previewToken: token,
+				page: 1,
+			})
+			expect(res.status).toBe(403)
+			const body = (await res.json()) as Record<string, unknown>
+			expect(body.error).toBe('PREVIEW_ACCESS_REVOKED')
+			expect(body.results).toBeUndefined()
+
+			// the denial INVALIDATED the session — a replay is 404, not
+			// another chance at the snapshot
+			const replay = await preview({
+				query: page1.query as string,
+				scope: 'production',
+				previewToken: token,
+				page: 1,
+			})
+			expect(replay.status).toBe(404)
+			expect(((await replay.json()) as { error?: string }).error).toBe(
+				'PREVIEW_SESSION_INVALID',
+			)
+		} finally {
+			// restore the grant for the fixtures that follow
+			await sql`insert into scope_grants (scope_id, principal_type, principal_id)
+				values (${f!.scopeId}::uuid, 'membership', ${f!.editorMembershipId}::uuid)`
+		}
+	})
+
+	test('12. mutated continuation request (query/scope/source) → 409, never replayed', async () => {
+		const page1 = await freshSession('zakat nisab wajib')
+		const token = page1.previewToken as string
+		const continuation = {
+			scope: 'production',
+			previewToken: token,
+			page: 1,
+		} as Record<string, unknown>
+
+		const wrongQuery = await preview({ ...continuation, query: 'sedekah' })
+		expect(wrongQuery.status).toBe(409)
+		expect(((await wrongQuery.json()) as { error?: string }).error).toBe(
+			'PREVIEW_REQUEST_MISMATCH',
+		)
+
+		const wrongScope = await preview({
+			...continuation,
+			query: 'zakat nisab wajib',
+			scope: 'candidate',
+		})
+		expect(wrongScope.status).toBe(409)
+		expect(((await wrongScope.json()) as { error?: string }).error).toBe(
+			'PREVIEW_REQUEST_MISMATCH',
+		)
+
+		const wrongSource = await preview({
+			...continuation,
+			query: 'zakat nisab wajib',
+			sourceId: f!.foreignSourceId,
+		})
+		expect(wrongSource.status).toBe(409)
+		expect(((await wrongSource.json()) as { error?: string }).error).toBe(
+			'PREVIEW_REQUEST_MISMATCH',
+		)
+
+		// honest rejections do NOT invalidate — the owner can still page
+		const honest = await preview({
+			...continuation,
+			query: 'zakat nisab wajib',
+		})
+		expect(honest.status).toBe(200)
+	})
+
+	test('13. legacy pre-ownership session → rejected fail-closed', async () => {
+		const legacyToken = `legacy-${crypto.randomUUID()}`
+		seedLegacyPreviewSessionForTests(legacyToken)
+		const res = await preview({
+			query: 'zakat',
+			scope: 'production',
+			previewToken: legacyToken,
+			page: 1,
+		})
+		expect(res.status).toBe(404)
+		const body = (await res.json()) as Record<string, unknown>
+		expect(body.error).toBe('PREVIEW_SESSION_INVALID')
+		expect(body.results).toBeUndefined()
+	})
+
+	test('14. revocation of a NON-anchor result source → next page 403', async () => {
+		// second scope, granted to the editor, holding a second source whose
+		// passages appear in preview results alongside the anchor's
+		const [scope2] = await sql<{ id: string }[]>`
+			insert into access_scopes (tenant_id, key, name)
+			values (${f!.tenantId}::uuid, ${`s2-${crypto.randomUUID().slice(0, 6)}`}, 'Scope Two') returning id`
+		await sql`insert into scope_grants (scope_id, principal_type, principal_id)
+			values (${scope2.id}::uuid, 'membership', ${f!.editorMembershipId}::uuid)`
+		const [src2] = await sql<{ id: string }[]>`
+			insert into sources (tenant_id, title, author, source_type, language, rights_status, access_scope_id)
+			values (${f!.tenantId}::uuid, 'Kitab Sedekah Kedua', 'Imam Dua', 'book', 'id', 'public_domain', ${scope2.id}::uuid) returning id`
+		const [rev2] = await sql<{ id: string }[]>`
+			insert into source_revisions (source_id, revision_number, status)
+			values (${src2.id}::uuid, 1, 'pending_review') returning id`
+		const { approveTestRevision } = await import('./revisionSeed')
+		await approveTestRevision(sql, rev2.id)
+		await sql`insert into source_spans (source_revision_id, span_key, original_text)
+			values (${rev2.id}::uuid, ${`sp2-${crypto.randomUUID().slice(0, 6)}`},
+			'Sedekah hukumnya mustahab sedangkan zakat wajib bagi yang mencapai nisab.')`
+
+		const releaseId = await makeRelease('MultiScope')
+		const adminPrincipal = {
+			userId: f!.editorId,
+			tenantId: f!.tenantId,
+			roles: ['tenant_admin' as const],
+			permissions: ['review:publish' as const],
+			scopes: [f!.scopeId, scope2.id],
+			actorType: 'user' as const,
+		}
+		await promoteIndexRelease(sql, adminPrincipal, releaseId, 'production')
+
+		// BOTH sources' passages are visible while both grants hold
+		const page1 = await freshSession('zakat nisab')
+		const results = page1.results as Array<Record<string, unknown>>
+		expect(results.some((r) => r.sourceId === src2.id)).toBe(true)
+		expect(results.some((r) => r.sourceId === f!.anchorSourceId)).toBe(true)
+		const token = page1.previewToken as string
+
+		// revoke ONLY the second scope: the anchor stays readable, but a
+		// result unit no longer is → the page must fail closed
+		await sql`delete from scope_grants
+			where scope_id = ${scope2.id}::uuid and principal_id = ${f!.editorMembershipId}::uuid`
+		try {
+			const res = await preview({
+				query: 'zakat nisab',
+				scope: 'production',
+				previewToken: token,
+				page: 1,
+			})
+			expect(res.status).toBe(403)
+			const body = (await res.json()) as Record<string, unknown>
+			expect(body.error).toBe('PREVIEW_ACCESS_REVOKED')
+			expect(body.results).toBeUndefined()
+		} finally {
+			await sql`insert into scope_grants (scope_id, principal_type, principal_id)
+				values (${scope2.id}::uuid, 'membership', ${f!.editorMembershipId}::uuid)`
+		}
 	})
 })
